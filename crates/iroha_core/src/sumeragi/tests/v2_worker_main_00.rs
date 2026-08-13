@@ -1222,6 +1222,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         kura,
         chunk_root: PathBuf::new(),
         io: None,
+        lifecycle_body_store_identity: None,
         fetches: BTreeMap::new(),
         fetch_by_manifest: BTreeMap::new(),
         orphan_chunks: BTreeMap::new(),

@@ -95,19 +95,13 @@ mod tests {
     ) -> SelenePoint {
         let mut terms = SecretMultiexpBuilder::<SeleneSuite>::new(opening.values.len() + 1)
             .expect("fixed test commitment capacity");
-        for (scalar, point) in opening
-            .values
-            .0
-            .iter()
-            .copied()
-            .zip(generators.g_bold.iter().copied())
-        {
+        for (scalar, point) in opening.values.0.iter().zip(generators.g_bold) {
             terms
                 .push(scalar, point)
                 .expect("test commitment stays within its fixed capacity");
         }
         terms
-            .push(opening.mask, generators.h)
+            .push(&opening.mask, &generators.h)
             .expect("test commitment mask fits its fixed capacity");
         terms.evaluate().expect("complete test commitment")
     }

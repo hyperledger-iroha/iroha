@@ -11,16 +11,17 @@
 )]
 
 use core::convert::Infallible;
-use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iroha_confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
 
-use crate::vega::{VegaT256ScalarV1 as Scalar, sponge::Keccak256};
+use crate::vega::{
+    VegaT256ScalarV1 as Scalar, bulletproof_t256::ZeroizingT256ScalarCopyV1 as SecretScalarV1,
+    sponge::Keccak256,
+};
 
 use super::global_lookup_topology_digest_v1;
 
@@ -34,6 +35,17 @@ const SCALAR_BYTES_V1: u64 = 32;
 const SCALARS_PER_SLOT_V1: u64 = 256;
 const SLOT_PLAINTEXT_BYTES_V1: u64 = 8_192;
 const SLOT_CIPHERTEXT_BYTES_V1: u64 = 8_208;
+
+struct SecretScalarBytesV1([u8; 32]);
+
+impl Drop for SecretScalarBytesV1 {
+    fn drop(&mut self) {
+        let bytes = core::hint::black_box(&mut self.0);
+        bytes.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *bytes);
+    }
+}
 const RELEASE_INITIAL_VALUES_V1: u64 = 1 << RELEASE_INITIAL_LOG_VALUES_V1;
 const RELEASE_INITIAL_SLOTS_V1: u64 = 262_144;
 const RELEASE_COLUMN_FILE_BYTES_V1: u64 = 2_151_677_952;
@@ -342,7 +354,7 @@ impl RoundTranscriptSealV1 {
     }
 }
 
-enum FoldSinkSealV1 {
+pub(super) enum FoldSinkSealV1 {
     Production {
         sink: Infallible,
     },
@@ -353,7 +365,7 @@ enum FoldSinkSealV1 {
 }
 
 impl FoldSinkSealV1 {
-    fn directory_v1(self) -> PathBuf {
+    pub(super) fn directory_v1(self) -> PathBuf {
         match self {
             Self::Production { sink } => match sink {},
             #[cfg(test)]
@@ -729,15 +741,16 @@ impl ColumnFoldStateV1 {
         for pair in input.as_slice_v1()[..valid * SCALAR_BYTES_V1 as usize]
             .chunks_exact(2 * SCALAR_BYTES_V1 as usize)
         {
-            let low = decode_scalar_be_v1(&pair[..SCALAR_BYTES_V1 as usize])?;
-            let high = decode_scalar_be_v1(&pair[SCALAR_BYTES_V1 as usize..])?;
-            let folded = low + self.challenge * (high - low);
+            let low = SecretScalarV1::new(decode_scalar_be_v1(&pair[..32])?);
+            let high = SecretScalarV1::new(decode_scalar_be_v1(&pair[32..])?);
+            let folded = SecretScalarV1::new(low.get() + self.challenge * (high.get() - low.get()));
+            let encoded = SecretScalarBytesV1(folded.get().to_be_bytes());
             let offset = self
                 .output_lanes
                 .checked_mul(SCALAR_BYTES_V1 as usize)
                 .ok_or(ExternalStorageErrorV1::Arithmetic)?;
             output.as_mut_slice_v1()[offset..offset + SCALAR_BYTES_V1 as usize]
-                .copy_from_slice(&folded.to_be_bytes());
+                .copy_from_slice(&encoded.0);
             self.output_lanes += 1;
         }
         self.next_input_slot += 1;
@@ -774,7 +787,7 @@ fn validate_chunk_v1(
     let valid = usize::from(valid_lanes_v1(descriptor, slot)?);
     for encoded in bytes[..valid * SCALAR_BYTES_V1 as usize].chunks_exact(SCALAR_BYTES_V1 as usize)
     {
-        decode_scalar_be_v1(encoded)?;
+        drop(SecretScalarV1::new(decode_scalar_be_v1(encoded)?));
     }
     if bytes[valid * SCALAR_BYTES_V1 as usize..]
         .iter()
@@ -786,10 +799,10 @@ fn validate_chunk_v1(
 }
 
 fn decode_scalar_be_v1(bytes: &[u8]) -> Result<Scalar, ExternalStorageErrorV1> {
-    let encoded: [u8; 32] = bytes
+    let encoded: &[u8; 32] = bytes
         .try_into()
         .map_err(|_| ExternalStorageErrorV1::Encoding)?;
-    Scalar::from_be_bytes_exact(encoded).map_err(|_| ExternalStorageErrorV1::Encoding)
+    Scalar::from_be_bytes_exact_ref(encoded).map_err(|_| ExternalStorageErrorV1::Encoding)
 }
 
 fn validate_message_v1(message: &[u8; 96]) -> Result<(), ExternalStorageErrorV1> {
@@ -808,6 +821,16 @@ fn map_spool_v1(_: iroha_confidential_spool::ConfidentialSpoolErrorV1) -> Extern
 
 #[path = "external_sumcheck_storage_v1/m_table_oracle_v1.rs"]
 mod m_table_oracle_v1;
+
+pub(super) use m_table_oracle_v1::{
+    EvaluatedGlobalRoundV1, GlobalCubicCompleteV1, GlobalCubicOracleV1, GlobalCubicPrefixReadyV1,
+    MOracleErrorV1, OracleTransitionV1, begin_global_cubic_oracle_v1,
+};
+
+#[cfg(test)]
+pub(super) use m_table_oracle_v1::{
+    global_cubic_final_round_fixture_v1, global_cubic_hollow_fixture_v1,
+};
 
 #[cfg(test)]
 #[path = "external_sumcheck_storage_v1_tests.rs"]

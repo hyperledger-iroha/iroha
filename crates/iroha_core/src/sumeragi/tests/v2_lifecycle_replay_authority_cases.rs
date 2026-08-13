@@ -66,6 +66,278 @@
     }
 
     #[test]
+    fn decoded_decision_fetch_rejects_duplicate_certified_sources() {
+        let fixture = Fixture::new();
+        let first_key = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
+            .expect("deterministic first Decision Fetch source");
+        let second_key = KeyPair::try_from_seed(vec![0xD2; 32], Algorithm::Ed25519)
+            .expect("deterministic second Decision Fetch source");
+        let first = PeerId::new(first_key.public_key().clone());
+        let second = PeerId::new(second_key.public_key().clone());
+        let payload = ReplayPayloadBindingV1::None;
+        let source = WalReplaySourceV1 {
+            locator: RecoveredWalFrameIdentity::for_test(8, 9, [0xD3; 32]).persisted_locator(),
+            role: ReplayWalRoleV1::DECISION,
+            tag: fixture.tag,
+            action: WalReplayActionV1::FetchDecision {
+                certificate: fixture.commit_qc.clone(),
+                certified_sources: vec![first.clone(), second],
+            },
+        };
+        let shape = source
+            .project(fixture.context, LifecycleStageKind::FetchBody, &payload)
+            .expect("unique Decision Fetch source roster is structurally valid");
+        let authority = LifecycleReplayAuthorityV1 {
+            format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
+            payload: payload.clone(),
+            source: LifecycleReplaySourceV1::Wal(source),
+        };
+        let mut decoded = LifecycleReplayAuthorityV1::decode_canonical(&authority.encode())
+            .expect("unique Decision Fetch source decodes canonically");
+        decoded
+            .validate_record(
+                fixture.context,
+                shape.key,
+                LifecycleWorkClass::Fetch,
+                LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
+                DurablePayloadReference::None,
+            )
+            .expect("unique Decision Fetch source projects exactly");
+
+        let LifecycleReplaySourceV1::Wal(source) = &mut decoded.source else {
+            unreachable!("Decision Fetch retains its WAL replay source")
+        };
+        let WalReplayActionV1::FetchDecision {
+            certified_sources, ..
+        } = &mut source.action
+        else {
+            unreachable!("Decision Fetch retains its exact replay action")
+        };
+        *certified_sources = vec![first.clone(), first];
+        let duplicate = LifecycleReplayAuthorityV1::decode_canonical(&decoded.encode())
+            .expect("duplicate source bytes remain canonically decodable");
+        assert_eq!(
+            duplicate.validate_record(
+                fixture.context,
+                shape.key,
+                LifecycleWorkClass::Fetch,
+                LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent,),
+                DurablePayloadReference::None,
+            ),
+            Err(ReplayAuthorityValidationError::InvalidSource)
+        );
+    }
+
+    #[test]
+    fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
+        let fixture = Fixture::new();
+        let source_key = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::Ed25519)
+            .expect("deterministic recovered Decision source");
+        let locator = RecoveredWalFrameIdentity::for_test(21, 22, [0xD5; 32]).persisted_locator();
+        let fetch = replay_case(
+            fixture.context,
+            LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+                locator,
+                role: ReplayWalRoleV1::DECISION,
+                tag: fixture.tag,
+                action: WalReplayActionV1::FetchDecision {
+                    certificate: fixture.commit_qc.clone(),
+                    certified_sources: vec![PeerId::new(source_key.public_key().clone())],
+                },
+            }),
+            LifecycleStageKind::FetchBody,
+            DurablePayloadReference::None,
+        );
+        let body_source = LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+            tag: fixture.tag,
+            origin: BodyPipelineOriginV1::RecoveredDecision {
+                locator,
+                certificate: fixture.commit_qc.clone(),
+                manifest: fixture.proposal.manifest.clone(),
+            },
+        });
+        assert!(matches!(
+            body_source.project(
+                fixture.context,
+                LifecycleStageKind::FetchBody,
+                &ReplayPayloadBindingV1::from_payload(fixture.body_payload),
+            ),
+            Err(ReplayAuthorityValidationError::RecordMismatch)
+        ));
+        assert!(matches!(
+            body_source.project(
+                fixture.context,
+                LifecycleStageKind::ApplyDecision,
+                &ReplayPayloadBindingV1::from_payload(fixture.body_payload),
+            ),
+            Err(ReplayAuthorityValidationError::RecordMismatch)
+        ));
+        let store = replay_case(
+            fixture.context,
+            body_source.clone(),
+            LifecycleStageKind::StoreBody,
+            fixture.body_payload,
+        );
+        let validate = replay_case(
+            fixture.context,
+            body_source,
+            LifecycleStageKind::ValidateBody,
+            fixture.body_payload,
+        );
+        let apply = replay_case(
+            fixture.context,
+            LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+                locator,
+                role: ReplayWalRoleV1::DECISION,
+                tag: fixture.tag,
+                action: WalReplayActionV1::ApplyDecision(fixture.commit_qc.clone()),
+            }),
+            LifecycleStageKind::ApplyDecision,
+            fixture.body_payload,
+        );
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::FetchToStore,
+                &fetch.authority,
+                fetch.payload,
+                &store.authority,
+                store.payload,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::StoreToValidate,
+                &store.authority,
+                store.payload,
+                &validate.authority,
+                validate.payload,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::ValidateToApply,
+                &validate.authority,
+                validate.payload,
+                &apply.authority,
+                apply.payload,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::FetchToStore,
+                &fetch.authority,
+                fetch.payload,
+                &validate.authority,
+                validate.payload,
+            ),
+            Some(false),
+            "the recovered lineage cannot skip Store"
+        );
+
+        let causal_root = CausalRoot::new(digest_from_hash(&Hash::new(
+            b"recovered Decision Apply test root",
+        )));
+        let candidate = |case: &ReplayCase| {
+            CandidateAdmission::new(
+                case.key,
+                causal_root,
+                case.work_class,
+                case.stage,
+                InitialLifecycleState::Ready,
+                causal_root.digest(),
+                case.payload,
+                case.authority.clone(),
+                PhysicalGeometry::new([], []),
+                None,
+            )
+        };
+        let lineage = RecoveredDecisionApplyCandidateLineageV1 {
+            fetch: fetch.authority.clone(),
+            store: candidate(&store),
+            validate: candidate(&validate),
+            apply: candidate(&apply),
+        };
+        let validated = ValidatedBodyReceipt::for_test(fixture.body_receipt.clone());
+        assert!(lineage.exactly_matches_validated_receipt(fixture.context, &validated));
+        let owner = OwnerId::new(causal_root, 1);
+        let [store_record, validate_record, live_apply_record] = lineage
+            .successor_records(owner, 2, 3, 4)
+            .expect("exact recovered Decision lineage projects adjacent records");
+        assert!(lineage.exactly_matches_successor_records(
+            owner,
+            &store_record,
+            &validate_record,
+            &live_apply_record,
+        ));
+        assert!(!lineage.exactly_matches_terminal_successor_records(
+            owner,
+            &store_record,
+            &validate_record,
+            &live_apply_record,
+        ));
+        let terminal_apply_record =
+            super::super::ledger::LifecycleLedgerRecordV1::new(
+                lineage.apply.key,
+                owner,
+                4,
+                lineage.apply.work_class,
+                lineage.apply.stage,
+                Some(TerminalOutcome::Advanced),
+                lineage.apply.reconstruction_source,
+                lineage.apply.payload,
+                lineage.apply.replay_authority.clone(),
+                super::super::schema::DurableContinuation::None,
+            )
+            .expect("terminal recovered Decision Apply record remains canonical");
+        assert!(lineage.exactly_matches_terminal_successor_records(
+            owner,
+            &store_record,
+            &validate_record,
+            &terminal_apply_record,
+        ));
+        assert!(!lineage.exactly_matches_successor_records(
+            owner,
+            &store_record,
+            &validate_record,
+            &terminal_apply_record,
+        ));
+        let foreign_durable = DurableBodyReceipt::for_test(
+            fixture.body_receipt.context_id(),
+            fixture.body_receipt.round(),
+            fixture.body_receipt.subject(),
+            HashOf::from_untyped_unchecked(Hash::new(b"foreign Decision Apply manifest")),
+        );
+        let foreign_validated = ValidatedBodyReceipt::for_test(foreign_durable);
+        assert!(
+            !lineage.exactly_matches_validated_receipt(fixture.context, &foreign_validated),
+            "a valid receipt for another durable body cannot enter the Apply carrier"
+        );
+
+        let mut foreign_store = store.authority.clone();
+        let LifecycleReplaySourceV1::BodyPipeline(source) = &mut foreign_store.source else {
+            unreachable!("recovered Store retains one body-pipeline source")
+        };
+        let BodyPipelineOriginV1::RecoveredDecision { locator, .. } = &mut source.origin else {
+            unreachable!("recovered Store retains one Decision origin")
+        };
+        *locator = RecoveredWalFrameIdentity::for_test(22, 23, [0xD6; 32]).persisted_locator();
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::FetchToStore,
+                &fetch.authority,
+                fetch.payload,
+                &foreign_store,
+                store.payload,
+            ),
+            Some(false),
+            "a foreign exact locator cannot enter the body lineage"
+        );
+    }
+
+    #[test]
     fn nested_record_validation_rejects_oversized_canonical_authority() {
         let fixture = Fixture::new();
         let case = fixture.cases().remove(8);
@@ -161,16 +433,22 @@
             receipt.payload_hash(),
         ));
 
-        let cloned = pair.clone();
-        assert!(cloned.shares_exact_storage_origin());
-        assert!(pair.serve.exactly_matches(&cloned.serve));
-        assert!(pair.producer.exactly_matches(&cloned.producer));
-        drop(cloned);
-        assert!(pair.exactly_matches_serve_record(
+        let shared = Arc::new(pair);
+        let adjacent = Arc::clone(&shared);
+        assert!(Arc::ptr_eq(&shared, &adjacent));
+        assert!(shared.shares_exact_storage_origin());
+        assert!(shared.exactly_matches_serve_record(
             fixture.active_context,
             serve_shape.key,
             serve_stage,
             fixture.pending_payload(),
+            receipt.payload_hash(),
+        ));
+        assert!(adjacent.exactly_matches_producer_record(
+            fixture.active_context,
+            producer_shape.key,
+            producer_stage,
+            DurablePayloadReference::None,
             receipt.payload_hash(),
         ));
 
@@ -246,35 +524,35 @@
             )
             .is_none()
         );
-        assert!(!pair.exactly_matches_serve_record(
+        assert!(!shared.exactly_matches_serve_record(
             fixture.active_context,
             producer_shape.key,
             serve_stage,
             fixture.pending_payload(),
             receipt.payload_hash(),
         ));
-        assert!(!pair.exactly_matches_serve_record(
+        assert!(!shared.exactly_matches_serve_record(
             fixture.active_context,
             serve_shape.key,
             producer_stage,
             fixture.pending_payload(),
             receipt.payload_hash(),
         ));
-        assert!(!pair.exactly_matches_serve_record(
+        assert!(!shared.exactly_matches_serve_record(
             fixture.active_context,
             serve_shape.key,
             serve_stage,
             DurablePayloadReference::None,
             receipt.payload_hash(),
         ));
-        assert!(!pair.exactly_matches_serve_record(
+        assert!(!shared.exactly_matches_serve_record(
             fixture.active_context,
             serve_shape.key,
             serve_stage,
             fixture.pending_payload(),
             Hash::new(b"wrong retained payload hash"),
         ));
-        assert!(!pair.exactly_matches_producer_record(
+        assert!(!shared.exactly_matches_producer_record(
             fixture.active_context,
             producer_shape.key,
             producer_stage,
@@ -284,14 +562,14 @@
 
         let authority = LifecycleReplayAuthorityV1 {
             format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-            payload: pair.serve.payload.clone(),
+            payload: shared.serve.payload.clone(),
             source: LifecycleReplaySourceV1::CertifiedServeStorage(
-                pair.serve.family.source.clone(),
+                shared.serve.family.source.clone(),
             ),
         };
         let canonical = LifecycleReplayAuthorityV1::decode_canonical(&authority.encode())
             .expect("exact Certified-Serve replay source canonical-roundtrips");
-        assert!(pair.serve.exactly_matches_authority(&canonical));
+        assert!(shared.serve.exactly_matches_authority(&canonical));
 
         let mut wrong_payload_source = canonical.clone();
         let LifecycleReplaySourceV1::CertifiedServeStorage(source) =
@@ -300,7 +578,11 @@
             unreachable!("Serve replay authority retains its storage source")
         };
         source.payload_hash[0] ^= 1;
-        assert!(!pair.serve.exactly_matches_authority(&wrong_payload_source));
+        assert!(
+            !shared
+                .serve
+                .exactly_matches_authority(&wrong_payload_source)
+        );
 
         let mut wrong_qc_source = canonical.clone();
         let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &mut wrong_qc_source.source
@@ -311,7 +593,7 @@
         let wrong_qc_source =
             LifecycleReplayAuthorityV1::decode_canonical(&wrong_qc_source.encode())
                 .expect("mutated QC source remains canonical codec data");
-        assert!(!pair.serve.exactly_matches_authority(&wrong_qc_source));
+        assert!(!shared.serve.exactly_matches_authority(&wrong_qc_source));
 
         let mut absent_retainer = canonical;
         let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &mut absent_retainer.source
@@ -353,12 +635,11 @@
             ReplayPayloadBindingV1::CertifiedServeCompleted { .. }
         ));
         assert!(matches!(
-            negative.serve.payload,
-            ReplayPayloadBindingV1::CertifiedServeNegative {
-                outcome_kind: 1,
-                outcome_code: Some(17),
+            negative.serve.payload.durable_payload(),
+            Some(DurablePayloadReference::CertifiedServeNegative {
+                outcome: DurableServeNegativeOutcome::Rejected(17),
                 ..
-            }
+            })
         ));
         assert_eq!(
             pending.serve.family.source.request,
@@ -528,6 +809,182 @@
         assert_eq!(validate, validate.clone());
         assert_eq!(fetch.family, store.family);
         assert_eq!(store.family, validate.family);
+    }
+
+    #[test]
+    fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_identity() {
+        fn projection(
+            effect: &AdapterEffect,
+            response: &wire::CertifiedBodyResponse,
+            receipt: &DurableBodyReceipt,
+            causal_root: CausalRoot,
+        ) -> DurableCertifiedFetchReplayProjectionV1 {
+            let evidence = CertifiedFetchReplayEvidenceV1::from_signed_response_for_test(
+                effect, response, receipt,
+            )
+            .expect("structurally signed response projects one exact durable family");
+            let pending = PendingRuntimeEffectBinding::from_durable_certified_fetch(
+                DurableCertifiedFetchPendingMintPermit::new(),
+                Hash::prehashed(*causal_root.digest().as_bytes()),
+                effect,
+            )
+            .expect("exact certified Fetch effect mints one frame-bound pending binding");
+            evidence
+                .project_durable_ready_fetch(effect, &pending, receipt)
+                .expect("exact family, pending binding, and receipt project Ready Fetch")
+        }
+
+        let fixture = Fixture::new();
+        let tag = fixture.recovered_tag();
+        let manifest = fixture.proposal.manifest.clone();
+        let effect = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(fixture.prepare_qc.clone()),
+        };
+        let receipt = DurableBodyReceipt::for_test(
+            manifest.round.context_id,
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let first_response = wire::CertifiedBodyResponse {
+            request_hash: HashOf::from_untyped_unchecked(Hash::new(b"first request occurrence")),
+            manifest: manifest.clone(),
+            body: vec![0xD1, 0xD2],
+            responder: 0,
+            signature: vec![0xD3],
+        };
+        let retransmitted_response = wire::CertifiedBodyResponse {
+            request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"different request occurrence",
+            )),
+            responder: 3,
+            signature: vec![0xD4, 0xD5],
+            ..first_response.clone()
+        };
+        assert_ne!(
+            HashOf::new(&first_response),
+            HashOf::new(&retransmitted_response)
+        );
+        let causal_root = CausalRoot::new(digest_from_hash(&Hash::new(b"ready Fetch causal root")));
+        let first = projection(&effect, &first_response, &receipt, causal_root);
+        let retransmitted = projection(&effect, &retransmitted_response, &receipt, causal_root);
+        let first_queue_identity =
+            super::super::ingress_position::PendingFairIngressIdentity::for_test(
+                fixture.context,
+                digest_from_hash(&Hash::new(b"first queue occurrence")),
+                11,
+            );
+        let retransmitted_queue_identity =
+            super::super::ingress_position::PendingFairIngressIdentity::for_test(
+                fixture.context,
+                digest_from_hash(&Hash::new(b"second queue occurrence")),
+                12,
+            );
+        assert_ne!(first_queue_identity, retransmitted_queue_identity);
+        assert_eq!(
+            first.completion_digest(),
+            retransmitted.completion_digest(),
+            "request, response, responder, signature, and physical queue occurrence are not restart identity",
+        );
+
+        let foreign_causal = projection(
+            &effect,
+            &first_response,
+            &receipt,
+            CausalRoot::new(digest_from_hash(&Hash::new(b"foreign Fetch causal root"))),
+        );
+        assert_ne!(
+            first.completion_digest(),
+            foreign_causal.completion_digest()
+        );
+
+        let foreign_effect_identity = Hash::new(b"foreign exact Fetch effect identity");
+        assert_ne!(
+            first.completion_digest(),
+            canonical_durable_certified_fetch_completion_digest(
+                first.causal_key,
+                foreign_effect_identity,
+                &first.authority,
+            )
+        );
+
+        let mut foreign_qc_authority = first.authority.clone();
+        let LifecycleReplaySourceV1::BodyPipeline(source) = &mut foreign_qc_authority.source else {
+            panic!("durable Ready Fetch authority is body-pipeline backed")
+        };
+        let BodyPipelineOriginV1::Certified { certificate, .. } = &mut source.origin else {
+            panic!("durable Ready Fetch authority is certified")
+        };
+        certificate.aggregate_signature[0] ^= 1;
+        assert_ne!(
+            first.completion_digest(),
+            canonical_durable_certified_fetch_completion_digest(
+                first.causal_key,
+                first.effect_identity,
+                &foreign_qc_authority,
+            )
+        );
+
+        let mut manifest_absent_effect = effect.clone();
+        let AdapterEffect::FetchBody {
+            manifest: candidate_manifest,
+            ..
+        } = &mut manifest_absent_effect
+        else {
+            unreachable!("fixture effect is one certified Fetch")
+        };
+        *candidate_manifest = None;
+        let manifest_absent = projection(
+            &manifest_absent_effect,
+            &first_response,
+            &receipt,
+            causal_root,
+        );
+        assert_ne!(
+            first.completion_digest(),
+            manifest_absent.completion_digest()
+        );
+
+        let source_key = KeyPair::try_from_seed(vec![0xD6; 32], Algorithm::Ed25519)
+            .expect("deterministic certified-source identity");
+        let mut foreign_sources_effect = effect.clone();
+        let AdapterEffect::FetchBody {
+            certified_sources: candidate_sources,
+            ..
+        } = &mut foreign_sources_effect
+        else {
+            unreachable!("fixture effect is one certified Fetch")
+        };
+        *candidate_sources = vec![PeerId::new(source_key.public_key().clone())];
+        let foreign_sources = projection(
+            &foreign_sources_effect,
+            &first_response,
+            &receipt,
+            causal_root,
+        );
+        assert_ne!(
+            first.completion_digest(),
+            foreign_sources.completion_digest()
+        );
+
+        let mut foreign_frame_authority = first.authority.clone();
+        let ReplayPayloadBindingV1::BodyFrame(frame) = &mut foreign_frame_authority.payload else {
+            panic!("durable Ready Fetch authority is frame-bound")
+        };
+        frame.frame[0] ^= 1;
+        assert_ne!(
+            first.completion_digest(),
+            canonical_durable_certified_fetch_completion_digest(
+                first.causal_key,
+                first.effect_identity,
+                &foreign_frame_authority,
+            )
+        );
     }
 
     #[test]
@@ -906,8 +1363,8 @@
             .expect("certified body replay family follows Serve evidence");
         for required in [
             "source: CertifiedServeStorageSourceV1",
-            "pub(super) struct CertifiedServeReplayEvidenceV1",
-            "pub(super) struct CertifiedServeProducerTurnReplayEvidenceV1",
+            "struct CertifiedServeReplayEvidenceV1",
+            "struct CertifiedServeProducerTurnReplayEvidenceV1",
             "pub(super) struct CertifiedServeReplayEvidencePairV1",
             "family: Arc<CertifiedServeStorageReplayFamilyV1>",
             "pub(super) fn from_post_fsync_pending(",
@@ -917,8 +1374,11 @@
             "recovered.local_retainer()",
             "binary_search(&local_retainer)",
             "pub(super) fn exactly_matches_serve_record(",
+            "pub(super) fn exactly_matches_terminal_serve_record(",
             "pub(super) fn exactly_matches_producer_record(",
-            "pub(super) fn into_admission(",
+            "pub(super) fn admission_candidate(",
+            "pub(super) fn exactly_matches_serve_carrier(",
+            "pub(super) fn exactly_matches_producer_carrier(",
             "Some(CandidateAdmission::new(",
             "Arc::ptr_eq(&self.serve.family, &self.producer.family)",
             "LifecycleStageKind::CertifiedServe",
@@ -963,6 +1423,8 @@
             "pub(super) fn authority(",
             "pub(super) fn serve(",
             "pub(super) fn producer(",
+            "into_concrete_evidence",
+            "pub(super) fn into_admission(",
             "impl Drop for CertifiedServe",
         ] {
             assert!(
@@ -1008,7 +1470,6 @@
 
         for outside in [
             include_str!("../v2_lifecycle_coordinator.rs"),
-            include_str!("../v2_lifecycle_work_registry.rs"),
             include_str!("../v2_lifecycle_ledger.rs"),
             include_str!("../v2.rs"),
             include_str!("../v2_runtime.rs"),
@@ -1023,6 +1484,33 @@
             assert!(!outside.contains("CertifiedServeReplayEvidenceV1"));
             assert!(!outside.contains("CertifiedServeProducerTurnReplayEvidenceV1"));
         }
+        let registry = include_str!("../v2_lifecycle_work_registry.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("registry production prefix is bounded");
+        for required in [
+            "CertifiedServeReplayEvidencePairV1",
+            "Arc<CertifiedServeReplayEvidencePairV1>",
+            "Arc::clone(&replay_evidence)",
+            "exactly_matches_serve_carrier(",
+            "exactly_matches_terminal_serve_record(",
+            "exactly_matches_producer_carrier(",
+        ] {
+            assert!(
+                registry.contains(required),
+                "whole-pair registry ownership omitted {required}"
+            );
+        }
+        for forbidden in [
+            "CertifiedServeReplayEvidenceV1,",
+            "CertifiedServeProducerTurnReplayEvidenceV1,",
+            "into_concrete_evidence",
+        ] {
+            assert!(
+                !registry.contains(forbidden),
+                "registry decomposed Certified-Serve replay authority through {forbidden}"
+            );
+        }
         let projection = include_str!("../v2_lifecycle_projection.rs")
             .split("\n#[cfg(test)]\nmod wait_source_tests {")
             .next()
@@ -1030,11 +1518,211 @@
         for required in [
             "CertifiedServeReplayEvidencePairV1::from_post_fsync_pending(",
             "CertifiedServeReplayEvidencePairV1::from_authenticated_recovery(",
-            "replay\n        .into_admission(",
+            "replay\n        .admission_candidate(active_context)",
+            "impl super::ProductionLifecycleOwnerV1",
+            "fn admit_selected_certified_serve(",
+            "target: super::LifecycleIngressIoTargetSeal",
+            "target.matches_certified_serve_request(authenticated.request_hash())",
+            "prepare_certified_serve_admission(",
+            ".install_certified_serve_fresh_batch_before_publication(",
+            "|| self.coordinator.persist_exact_staged_successor(&staged)",
+            "fn certified_serve_terminal_replay_decision(",
+            ".exactly_matches_certified_serve_publication(authenticated, publication.receipt())",
+            "CertifiedServeConcreteAdmissionV1::restart_required(",
+            "fn into_safe_continuation(",
+            "fn settle_certified_serve_completed(",
+            "fn settle_certified_serve_negative(",
+            ".persist_completed_with_exact_body(",
+            ".persist_negative_for_authenticated_request(authenticated, outcome)",
+            "fn preflight_certified_serve_terminal(",
+            "fn publish_certified_serve_terminal(",
+            "CertifiedServeTerminalReplayAuthorityPairV1::from_completed_receipt(",
+            "CertifiedServeTerminalReplayAuthorityPairV1::from_negative_receipt(",
+            ".prepare_certified_serve_terminal_transition(",
+            ".publish_certified_serve_terminal_transition(",
         ] {
             assert!(
                 projection.contains(required),
                 "fixed Certified-Serve admission omitted {required}"
+            );
+        }
+        for cfg_test_only in [
+            "#[cfg(test)]\n    pub(crate) fn persist_and_admit_certified_serve(",
+            "#[cfg(test)]\npub(super) fn certified_serve_admission_request(",
+        ] {
+            assert!(
+                projection.contains(cfg_test_only),
+                "raw Certified-Serve surface escaped its fixture gate: {cfg_test_only}"
+            );
+        }
+        let settlement = include_str!("../v2_lifecycle_settlement.rs");
+        assert!(
+            settlement.contains(
+                "#[cfg(test)]\n    pub(super) fn settle_turn_with_durable_serve_terminal("
+            )
+        );
+        assert_eq!(
+            settlement
+                .matches("fn settle_turn_with_durable_serve_terminal(")
+                .count(),
+            1,
+            "the raw terminal reducer wrapper must remain a single test fixture"
+        );
+        for outside in [
+            include_str!("../v2.rs"),
+            include_str!("../v2_lifecycle_coordinator.rs"),
+            include_str!("../v2_lifecycle_ledger.rs"),
+            include_str!("../v2_lifecycle_open.rs"),
+            include_str!("../v2_lifecycle_settlement.rs"),
+            include_str!("../v2_effects.rs"),
+            include_str!("../v2_worker.rs"),
+            include_str!("../v2_runner.rs"),
+        ] {
+            let outside = outside
+                .split("\n#[cfg(test)]\nmod tests {")
+                .next()
+                .expect("outside terminal production prefix is bounded");
+            assert!(!outside.contains(".persist_completed_with_exact_body("));
+            assert!(!outside.contains(".publish_certified_serve_terminal_transition("));
+        }
+        let coordinator = include_str!("../v2_lifecycle_coordinator.rs");
+        assert!(coordinator.contains("#[cfg(test)]\n    pub(super) fn admit_certified_serve("));
+        assert!(coordinator.contains(
+            "CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,"
+        ));
+        assert!(!projection.contains("CertifiedServeSettlementError"));
+        assert_eq!(
+            projection
+                .matches("fn settle_certified_serve_completed(")
+                .count(),
+            1,
+            "only the production owner may expose completed Serve settlement"
+        );
+        assert_eq!(
+            projection
+                .matches("fn settle_certified_serve_negative(")
+                .count(),
+            1,
+            "only the production owner may expose negative Serve settlement"
+        );
+        for terminal_method in [
+            "settle_certified_serve_completed",
+            "settle_certified_serve_negative",
+        ] {
+            let signature_marker = format!("fn {terminal_method}(");
+            let signature = projection
+                .split(signature_marker.as_str())
+                .nth(1)
+                .expect("terminal owner transaction has one signature")
+                .split(") -> Result<(), CertifiedServeTerminalSettlementErrorV1>")
+                .next()
+                .expect("terminal owner signature is bounded");
+            for forbidden in [
+                "receipt:",
+                "payload_id",
+                "CandidateAdmission",
+                "ordinal:",
+                "digest:",
+                "ReplayEvidence",
+                "parts",
+                "route",
+                "effect",
+                "pending",
+            ] {
+                assert!(
+                    !signature.contains(forbidden),
+                    "terminal owner transaction accepted raw {forbidden}"
+                );
+            }
+        }
+        let fresh_signature = projection
+            .split("fn admit_selected_certified_serve(")
+            .nth(1)
+            .expect("fresh Serve owner transaction has one signature")
+            .split(") -> CertifiedServeConcreteAdmissionV1")
+            .next()
+            .expect("fresh Serve owner signature is bounded");
+        for forbidden in [
+            "CandidateAdmission",
+            "AdapterEffect",
+            "PendingRuntimeEffectBinding",
+            "ReplayEvidence",
+            "ordinal:",
+            "digest:",
+            "route",
+            "queue",
+        ] {
+            assert!(
+                !fresh_signature.contains(forbidden),
+                "fresh Serve owner transaction accepted raw {forbidden}"
+            );
+        }
+        assert!(projection.contains("struct CertifiedServeConcreteAdmissionV1 {"));
+        assert!(!projection.contains("pub(crate) enum CertifiedServeConcreteAdmissionV1"));
+        let opaque_result = projection
+            .split("impl CertifiedServeConcreteAdmissionV1 {")
+            .nth(1)
+            .expect("opaque Serve outcome has one implementation")
+            .split("impl CertifiedServeConcreteAdmissionContinuationV1 {")
+            .next()
+            .expect("safe continuation follows opaque Serve outcome");
+        assert!(!opaque_result.contains("fn into_target("));
+
+        for required in [
+            "impl Drop for DurableCertifiedServeAdmissionPublication",
+            "fresh_pending: bool",
+            "fn can_abort_fresh_pending(&self)",
+            "fn exactly_matches_authenticated_request(",
+            "enum CertifiedServePayloadRetentionError",
+            "PublicationAmbiguous(CertifiedServePayloadStoreError)",
+            "PublishedButUnsynchronized(CertifiedServePayloadStoreError)",
+            "fn persist_completed_with_exact_body(",
+            "body_store.owns_receipt(durable_body)",
+            "fn persist_negative_for_authenticated_request(",
+            "#[cfg(test)]\n    pub(crate) fn persist_negative(",
+        ] {
+            assert!(
+                payload_store.contains(required),
+                "payload-first Serve ownership omitted {required}"
+            );
+        }
+        for required in [
+            "fn exactly_matches_fresh_staged_append(",
+            "exactly_covers_recovered_ready_work(current)",
+            "exactly_covers_recovered_ready_work_and_wal_authority(current)",
+            "carrier.matches_record(record, metadata, work.digest)",
+            "fn matches_current_ready_record(",
+            "fn exact_optional_recovered_wal_authority(",
+            "fn preflight_certified_serve_terminal_owner_state(",
+            "fn preflights_exact_staged_successor(",
+            "staged.high_water == current.high_water",
+            "staged.producer_debts == expected_debts",
+            "staged.capacity_used == expected_capacity_used",
+            "fn publish_certified_serve_terminal_transition",
+        ] {
+            assert!(
+                registry.contains(required),
+                "fresh Serve whole-census preflight omitted {required}"
+            );
+        }
+
+        let authority = include_str!("../v2_lifecycle_authority.rs");
+        assert!(authority.contains(
+            "#[cfg(test)]\n#[derive(Clone, Debug, PartialEq, Eq)]\npub(crate) struct RolloverSnapshot"
+        ));
+        assert!(!authority.contains("fn verified_successor("));
+        assert!(coordinator.contains("#[cfg(test)]\npub(crate) use authority::RolloverSnapshot;"));
+        let lifecycle_open = include_str!("../v2_lifecycle_open.rs");
+        for test_only_rollover in [
+            "#[cfg(test)]\n    pub(crate) fn rollover(",
+            "#[cfg(test)]\n    pub(crate) fn rollover_with_payload_store(",
+            "#[cfg(test)]\n    fn rollover_inner(",
+            "#[cfg(test)]\n    fn serve_cancellation_receipts_are_exact(",
+            "#[cfg(test)]\n    fn retire_for_rollover(",
+        ] {
+            assert!(
+                lifecycle_open.contains(test_only_rollover),
+                "raw terminal-receipt rollover escaped its test gate: {test_only_rollover}"
             );
         }
     }
@@ -1066,8 +1754,8 @@
             "validate_pending: &PendingRuntimeEffectBinding",
             "fn exactly_matches_validate_pending(",
             "fn is_exact_for_stage(&self, stage: LifecycleStageKind)",
-            "LifecycleStageKind::FetchBody => ReplayPayloadBindingV1::None",
-            "LifecycleStageKind::StoreBody | LifecycleStageKind::ValidateBody",
+            "LifecycleStageKind::FetchBody\n            | LifecycleStageKind::StoreBody",
+            "ReplayPayloadBindingV1::BodyFrame(self.body_frame)",
             "family.is_exact_for_stage(stage)",
         ] {
             assert!(
@@ -1664,7 +2352,8 @@
     }
 
     #[test]
-    fn live_wal_replay_seal_is_linear_nondecodable_and_has_one_production_mint() {
+    #[allow(clippy::too_many_lines)]
+    fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_mints() {
         let source = include_str!("../v2_lifecycle_replay_authority.rs");
         let production = source
             .split("\n#[cfg(test)]\nmod tests {")
@@ -1680,10 +2369,13 @@
         for required in [
             "LiveWalPersistedReplayStateV1::ApplyPending",
             "LiveWalPersistedPendingV1::PayloadFree",
+            "LiveWalPersistedPendingV1::ValidateSignBound",
             "LiveWalPersistedPendingV1::ApplyPending",
             "LiveWalPersistedPendingV1::ApplyBound",
             "from_exact_live_append(\n        cause: ExactLiveWalPersistedContinuationCause",
             "exactly_binds_payload_free_pending(&self)",
+            "bind_exact_validate_sign_pending(",
+            "exactly_binds_validate_sign_pending(&self)",
             "project_validate_apply_successor(predecessor_effect, &self.effect)",
             "exactly_matches_apply_effect(&self.effect, receipt)",
             "ReplayWalRoleV1::PROPOSAL_INTENT",
@@ -1732,15 +2424,55 @@
             adapter
                 .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
                 .count(),
-            1,
-            "one record-checked adapter cut mints live replay authority"
+            2,
+            "only the generic persisted cut and sealed Ready-Sign cut mint live replay authority"
         );
         assert_eq!(
             adapter
                 .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
                 .count(),
-            1,
-            "one post-fsync conversion derives payload-free pending authority"
+            2,
+            "the same two closed post-fsync cuts derive frame-bound placeholder owners"
+        );
+        let ready_sign = adapter
+            .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN")
+            .nth(1)
+            .expect("sealed Ready-Sign segment exists")
+            .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_END")
+            .next()
+            .expect("sealed Ready-Sign segment is bounded");
+        assert_eq!(
+            ready_sign
+                .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            ready_sign
+                .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+                .count(),
+            1
+        );
+        assert!(ready_sign.contains("LiveWalFrameIdentity::from_append_receipt("));
+        assert!(ready_sign.contains("bind_exact_validate_sign_pending(child_pending)"));
+        let generic = adapter
+            .split("fn drive_exact_persisted_continuation(")
+            .nth(1)
+            .expect("generic exact persisted cut exists")
+            .split("fn live_wal_record_exactly_owns_effect(")
+            .next()
+            .expect("generic exact persisted cut is bounded");
+        assert_eq!(
+            generic
+                .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            generic
+                .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+                .count(),
+            1
         );
         assert_eq!(
             adapter
@@ -1986,7 +2718,9 @@
         };
         source.validation_origin.origin = BodyPipelineOriginV1::Certified {
             certificate: fixture.prepare_qc.clone(),
-            manifest: Some(source.outcome.manifest.clone()),
+            manifest: source.outcome.manifest.clone(),
+            fetch_manifest_present: true,
+            certified_sources: Vec::new(),
         };
         assert!(
             certified_origin

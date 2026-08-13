@@ -1,3 +1,8 @@
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    LifecycleState, ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
+    ProductionIngressTurnPreparation,
+};
+
 #[test]
 fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
     for proposal_first in [true, false] {
@@ -469,6 +474,7 @@ fn certified_response_priority_probe_is_read_only_and_detects_revalidation_drift
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() {
     let mut fixture = ProductionTransportFixture::new();
     fixture.executor.recovered_bodies.clear();
@@ -668,6 +674,188 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         first_ordinal,
         "deriving readiness borrows and preserves the complete prepared token",
     );
+
+    let owner_effect = task.adapter_effect();
+    let owner_pending = task
+        .ownership()
+        .pending_adapter_effect_binding(&owner_effect)
+        .expect("mint the exact Fetch registry carrier for owner admission");
+    let proofs = fixture
+        .validator_keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("validator proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
+        .expect("verified owner context");
+    let owner_directory = TempDir::new().expect("temporary lifecycle owner storage");
+    let (mut owner, lifecycle_ordinal, lifecycle_source) =
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::waiting_fetch_for_ingress_test(
+            verified,
+            &winning_prepared,
+            owner_effect,
+            owner_pending,
+            &fixture.validator_keys[0],
+            owner_directory.path(),
+        );
+    let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    let before_unbound = owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+    let unbound_result = owner.plan_ingress_turn(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        winning_prepared,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    assert!(matches!(
+        unbound_result,
+        Err(ProductionIngressSchedulerInputsError::BodyStoreNotBound)
+    ));
+    assert_eq!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        before_unbound,
+        "an owner retaining its startup store cannot plan against an independent service",
+    );
+
+    let foreign_output_guard = ConsensusOutputGuard::isolated();
+    let planner_io = owner.bind_body_store_to_planner_io_for_test(
+        &mut production_services,
+        Arc::clone(&foreign_output_guard),
+        1,
+    );
+    let guard_mismatch_prepared = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
+        .expect("the exact winner remains selectable for the guard mismatch");
+    let before_guard_mismatch =
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+    let guard_mismatch = owner.plan_ingress_turn(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        guard_mismatch_prepared,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    assert!(matches!(
+        guard_mismatch,
+        Err(ProductionIngressSchedulerInputsError::ForeignOutputGuard)
+    ));
+    assert_eq!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        before_guard_mismatch,
+        "a foreign service guard cannot advance the coordinator or claim a lease",
+    );
+    assert!(
+        !fixture.executor.output_guard.restart_required(),
+        "guard mismatch rejection leaves the executor's canonical output open",
+    );
+    assert!(
+        !foreign_output_guard.restart_required(),
+        "pre-capture mismatch rejection leaves the foreign service guard open",
+    );
+    planner_io.install_output_guard_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+    );
+    planner_io.saturate_consensus_prefix(&production_services);
+    let waiting_prepared = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
+        .expect("the exact winner remains selectable for a capacity wait");
+    let before_capacity_wait =
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+    let capacity_result = owner.plan_ingress_turn(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        waiting_prepared,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    let capacity_wait = match capacity_result {
+        Ok(ProductionIngressTurnPreparation::CapacityWait(wait)) => wait,
+        Ok(ProductionIngressTurnPreparation::Queued(_)) => {
+            panic!("a saturated Consensus prefix cannot admit Fetch persistence")
+        }
+        Err(_) => panic!("saturation must return the opaque capacity wait"),
+    };
+    assert_eq!(
+        capacity_wait.capacity_status(&production_services),
+        ProductionIngressCapacityStatus::Pending
+    );
+    planner_io.release_one_predecessor();
+    assert_eq!(
+        capacity_wait.capacity_status(&production_services),
+        ProductionIngressCapacityStatus::Released
+    );
+    planner_io.release_one_predecessor();
+    drop(capacity_wait);
+    assert_eq!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        before_capacity_wait,
+        "capacity waiting cannot advance the Fetch generation or claim a lease",
+    );
+
+    let winning_prepared = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
+        .expect("the exact winner remains selectable after capacity release");
+    let mode = fixture.executor.lifecycle_mode_rank_snapshot();
+    let runner =
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context);
+    let planned = owner.plan_ingress_turn(
+        &production_services,
+        &fixture.executor,
+        mode,
+        winning_prepared,
+        runner,
+    );
+    let queued = match planned {
+        Ok(ProductionIngressTurnPreparation::Queued(queued)) => queued,
+        Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
+            panic!("available exact capacity must not produce a capacity wait")
+        }
+        Err(_) => panic!("the exact locked Fetch transaction must publish its command"),
+    };
+    assert_eq!(queued.ordinal(), lifecycle_ordinal);
+    assert!(matches!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        (
+            Some(LifecycleState::Waiting(wait)),
+            Some(1),
+            None,
+            false,
+        ) if wait.source() == lifecycle_source && wait.observed_generation() == 1
+    ));
+    assert_eq!(planner_io.queued_certified_fetch_count(), 1);
+
+    let repeated = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
+        .expect("the queued physical winner remains selectable before Phase B");
+    let before_repeat = owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+    let repeated_result = owner.plan_ingress_turn(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        repeated,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    assert!(matches!(
+        repeated_result,
+        Err(ProductionIngressSchedulerInputsError::InFlightSelectedWork(
+            _
+        ))
+    ));
+    assert_eq!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        before_repeat,
+        "an in-flight exact command must reject before advancing Fetch generation",
+    );
+    assert_eq!(planner_io.queued_certified_fetch_count(), 1);
+    assert!(!fixture.executor.output_guard.restart_required());
+    planner_io.detach(&mut production_services);
 }
 
 #[test]
@@ -963,7 +1151,11 @@ fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owne
 
     assert_eq!(
         executor
-            .accept_certified_body_response(exact_response, &exact_responder, &mut services,)
+            .accept_certified_body_response(
+                exact_response.clone(),
+                &exact_responder,
+                &mut services,
+            )
             .expect("the identical claimed response resumes the same handoff"),
         CompletionDisposition::Accepted,
     );
@@ -978,6 +1170,21 @@ fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owne
             .runtime_body_reservation
             .is_none()
     );
+    let later_duplicate = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(exact_response.clone()),
+    );
+    assert!(
+        executor.retained_dispatch_allows_network_ingress(&later_duplicate.payload),
+        "a later physical duplicate remains ordinarily drainable after owner retirement",
+    );
+    assert!(matches!(
+        executor
+            .probe_certified_response_priority(&exact_response, &exact_responder)
+            .expect("a retired response family has a closed non-priority classification"),
+        CertifiedResponsePriorityProbe::DefinitelyNonPriority(
+            CertifiedResponsePriorityNonPriority::Unsolicited { request_hash }
+        ) if request_hash == exact_response.request_hash
+    ));
     assert!(!executor.status().fail_closed);
 }
 
@@ -2263,6 +2470,77 @@ fn apply_requires_validated_body_and_typed_exact_kura_completion() {
 }
 
 #[test]
+fn apply_completion_rejects_detached_owner_fields_before_settlement() {
+    for field in ["authorized owner tag", "lifecycle ordinal"] {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor
+            .admit_local_proposal(
+                tag(0),
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+                &mut services,
+            )
+            .expect("local proposal");
+        complete_local_proposal_chain(&mut executor, &mut services);
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::Apply {
+                    tag: tag(0),
+                    subject: fixture.manifest.subject,
+                    certificate: commit.clone(),
+                }],
+                &mut services,
+            )
+            .expect("begin application");
+        let task = services.apply_tasks[0].clone();
+        let work_id = task.id();
+        let pending = executor
+            .pending_applications
+            .get_mut(&work_id)
+            .expect("ordinary Apply retains its exact runtime owner");
+        match field {
+            "authorized owner tag" => pending.task.authorized_owner_tag = tag(1),
+            "lifecycle ordinal" => {
+                pending.task.lifecycle_ordinal = pending.task.lifecycle_ordinal.saturating_add(1)
+            }
+            _ => unreachable!("the fixed owner-field matrix is exhaustive"),
+        }
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            fixture.context.clone(),
+            fixture.manifest.subject,
+            commit,
+            vec![vec![0x5C]; fixture.context.roster.len()],
+        );
+        let receipt = KuraV2CommitReceipt::for_test(&artifact);
+
+        assert!(matches!(
+            executor.complete_application(
+                DurableApplyCompletion::new(work_id, receipt, artifact),
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("exact decided-body owner")
+        ));
+        assert!(executor.pending_applications.contains_key(&work_id));
+        assert!(
+            executor.status().fail_closed,
+            "corrupt {field} must fail closed"
+        );
+        assert!(!services.closed.is_empty());
+        assert!(
+            !matches!(
+                executor.runtime.completions.last(),
+                Some(RuntimeCompletion::Application(_, _))
+            ),
+            "corrupt {field} cannot settle ApplicationCompleted"
+        );
+    }
+}
+
+#[test]
 fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -2371,6 +2649,56 @@ fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
     );
     assert_eq!(task.validated_receipt().durable().round(), commit.round);
     assert!(!executor.status().fail_closed);
+}
+
+#[test]
+fn apply_worker_request_has_no_runtime_ownership_sidecar() {
+    let source = include_str!("../v2_effects.rs");
+    let task = source
+        .split_once("pub(crate) struct ApplyTask {")
+        .expect("ApplyTask has one declaration")
+        .1
+        .split_once("impl ApplyTask {")
+        .expect("ApplyTask implementation follows its declaration")
+        .0;
+    for required in ["authorized_owner_tag: EventTag", "lifecycle_ordinal: u128"] {
+        assert!(task.contains(required), "ApplyTask omitted {required}");
+    }
+    assert!(!task.contains("RuntimeEffectOwnership"));
+
+    let pending = source
+        .split_once("struct PendingApply {")
+        .expect("ordinary Apply pending state has one declaration")
+        .1
+        .split_once("struct ReadyBody {")
+        .expect("ReadyBody follows ordinary Apply pending state")
+        .0;
+    assert!(pending.contains("ownership: RuntimeEffectOwnership"));
+    let preflight = source
+        .split_once("fn preflight_pending_application_owner(")
+        .expect("ordinary Apply owner has one exact preflight")
+        .1
+        .split_once("fn preflight_deferred_work_owner(")
+        .expect("deferred work preflight follows Apply preflight")
+        .0;
+    assert!(
+        preflight
+            .contains("task.lifecycle_ordinal() != pending.ownership.owner().lifecycle_ordinal()")
+    );
+    let completion = source
+        .split_once("pub(crate) fn complete_application")
+        .expect("Apply completion has one production entrypoint")
+        .1
+        .split_once("/// Current bounded operational status.")
+        .expect("status follows Apply completion")
+        .0;
+    let owner_preflight = completion
+        .find("preflight_pending_application_owner(completion.work_id, pending)")
+        .expect("Apply completion revalidates the retained runtime owner");
+    let task_borrow = completion
+        .find("let task = &pending.task;")
+        .expect("Apply completion borrows the task after owner validation");
+    assert!(owner_preflight < task_borrow);
 }
 
 #[test]

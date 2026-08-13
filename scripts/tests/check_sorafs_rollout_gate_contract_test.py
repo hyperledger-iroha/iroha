@@ -7983,9 +7983,9 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     assert "require_option_value" in release_cli
     assert "validate_existing_file_path" in release_cli
     assert 'validate_existing_file_path "aggregate release manifest"' in release_cli
-    assert (
-        'validate_existing_executable_file_path "external Ed25519 signer"'
-        in release_cli
+    assert re.search(
+        r'validate_existing_executable_file_path\s*\\\s*"authenticated external software Ed25519 signer adapter"\s*\\\s*"\$external_signer"',
+        release_cli,
     )
     assert '"native release-manifest verifier"' in release_cli
     assert "parent must not be a symlink" in release_cli

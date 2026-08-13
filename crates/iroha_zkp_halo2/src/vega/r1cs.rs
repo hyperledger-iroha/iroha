@@ -72,7 +72,6 @@ struct FoldRowInputs<'a> {
 }
 
 impl SparseMatrix {
-    #[cfg(test)]
     pub(super) fn new(
         rows: usize,
         columns: usize,

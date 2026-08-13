@@ -1129,6 +1129,7 @@ struct DeferredCarrier {
     hash: HashOf<BlockHeader>,
     height: u64,
     view: u64,
+    lifecycle_owned: bool,
 }
 #[derive(Clone, Debug)]
 struct RequestAttempt {
@@ -5775,6 +5776,7 @@ impl MergeSidecarTransport {
             committed_height,
             now,
             InboundPriority::Ordinary,
+            false,
         )
     }
     /// Register a decided carrier using capacity reserved from ordinary
@@ -5799,6 +5801,35 @@ impl MergeSidecarTransport {
             committed_height,
             now,
             InboundPriority::Decided,
+            false,
+        )
+    }
+
+    /// Register a lifecycle-owned decided carrier in reserved capacity.
+    ///
+    /// Unlike executor-owned decided work, this exact carrier is not named by
+    /// the generic executor pending census and must survive that cleanup until
+    /// its sealed lifecycle owner retries or the height commits.
+    pub(crate) fn defer_lifecycle_decided_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        reference: CertifiedMergeLedgerReference,
+        requester: &PeerId,
+        committed_height: u64,
+        now: Instant,
+    ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
+        self.defer_block_with_priority(
+            block_hash,
+            height,
+            view,
+            reference,
+            requester,
+            committed_height,
+            now,
+            InboundPriority::Decided,
+            true,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -5812,6 +5843,7 @@ impl MergeSidecarTransport {
         committed_height: u64,
         now: Instant,
         priority: InboundPriority,
+        lifecycle_owned: bool,
     ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
         Self::validate_reference_len(&reference)?;
         if height <= committed_height
@@ -5880,10 +5912,16 @@ impl MergeSidecarTransport {
             .expect("inserted inbound assembly")
             .deferred
             .entry(block_hash)
+            .and_modify(|carrier| {
+                if lifecycle_owned {
+                    carrier.lifecycle_owned = true;
+                }
+            })
             .or_insert(DeferredCarrier {
                 hash: block_hash,
                 height,
                 view,
+                lifecycle_owned,
             });
         self.begin_request(key, requester, now)
     }
@@ -8551,8 +8589,12 @@ impl MergeSidecarTransport {
     ///
     /// Active fetch state has no wall-clock lifetime: a valid pending carrier
     /// must remain recoverable across an arbitrarily long holder outage.  The
-    /// actor supplies the authoritative pending set so superseded and committed
-    /// carriers still release their bounded reservations deterministically.
+    /// actor supplies the authoritative ordinary pending set so superseded and
+    /// committed carriers still release their bounded reservations
+    /// deterministically. A carrier explicitly sealed to the lifecycle owner
+    /// remains retained until its height commits or its exact terminal path
+    /// consumes it; an executor-only census cannot retire that owner. Ordinary
+    /// and executor-owned decided carriers still follow the supplied census.
     pub(crate) fn retain_pending_blocks(
         &mut self,
         pending_blocks: &BTreeSet<HashOf<BlockHeader>>,
@@ -8561,7 +8603,8 @@ impl MergeSidecarTransport {
         let closes_request_stream = self.inbound.values().any(|assembly| {
             assembly.current.is_some()
                 && assembly.deferred.values().all(|carrier| {
-                    carrier.height <= committed_height || !pending_blocks.contains(&carrier.hash)
+                    carrier.height <= committed_height
+                        || (!carrier.lifecycle_owned && !pending_blocks.contains(&carrier.hash))
                 })
         });
         if closes_request_stream {
@@ -8569,7 +8612,8 @@ impl MergeSidecarTransport {
         }
         for assembly in self.inbound.values_mut() {
             assembly.deferred.retain(|hash, carrier| {
-                carrier.height > committed_height && pending_blocks.contains(hash)
+                carrier.height > committed_height
+                    && (carrier.lifecycle_owned || pending_blocks.contains(hash))
             });
         }
         let retired = self
@@ -16651,6 +16695,108 @@ mod tests {
         );
         assert_eq!(transport.inbound_len(), MAX_INBOUND_SESSIONS);
     }
+    #[test]
+    fn decided_deferred_carrier_survives_generic_pending_cleanup() {
+        let now = Instant::now();
+        let requester = peer(b"decided cleanup requester");
+        let block = HashOf::from_untyped_unchecked(Hash::new(b"decided cleanup block"));
+        let reference = reference(1, 2);
+        let mut transport = MergeSidecarTransport::new();
+        transport
+            .defer_lifecycle_decided_block(block, 2, 0, reference, &requester, 1, now)
+            .expect("register decided sidecar owner");
+
+        transport
+            .retain_pending_blocks(&BTreeSet::new(), 1)
+            .expect("generic cleanup preserves decided owner");
+        assert_eq!(
+            transport.inbound_len(),
+            1,
+            "executor-only pending census cannot retire lifecycle-owned decided work"
+        );
+
+        transport
+            .retain_pending_blocks(&BTreeSet::new(), 2)
+            .expect("committed height retires the old decided owner");
+        assert_eq!(transport.inbound_len(), 0);
+    }
+
+    #[test]
+    fn executor_decided_carrier_still_obeys_generic_pending_cleanup() {
+        let now = Instant::now();
+        let requester = peer(b"executor decided cleanup requester");
+        let block = HashOf::from_untyped_unchecked(Hash::new(b"executor decided block"));
+        let reference = reference(1, 2);
+        let mut transport = MergeSidecarTransport::new();
+        transport
+            .defer_decided_block(block, 2, 0, reference, &requester, 1, now)
+            .expect("register executor-owned decided sidecar");
+
+        transport
+            .retain_pending_blocks(&BTreeSet::new(), 1)
+            .expect("generic cleanup retires executor-owned decided sidecar");
+        assert_eq!(transport.inbound_len(), 0);
+    }
+
+    #[test]
+    fn per_carrier_decided_priority_survives_mixed_generic_cleanup() {
+        let now = Instant::now();
+        let requester = peer(b"mixed decided cleanup requester");
+        let ordinary = HashOf::from_untyped_unchecked(Hash::new(b"ordinary sibling"));
+        let decided = HashOf::from_untyped_unchecked(Hash::new(b"decided sibling"));
+        let reference = reference(1, 2);
+        let key = (
+            reference.entry_hash,
+            certified_merge_reference_digest(&reference),
+        );
+        let mut transport = MergeSidecarTransport::new();
+        transport
+            .defer_block(ordinary, 2, 0, reference.clone(), &requester, 1, now)
+            .expect("register ordinary sibling");
+        transport
+            .defer_lifecycle_decided_block(decided, 2, 0, reference, &requester, 1, now)
+            .expect("register decided sibling");
+
+        transport
+            .retain_pending_blocks(&BTreeSet::new(), 1)
+            .expect("generic cleanup keeps only the decided sibling");
+        let deferred = &transport
+            .inbound
+            .get(&key)
+            .expect("decided sibling retains its assembly")
+            .deferred;
+        assert_eq!(deferred.keys().copied().collect::<Vec<_>>(), vec![decided]);
+    }
+
+    #[test]
+    fn repeated_carrier_registration_promotes_priority_to_decided() {
+        let now = Instant::now();
+        let requester = peer(b"promoted decided cleanup requester");
+        let block = HashOf::from_untyped_unchecked(Hash::new(b"promoted decided block"));
+        let reference = reference(1, 2);
+        let key = (
+            reference.entry_hash,
+            certified_merge_reference_digest(&reference),
+        );
+        let mut transport = MergeSidecarTransport::new();
+        transport
+            .defer_block(block, 2, 0, reference.clone(), &requester, 1, now)
+            .expect("register ordinary carrier");
+        transport
+            .defer_lifecycle_decided_block(block, 2, 0, reference, &requester, 1, now)
+            .expect("promote exact carrier to decided");
+
+        transport
+            .retain_pending_blocks(&BTreeSet::new(), 1)
+            .expect("generic cleanup preserves promoted carrier");
+        let carrier = transport
+            .inbound
+            .get(&key)
+            .and_then(|assembly| assembly.deferred.get(&block))
+            .expect("promoted carrier remains owned");
+        assert!(carrier.lifecycle_owned);
+    }
+
     #[test]
     fn attacker_first_conflicting_reference_isolated_from_honest_session() {
         let (_, requester, honest, _, now) = start_session(64, 3);

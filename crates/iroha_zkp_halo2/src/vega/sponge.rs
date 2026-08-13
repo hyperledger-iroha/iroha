@@ -92,7 +92,6 @@ impl Keccak256 {
     /// Fork the exact internal absorb state without exposing a general-purpose
     /// `Clone` capability. Both descendants retain independent zeroizing owners
     /// and produce the same digest until different suffixes are absorbed.
-    #[cfg(test)]
     pub(super) fn fork_v1(&self) -> Self {
         Self {
             state: self.state,
@@ -231,14 +230,12 @@ fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
 /// This keeps only one Keccak rate block in memory, which is required by the
 /// release-size deterministic RNS samplers.  Reading the same total number of
 /// bytes in any chunking produces the exact one-shot `shake256` stream.
-#[cfg(test)]
 pub(super) struct Shake256Reader {
     state: [u64; 25],
     block: [u8; KECCAK_256_RATE],
     cursor: usize,
 }
 
-#[cfg(test)]
 impl Shake256Reader {
     pub(super) fn new(input: &[u8]) -> Self {
         let mut reader = Self {
@@ -274,7 +271,6 @@ impl Shake256Reader {
     }
 }
 
-#[cfg(test)]
 impl Drop for Shake256Reader {
     fn drop(&mut self) {
         clear_sensitive_lanes_v1(&mut self.state);

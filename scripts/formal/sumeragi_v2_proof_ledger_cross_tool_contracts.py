@@ -2902,7 +2902,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="recovered",
                         item_token_sha256=(
-                            "6891e48b93cba8622846afda4f0f08fb5efaa7fb98f5d58d5cfb791ce64cc203"
+                            "18d0d9f57698c98fed549b3901c76f2f7750f0066c65eced99b4a4e9b2acb255"
                         ),
                         brace_context=(("impl", "PendingSuccessorActivation"),),
                         projection="lifecycle",

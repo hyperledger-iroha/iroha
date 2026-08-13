@@ -123,6 +123,9 @@ fn open_ingress_for_active_height(
     block_ingress: &FairV2Ingress,
     activation: Option<(PendingSuccessorActivation, wire::SumeragiV2Status)>,
 ) -> Result<(), V2RunnerError> {
+    if let Some((activation, _successor)) = activation.as_ref() {
+        activation.preflight_ingress_open()?;
+    }
     let Some(ingress_permit) = output_guard.acquire() else {
         return Err(V2RunnerError::RestartRequired);
     };

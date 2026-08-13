@@ -29,13 +29,41 @@ use super::{
         selene_hash_initializer,
     },
     proof_math::{
-        HeliosSuite, ProofPoint, ProofSuite, SeleneSuite, VerifierTranscript, helios_bp_generators,
-        selene_bp_generators,
+        HeliosSuite, ProofPoint, ProofSuite, SecretMultiexpBuilder, SeleneSuite,
+        VerifierTranscript, helios_bp_generators, selene_bp_generators,
     },
     sal::{generator_t, generator_u, generator_v},
     verify_fcmp_sal_v1,
     wire::{FcmpProofInputPublicV1, ParsedFcmpPlusPlusWireV1, ipa_rows},
 };
+
+fn secret_unblind_helios_coordinates_v1(
+    prior_commitment: &HeliosPoint,
+    mask: &HelioseleneField,
+) -> Result<(Field25519, Field25519), FcmpNativeErrorV1> {
+    let mut terms = SecretMultiexpBuilder::<HeliosSuite>::new(2)?;
+    terms.push(&HelioseleneField::ONE, prior_commitment)?;
+    let negative_h = -helios_bp_generators().h;
+    terms.push(mask, &negative_h)?;
+    terms
+        .evaluate()?
+        .secret_coordinates_v1()
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
+}
+
+fn secret_unblind_selene_coordinates_v1(
+    prior_commitment: &SelenePoint,
+    mask: &Field25519,
+) -> Result<(HelioseleneField, HelioseleneField), FcmpNativeErrorV1> {
+    let mut terms = SecretMultiexpBuilder::<SeleneSuite>::new(2)?;
+    terms.push(&Field25519::ONE, prior_commitment)?;
+    let negative_h = -selene_bp_generators().h;
+    terms.push(mask, &negative_h)?;
+    terms
+        .evaluate()?
+        .secret_coordinates_v1()
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
+}
 
 const ED25519_WEI_A: U256 =
     U256::from_be_hex("2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa984914a144");
@@ -229,7 +257,7 @@ fn verify_root_blind(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn constrain_input<T: CircuitTranscript>(
+pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
     parameters: &NativeParameters,
     layers: usize,
     transcript: &mut T,
@@ -246,8 +274,10 @@ pub(super) fn constrain_input<T: CircuitTranscript>(
     root: &[super::bulletproof::Variable],
     c1_branches: &mut impl Iterator<Item = Vec<super::bulletproof::Variable>>,
     c2_branches: &mut impl Iterator<Item = Vec<super::bulletproof::Variable>>,
-    c1_commitments: &mut impl Iterator<Item = (SelenePoint, Option<Field25519>, PointWithDlog)>,
-    c2_commitments: &mut impl Iterator<Item = (HeliosPoint, Option<HelioseleneField>, PointWithDlog)>,
+    c1_commitments: &mut impl Iterator<Item = (SelenePoint, Option<&'c1 Field25519>, PointWithDlog)>,
+    c2_commitments: &mut impl Iterator<
+        Item = (HeliosPoint, Option<&'c2 HelioseleneField>, PointWithDlog),
+    >,
     public_input: &FcmpProofInputPublicV1,
     opening: TranscriptedInput,
 ) -> Result<(), FcmpNativeErrorV1> {
@@ -347,14 +377,17 @@ pub(super) fn constrain_input<T: CircuitTranscript>(
             .next()
             .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
         let prior_commitment = prior_commitment + helios_hash_initializer();
-        let hash_witness = prior_mask
-            .map(|mask| {
-                (prior_commitment - helios_bp_generators().h.scale(mask))
-                    .coordinates()
-                    .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
-            })
-            .transpose()?;
-        let (hash_x, hash_y, _) = c1_circuit.mul_with_witness(None, None, hash_witness)?;
+        let (hash_x, hash_y, _) = match prior_mask {
+            Some(mask) => c1_circuit.mul_with_witness(
+                None,
+                None,
+                Some(secret_unblind_helios_coordinates_v1(
+                    &prior_commitment,
+                    mask,
+                )?),
+            )?,
+            None => c1_circuit.mul_with_witness(None, None, None)?,
+        };
         additional_layer::<SeleneSuite>(
             c1_circuit,
             &helios_curve(),
@@ -379,14 +412,17 @@ pub(super) fn constrain_input<T: CircuitTranscript>(
             .next()
             .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
         let prior_commitment = prior_commitment + selene_hash_initializer();
-        let hash_witness = prior_mask
-            .map(|mask| {
-                (prior_commitment - selene_bp_generators().h.scale(mask))
-                    .coordinates()
-                    .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
-            })
-            .transpose()?;
-        let (hash_x, hash_y, _) = c2_circuit.mul_with_witness(None, None, hash_witness)?;
+        let (hash_x, hash_y, _) = match prior_mask {
+            Some(mask) => c2_circuit.mul_with_witness(
+                None,
+                None,
+                Some(secret_unblind_selene_coordinates_v1(
+                    &prior_commitment,
+                    mask,
+                )?),
+            )?,
+            None => c2_circuit.mul_with_witness(None, None, None)?,
+        };
         additional_layer::<HeliosSuite>(
             c2_circuit,
             &selene_curve(),
@@ -525,12 +561,12 @@ fn verify_membership(
         .iter()
         .copied()
         .zip(c2_blind_claims)
-        .map(|(commitment, blind)| (commitment, None, blind));
+        .map(|(commitment, blind)| (commitment, None::<&Field25519>, blind));
     let mut c2_commitments = proof_2_vcs
         .iter()
         .copied()
         .zip(c1_blind_claims)
-        .map(|(commitment, blind)| (commitment, None, blind));
+        .map(|(commitment, blind)| (commitment, None::<&HelioseleneField>, blind));
     for (public_input, opening) in public_inputs.iter().zip(openings) {
         constrain_input(
             native_parameters(),

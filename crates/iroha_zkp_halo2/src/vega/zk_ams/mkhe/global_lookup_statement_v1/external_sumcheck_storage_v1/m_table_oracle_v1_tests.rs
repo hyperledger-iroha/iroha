@@ -1,9 +1,9 @@
 use super::*;
 
 const TOPOLOGY_KAT_V1: [u8; 32] =
-    hex_literal::hex!("2d1dcc86a7c58d99a729df30b5c48d3082cea1e4706068eedf6c6ea5aea567a6");
+    hex_literal::hex!("3af9a6ad67383c32b06bb5d95a05863b8cb0b3338660177bc2a92e1bbf40b4ab");
 const PARENT_STORAGE_MANIFEST_KAT_V1: [u8; 32] =
-    hex_literal::hex!("8396538b1b6ddceb293269d64b0a989c994dd602eb8ef4de311cec4de02cabb2");
+    hex_literal::hex!("32f5dfeb2ba549c07d37c06f6ef10ae6fb66c5bff745046560cc00b690d4573b");
 
 fn scalar_chunk_v1(values: &[u64]) -> ConfidentialSpoolChunkV1 {
     let mut chunk = ConfidentialSpoolChunkV1::new_zeroed_v1(SLOT_PLAINTEXT_BYTES_V1).unwrap();
@@ -97,23 +97,23 @@ fn independent_literal_frames_pin_release_tiny_manifest_and_contexts() {
     assert_eq!(tiny_context, manual_context_v1(public, 13, [0x44; 32]));
     assert_eq!(
         release.mapping_digest,
-        hex_literal::hex!("d2eaa96ca9d3f6c91ed8541baac25374c29e36f4edc7b31175abeec93c065c7b")
+        hex_literal::hex!("dac62360b74b1c5d5c1578443c80520c977ceaef5853f409dee44237198a3f46")
     );
     assert_eq!(
         tiny.mapping_digest,
-        hex_literal::hex!("a1348ec28699eff102c29a09f1b1c139c3e2ff4473e065d5f543a32285af6639")
+        hex_literal::hex!("7f8cf7961710f3a6e8be9f208b9511654eb2c96200c6c762c845216e7378ae94")
     );
     assert_eq!(
         m_manifest_digest_v1().unwrap(),
-        hex_literal::hex!("0aa2484f79f2b441042a68b3afb4fa6a1e0e7ca47edd50dc69af80f9f6210ef4")
+        hex_literal::hex!("60081ce451f48984142423e69c21465eebbc66511f0693fdd041d93cb97b2a23")
     );
     assert_eq!(
         release_context,
-        hex_literal::hex!("cb4b0ecc55fd05377545d9d96cd80cecdeb8dbe2efe2e53997b08be3e026fadf")
+        hex_literal::hex!("11d9aec8b2c6b404079cb580cbb673735461137dd822e5c70748b0b1cadd4ab9")
     );
     assert_eq!(
         tiny_context,
-        hex_literal::hex!("b4231366278a86d7ae0868443bc43ddc973bc926969c7096464de2af03765e08")
+        hex_literal::hex!("3b0e275c2d2667c5bc1b10443ba243d00921a3dc8d6f5112f132e95b2bd04ba8")
     );
 }
 
@@ -188,133 +188,185 @@ fn canonical_u32_sum_is_authenticated_and_invalid_input_poisoned() {
     );
 }
 
-fn tiny_pair_v1(directory: &Path, public: [u8; 32]) -> ExternalTablePairV1 {
+fn round12_pair_v1(directory: &Path, public: [u8; 32]) -> ExternalTablePairV1 {
     let mut writer = begin_initial_pair_v1(
         public,
         InitialProducerSealV1::TestOnly {
             directory: directory.to_path_buf(),
-            completed_rounds: 27,
+            completed_rounds: 12,
         },
     )
     .unwrap();
-    writer
-        .push_candidate_slot_v1(0, scalar_chunk_v1(&[1, 4, 9, 16]))
-        .unwrap();
-    writer
-        .push_inverse_slot_v1(0, scalar_chunk_v1(&[2, 3, 5, 8]))
-        .unwrap();
-    writer.seal_v1().unwrap()
-}
-
-fn tiny_m_v1(directory: &Path, public: [u8; 32]) -> MTableV1 {
-    let descriptor = m_descriptor_v1(13).unwrap();
-    let mut writer =
-        MWriterV1::create_v1(directory, descriptor, public, [0x44; 32], false).unwrap();
-    writer
-        .push_next_slot_v1(scalar_chunk_v1(&[7, 11, 13, 17]))
-        .unwrap();
-    writer.seal_v1().unwrap()
-}
-
-fn fold_four_v1(values: [u64; 4], first: Scalar, second: Scalar) -> Scalar {
-    let left = Scalar::from_u64(values[0])
-        + first * (Scalar::from_u64(values[1]) - Scalar::from_u64(values[0]));
-    let right = Scalar::from_u64(values[2])
-        + first * (Scalar::from_u64(values[3]) - Scalar::from_u64(values[2]));
-    left + second * (right - left)
-}
-
-#[test]
-fn tiny_real_oracle_recomputes_cubic_and_folds_a_u_m_to_exact_endpoints() {
-    let directory = tempfile::tempdir().unwrap();
-    let public = [0x31; 32];
-    let mut pair = tiny_pair_v1(directory.path(), public);
-    let mut multiplicity = tiny_m_v1(directory.path(), public);
-    let axes = OracleAxesV1 {
-        z: Scalar::from_u64(40_000),
-        rho: core::array::from_fn(|index| Scalar::from_u64((index % 7 + 2) as u64)),
-        alpha: Scalar::from_u64(3),
-        lambda: Scalar::from_u64(5),
-        mu: Scalar::from_u64(7),
-    };
-    let mut point = [Scalar::zero(); 29];
-    for (index, value) in point[..27].iter_mut().enumerate() {
-        *value = Scalar::from_u64((index % 5 + 2) as u64);
+    for slot in 0..512 {
+        writer
+            .push_candidate_slot_v1(slot, scalar_chunk_v1(&[3; 256]))
+            .unwrap();
     }
-    let first_evaluations =
-        evaluate_round_polynomial_v1(27, &axes, &point, &mut pair, &mut multiplicity).unwrap();
-    let base_claim = first_evaluations[0] + first_evaluations[1];
-    let oracle = begin_global_cubic_oracle_v1(OraclePrefixSealV1::TestOnly {
-        pair,
-        multiplicity,
-        axes,
-        point,
-        base_claim,
-        mask_carry: Scalar::zero(),
-        masks: MaskCoefficientsV1([[Scalar::zero(); 3]; MASK_ROUNDS_V1]),
-    })
+    for slot in 0..512 {
+        writer
+            .push_inverse_slot_v1(slot, scalar_chunk_v1(&[5; 256]))
+            .unwrap();
+    }
+    writer.seal_v1().unwrap()
+}
+
+fn round12_m_v1(directory: &Path, public: [u8; 32]) -> MTableV1 {
+    let mut writer = begin_m_table_v1(
+        public,
+        MProducerSealV1::TestOnly {
+            directory: directory.to_path_buf(),
+        },
+    )
     .unwrap();
-    let evaluated = oracle.evaluate_next_v1().unwrap();
-    let first_coefficients = interpolate_cubic_v1(first_evaluations).unwrap();
-    for (encoded, expected) in evaluated.message_v1().chunks_exact(32).zip([
-        first_coefficients[0],
-        first_coefficients[2],
-        first_coefficients[3],
-    ]) {
-        assert_eq!(
-            Scalar::from_le_bytes_exact(encoded.try_into().unwrap()).unwrap(),
-            expected
-        );
+    let values: [u64; 256] =
+        core::array::from_fn(|lane| if lane & 1 == 0 { 15_883 } else { 15_885 });
+    for _ in 0..128 {
+        writer.push_next_slot_v1(scalar_chunk_v1(&values)).unwrap();
     }
-    let first = Scalar::from_u64(2);
-    let second = Scalar::from_u64(3);
-    let oracle = match evaluated
-        .derive_and_fold_v1(
-            OracleTranscriptSealV1::TestOnly { challenge: first },
+    writer.seal_v1().unwrap()
+}
+
+fn kat_scalar_v1(bytes: [u8; 32]) -> Scalar {
+    Scalar::from_be_bytes_exact(bytes).unwrap()
+}
+
+fn continue_oracle_v1(
+    evaluated: EvaluatedGlobalRoundV1,
+    challenge: u64,
+    directory: &Path,
+) -> GlobalCubicOracleV1 {
+    match evaluated
+        .fold_with_raw_challenge_v1(
+            Scalar::from_u64(challenge),
             FoldSinkSealV1::TestOnly {
-                directory: directory.path().to_path_buf(),
+                directory: directory.to_path_buf(),
             },
         )
         .unwrap()
     {
         OracleTransitionV1::Continue(oracle) => oracle,
-        OracleTransitionV1::Complete(_) => panic!("one round early"),
+        OracleTransitionV1::Complete(_) => panic!("unexpected early completion"),
+    }
+}
+
+#[test]
+fn independent_round12_through_plane_round_kat_pins_m_fold_and_masks() {
+    let directory = tempfile::tempdir().unwrap();
+    let public = [0x31; 32];
+    let pair = round12_pair_v1(directory.path(), public);
+    let multiplicity = round12_m_v1(directory.path(), public);
+    assert_eq!(pair.descriptor.completed_rounds, 12);
+    assert_eq!(pair.descriptor.remaining_log_values, 17);
+    assert_eq!(multiplicity.descriptor.value_count, 32_768);
+    let m_snapshot = multiplicity.snapshot_digest;
+    let axes = OracleAxesV1 {
+        z: Scalar::from_u64(40_000),
+        rho: [Scalar::from_u64(3); 29],
+        alpha: Scalar::from_u64(3),
+        lambda: Scalar::from_u64(5),
+        mu: Scalar::from_u64(7),
     };
+    let mut point = [Scalar::zero(); 29];
+    point[..12].fill(Scalar::from_u64(2));
+    let mut masks = [[Scalar::zero(); 3]; MASK_ROUNDS_V1];
+    for (round, values) in [(12, [2, 3, 5]), (13, [7, 11, 13]), (14, [17, 19, 23])] {
+        masks[round - 3] = values.map(Scalar::from_u64);
+    }
+    let oracle = begin_global_cubic_oracle_v1(GlobalCubicPrefixReadyV1 {
+        pair,
+        multiplicity,
+        axes,
+        point,
+        base_claim: SecretScalarV1::new(kat_scalar_v1(hex_literal::hex!(
+            "26ed099b45728e68cfa3c3e6b5898c7ffb912e773633c644d0bcc04b5306ff06"
+        ))),
+        mask_carry: SecretScalarV1::new(Scalar::from_u64(11)),
+        masks: MaskCoefficientsV1(masks),
+        message_override: None,
+    })
+    .unwrap();
+
+    // These literals were computed modulo the pinned P-256 base-field prime by
+    // a separate integer model; no production evaluator/interpolator is used.
     let evaluated = oracle.evaluate_next_v1().unwrap();
-    let complete = match evaluated
-        .derive_and_fold_v1(
-            OracleTranscriptSealV1::TestOnly { challenge: second },
-            FoldSinkSealV1::TestOnly {
-                directory: directory.path().to_path_buf(),
-            },
+    assert_eq!(
+        evaluated.message_v1(),
+        &hex_literal::hex!(
+            "56c8f4529b7c8dcf44c633b6772e91fb7f8c89b5e6c3a34f698e72c59a09eda603000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000"
         )
-        .unwrap()
-    {
-        OracleTransitionV1::Complete(complete) => complete,
-        OracleTransitionV1::Continue(_) => panic!("missing completion"),
-    };
-    assert_eq!(
-        complete.candidate,
-        fold_four_v1([1, 4, 9, 16], first, second)
     );
-    assert_eq!(complete.inverse, fold_four_v1([2, 3, 5, 8], first, second));
+    let oracle = continue_oracle_v1(evaluated, 2, directory.path());
+    let live_m = &oracle.live.as_ref().unwrap().multiplicity;
+    assert_eq!(live_m.descriptor.completed_plane_rounds, 0);
+    assert_eq!(live_m.snapshot_digest, m_snapshot);
     assert_eq!(
-        complete.multiplicity,
-        fold_four_v1([7, 11, 13, 17], first, second)
+        oracle.base_claim,
+        kat_scalar_v1(hex_literal::hex!(
+            "d912f663ba8d7198305c3c194a767380046ed189c9cc39bb32d10ac4ad2fa509"
+        ))
     );
-    assert_eq!(complete.mask_carry, Scalar::zero());
-    assert_eq!(complete.point[27], first);
-    assert_eq!(complete.point[28], second);
     assert_eq!(
-        complete.relation,
-        endpoint_relation_v1(
-            &axes,
-            &complete.point,
-            complete.candidate,
-            complete.inverse,
-            complete.multiplicity,
+        oracle.mask_carry,
+        kat_scalar_v1(hex_literal::hex!(
+            "7fffffff80000000800000000000000000000000800000000000000000000026"
+        ))
+    );
+
+    let evaluated = oracle.evaluate_next_v1().unwrap();
+    assert_eq!(
+        evaluated.message_v1(),
+        &hex_literal::hex!(
+            "b58926ad44ed5629bb39cc8989d16e048073764a193c5cf097718dfa63f612990b000000000000000000000000000000000000000000000000000000000000000700000000000000000000000000000000000000000000000000000000000000"
         )
-        .unwrap()
+    );
+    let oracle = continue_oracle_v1(evaluated, 3, directory.path());
+    let live_m = &oracle.live.as_ref().unwrap().multiplicity;
+    assert_eq!(oracle.next_round, 14);
+    assert_eq!(live_m.descriptor.completed_plane_rounds, 0);
+    assert_eq!(live_m.snapshot_digest, m_snapshot);
+    assert_eq!(
+        oracle.base_claim,
+        kat_scalar_v1(hex_literal::hex!(
+            "4dda13368ae51cd19f4787cd6b1318fff7225cee6c678c89c9c07df6a5ce3ea4"
+        ))
+    );
+    assert_eq!(
+        oracle.mask_carry,
+        kat_scalar_v1(hex_literal::hex!(
+            "bfffffff40000000c00000000000000000000000c0000000000000000000014a"
+        ))
+    );
+
+    let evaluated = oracle.evaluate_next_v1().unwrap();
+    assert_eq!(
+        evaluated.message_v1(),
+        &hex_literal::hex!(
+            "e2d479a2174af5727ed053a5be2e34e0f4284bc00a9a0e51983070139c5648732ca0d92fb681f0376c827f77f8689d7d4e8b31a6e5e72650d1dc1cf07ee509561100000000000000000000000000000000000000000000000000000000000000"
+        )
+    );
+    let mut oracle = continue_oracle_v1(evaluated, 4, directory.path());
+    let live_m = &mut oracle.live.as_mut().unwrap().multiplicity;
+    assert_eq!(live_m.descriptor.completed_plane_rounds, 1);
+    assert_eq!(live_m.descriptor.value_count, 16_384);
+    assert_ne!(live_m.snapshot_digest, m_snapshot);
+    let first_slot = live_m.read_slot_v1(0).unwrap();
+    assert_eq!(
+        decode_scalar_be_v1(&first_slot.as_slice_v1()[..32]).unwrap(),
+        kat_scalar_v1(hex_literal::hex!(
+            "0000000000000000000000000000000000000000000000000000000000003e13"
+        ))
+    );
+    assert_eq!(
+        oracle.base_claim,
+        kat_scalar_v1(hex_literal::hex!(
+            "38e4b08ac4dd78ea278ac7ae3490ccfb9e7d1826e64d9bc4a19305bf6417ad47"
+        ))
+    );
+    assert_eq!(
+        oracle.mask_carry,
+        kat_scalar_v1(hex_literal::hex!(
+            "dfffffff20000000e00000000000000000000000e00000000000000000000653"
+        ))
     );
 }
 
@@ -327,8 +379,8 @@ fn interpolation_mask_and_lineage_hostile_mutations_diverge() {
         Scalar::from_u64(7),
     ];
     let evaluations =
-        [0_u64, 1, 2, 3].map(|point| evaluate_cubic_v1(coefficients, Scalar::from_u64(point)));
-    assert_eq!(interpolate_cubic_v1(evaluations).unwrap(), coefficients);
+        [0_u64, 1, 2, 3].map(|point| evaluate_cubic_v1(&coefficients, Scalar::from_u64(point)));
+    assert_eq!(interpolate_cubic_v1(&evaluations).unwrap().0, coefficients);
     assert_ne!(manual_mapping_v1(0), manual_mapping_v1(1));
     assert_ne!(
         manual_context_v1([0x5a; 32], 13, [0x44; 32]),
@@ -367,6 +419,25 @@ fn interpolation_mask_and_lineage_hostile_mutations_diverge() {
     );
 }
 
+fn fail_with_scalar_bytes_v1() -> Result<(), MOracleErrorV1> {
+    let _bytes = ZeroizingScalarBytesV1([0x5a; 32]);
+    Err(MOracleErrorV1::Spool)
+}
+
+#[test]
+fn scalar_bytes_owner_drops_on_success_error_and_unwind() {
+    assert!(core::mem::needs_drop::<ZeroizingScalarBytesV1>());
+    drop(ZeroizingScalarBytesV1([0x5a; 32]));
+    assert!(fail_with_scalar_bytes_v1().is_err());
+    assert!(
+        std::panic::catch_unwind(|| {
+            let _bytes = ZeroizingScalarBytesV1([0x5a; 32]);
+            panic!("exercise zeroizing unwind");
+        })
+        .is_err()
+    );
+}
+
 #[test]
 fn source_guards_freeze_real_oracle_privacy_and_budgets() {
     let source = include_str!("m_table_oracle_v1.rs");
@@ -378,10 +449,24 @@ fn source_guards_freeze_real_oracle_privacy_and_budgets() {
     assert!(!source.contains("Serialize"));
     assert!(!source.contains("Deserialize"));
     assert!(source.contains("committed_m_opening: Infallible"));
-    assert!(source.contains("prefix_three_rounds: Infallible"));
-    assert!(source.contains("shared_transcript: Infallible"));
+    assert!(!source.contains("OraclePrefixSealV1"));
+    assert!(!source.contains("OracleTranscriptSealV1"));
+    assert!(!source.contains("prefix_three_rounds: Infallible"));
+    assert!(!source.contains("shared_transcript: Infallible"));
+    assert!(source.contains("struct GlobalCubicPrefixReadyV1"));
+    assert!(source.contains("base_claim: SecretScalarV1"));
+    assert!(source.contains("mask_carry: SecretScalarV1"));
+    assert!(source.contains("fn fold_with_raw_challenge_v1"));
+    assert!(source.contains("#[cfg(test)]\n    message_override"));
+    assert!(source.contains("impl Drop for GlobalCubicOracleV1"));
+    assert!(source.contains("impl Drop for GlobalCubicCompleteV1"));
+    assert!(source.contains("struct ZeroizingScalarArrayV1"));
+    assert!(source.contains("struct ZeroizingScalarBytesV1"));
+    assert!(source.contains("initial_sum: Option<SecretScalarV1>"));
+    assert!(source.contains("compiler_fence(core::sync::atomic::Ordering::SeqCst)"));
+    assert!(source.contains("let mut evaluations = ZeroizingScalarArrayV1"));
     assert!(source.contains("evaluate_round_polynomial_v1"));
     assert!(source.contains("fold-A,U,and-M-only-for-plane-rounds"));
-    assert!(source.lines().count() <= 1_200);
+    assert!(source.lines().count() <= 1_400);
     assert!(include_str!("m_table_oracle_v1_tests.rs").lines().count() <= 500);
 }

@@ -67,17 +67,22 @@ use super::{
         AdapterEffect, AdapterError, AuthenticatedConsensusMessage, BodyPipelineCompletionEvidence,
         DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource, DeferredEventKind,
         DeferredOccurrenceOwnershipEvidence, DeferredRuntimeOwnershipSeal, DeferredServiceEvidence,
-        LiveWalFrameIdentity, ProducerContinuationHandoffEvidence, RecoveredWalFrameIdentity,
-        RecoveredWalVoteSign, RegisteredPrepareInvalidBodyReportCapability, SignRequest,
-        SumeragiV2Adapter, VerifiedHeightContext, classify_decided_local_proposal,
+        LiveWalFrameIdentity, PersistedWalFrameLocatorV1,
+        PreparedRecoveredDecisionApplyAdapterCompletionV1, ProducerContinuationHandoffEvidence,
+        RecoveredDecisionApplyAdapterCompletionAuthorityV1, RecoveredWalControlSign,
+        RecoveredWalDecisionFetch, RecoveredWalFrameIdentity, RecoveredWalVoteSign,
+        RegisteredPrepareInvalidBodyReportCapability, RegisteredPrepareValidateSignCapability,
+        SignRequest, SumeragiV2Adapter, VerifiedHeightContext, classify_decided_local_proposal,
         proposal_is_safe_for_lock,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
     v2_lifecycle_coordinator::{
+        AuthenticatedRecoveredWalControlProjection,
+        AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
-        DurableValidateReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
-        LocalValidateReplayEvidenceV1, RecoveredWalVoteReplayEvidenceV1,
-        RemoteProposalFetchReplayEvidenceV1,
+        DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
+        LocalBodyPreIntentReplaySealV1, LocalValidateReplayEvidenceV1,
+        RecoveredWalVoteReplayEvidenceV1, RemoteProposalFetchReplayEvidenceV1,
     },
 };
 
@@ -193,8 +198,18 @@ impl RuntimeLifecycleOrdinalSource {
     /// Advance a live source past a high-watermark restored by another owner.
     pub(crate) fn advance_past(&self, high_watermark: u128) -> Result<(), String> {
         let mut next = self.lock_next()?;
-        if (*next).is_some_and(|candidate| candidate <= high_watermark) {
-            *next = high_watermark.checked_add(1);
+        match *next {
+            None => {
+                return Err(
+                    "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned(),
+                );
+            }
+            Some(candidate) if candidate <= high_watermark => {
+                *next = Some(high_watermark.checked_add(1).ok_or_else(|| {
+                    "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
+                })?);
+            }
+            Some(_) => {}
         }
         Ok(())
     }
@@ -1749,6 +1764,17 @@ fn runtime_effect_identity_hash(effect_kind: u8, semantic_identity: &[u8]) -> ir
     iroha_crypto::Hash::new(projection)
 }
 
+#[cfg(test)]
+/// Hash one adapter effect through the production semantic-identity projection.
+pub(in crate::sumeragi) fn adapter_effect_identity_for_test(
+    effect: &AdapterEffect,
+) -> iroha_crypto::Hash {
+    runtime_effect_identity_hash(
+        production_adapter_effect_kind(effect),
+        &production_adapter_effect_semantic_identity(effect),
+    )
+}
+
 fn runtime_effect_candidate_semantic_hash(
     candidate_kind: u8,
     semantic_identity: &[u8],
@@ -2718,6 +2744,52 @@ pub(in crate::sumeragi) struct RecoveredWalCandidateProjectionPermit {
     _linearity: RecoveredWalCandidateProjectionLinearity,
 }
 
+/// Runtime-private one-shot permit for a recovered-frame pending owner.
+///
+/// The constructor stays in this module. The recovered control token consumes
+/// the permit together with its non-decodable WAL identity, preventing decoded
+/// locator bytes or a raw effect from reaching the mint.
+pub(in crate::sumeragi) struct RecoveredWalControlPendingMintPermit {
+    _linearity: RecoveredWalControlPendingMintLinearity,
+}
+
+/// Runtime-private one-shot permit for a recovered Decision Fetch owner.
+///
+/// Only the consuming WAL token projection can construct this permit, so
+/// decoded replay bytes and caller-supplied Fetch effects cannot mint pending
+/// ownership.
+pub(in crate::sumeragi) struct RecoveredWalDecisionFetchPendingMintPermit {
+    _linearity: RecoveredWalDecisionFetchPendingMintLinearity,
+}
+
+struct RecoveredWalDecisionFetchPendingMintLinearity;
+
+impl Drop for RecoveredWalDecisionFetchPendingMintLinearity {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredWalDecisionFetchPendingMintPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredWalDecisionFetchPendingMintLinearity,
+        }
+    }
+}
+
+struct RecoveredWalControlPendingMintLinearity;
+
+impl Drop for RecoveredWalControlPendingMintLinearity {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredWalControlPendingMintPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredWalControlPendingMintLinearity,
+        }
+    }
+}
+
 struct RecoveredWalCandidateProjectionLinearity;
 
 impl Drop for RecoveredWalCandidateProjectionLinearity {
@@ -2730,6 +2802,33 @@ impl RecoveredWalCandidateProjectionPermit {
             _linearity: RecoveredWalCandidateProjectionLinearity,
         }
     }
+}
+
+/// Consume one adapter-authenticated recovered control token into its exact
+/// pending owner and replay-authorized lifecycle admission.
+#[allow(clippy::result_large_err)]
+pub(crate) fn project_recovered_wal_control_sign(
+    verified: &super::v2::VerifiedHeightContext,
+    recovered: RecoveredWalControlSign,
+) -> Result<AuthenticatedRecoveredWalControlProjection, RecoveredWalControlSign> {
+    recovered.into_lifecycle_projection(
+        RecoveredWalControlPendingMintPermit::new(),
+        RecoveredWalCandidateProjectionPermit::new(),
+        verified,
+    )
+}
+
+/// Consume one authenticated Decision Fetch token into its closed lifecycle projection.
+#[allow(clippy::result_large_err)]
+pub(crate) fn project_recovered_wal_decision_fetch(
+    verified: &super::v2::VerifiedHeightContext,
+    recovered: RecoveredWalDecisionFetch,
+) -> Result<AuthenticatedRecoveredWalDecisionFetchProjection, RecoveredWalDecisionFetch> {
+    recovered.into_lifecycle_projection(
+        RecoveredWalDecisionFetchPendingMintPermit::new(),
+        RecoveredWalCandidateProjectionPermit::new(),
+        verified,
+    )
 }
 
 /// Ownership-preserving failure from the consuming recovered-WAL projection.
@@ -2877,8 +2976,17 @@ impl RecoveredWalVoteSuccessor {
         else {
             return false;
         };
+        let tags_match = match vote.phase {
+            wire::GlobalPhase::Prepare => validate_tag == sign_tag,
+            wire::GlobalPhase::Commit => commit_tags_match(
+                *validate_tag,
+                *sign_tag,
+                vote.round,
+                CommitSuccessorTagRelation::RecoveredMonotone,
+            ),
+        };
         self.concrete_pair_is_exact()
-            && validate_tag == sign_tag
+            && tags_match
             && validated.durable().context_id() == validate_round.context_id
             && validated.durable().round() == *validate_round
             && validated.durable().subject() == *validate_subject
@@ -2919,13 +3027,13 @@ fn pending_runtime_effect_binding_projection_hash(
 }
 
 /// Reconstruct the exact ordinal-free Validate-to-Sign successor named by a
-/// ledger-authenticated parent and the adapter-authenticated final WAL vote.
+/// ledger-authenticated parent and the adapter-authenticated current WAL vote.
 ///
-/// No legacy runtime owner or lifecycle ordinal participates. The causal key
-/// comes only from the opaque LedgerV1 projection, while the inherited body
-/// statement is rebuilt from the exact recovered vote and the ledger's
-/// ordinary-versus-Prepare authority bit. Failure returns the WAL authority
-/// intact and exposes no predecessor effect or pending binding.
+/// No caller-supplied runtime owner or lifecycle ordinal participates. The
+/// causal key comes only from the opaque LedgerV1 projection, while the
+/// inherited body statement is rebuilt from the exact recovered vote and the
+/// ledger's ordinary-versus-Prepare authority bit. Failure returns the WAL
+/// authority intact and exposes no predecessor effect or pending binding.
 #[cfg_attr(not(test), allow(dead_code))]
 #[allow(clippy::result_large_err)]
 pub(crate) fn reconstruct_recovered_wal_vote_successor(
@@ -2997,7 +3105,96 @@ pub(crate) fn reconstruct_recovered_wal_vote_successor(
         .map_err(|(_pending, recovered)| recovered)
 }
 
+#[derive(Clone, Copy)]
+enum CommitSuccessorTagRelation {
+    LiveExact,
+    RecoveredMonotone,
+}
+
+fn commit_tags_match(
+    predecessor: EventTag,
+    successor: EventTag,
+    vote_round: wire::ConsensusRound,
+    relation: CommitSuccessorTagRelation,
+) -> bool {
+    match relation {
+        CommitSuccessorTagRelation::LiveExact => {
+            predecessor == successor
+                && successor.height() == vote_round.height
+                && successor.view() == vote_round.view
+        }
+        CommitSuccessorTagRelation::RecoveredMonotone => {
+            predecessor.height() == vote_round.height
+                && successor.height() == vote_round.height
+                && predecessor.generation() == successor.generation()
+                && predecessor.view() >= vote_round.view
+                && predecessor.view() <= successor.view()
+        }
+    }
+}
+
+fn recovered_prepare_matches_commit_vote(
+    prepare: &wire::QuorumCertificate,
+    vote: &wire::Vote,
+) -> bool {
+    prepare.phase == wire::GlobalPhase::Prepare
+        && vote.phase == wire::GlobalPhase::Commit
+        && prepare.round == vote.round
+        && prepare.proposal_round == vote.proposal_round
+        && prepare.subject == vote.subject
+        && prepare.execution_commitment == vote.execution_commitment
+}
+
 impl PendingRuntimeEffectBinding {
+    /// Reconstruct the unique pending owner of a frame-bound Certified Fetch.
+    ///
+    /// The caller cannot mint the permit from decoded ledger bytes. It is
+    /// issued only by the replay-family/body-frame join, after that join has
+    /// reconstructed every effect field retained by the original binding.
+    pub(in crate::sumeragi) fn from_durable_certified_fetch(
+        _permit: DurableCertifiedFetchPendingMintPermit,
+        causal_lifecycle_key: iroha_crypto::Hash,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        if !matches!(
+            effect,
+            AdapterEffect::FetchBody {
+                certificate: Some(_),
+                ..
+            }
+        ) {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(effect);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+        );
+        let candidate = production_adapter_effect_candidate_binding(effect, None).ok()??;
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let pending = Self {
+            causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        pending.validate_exact(effect).then_some(pending)
+    }
+
     /// Mint the unique pending owner of one exact payload-free live-WAL continuation.
     ///
     /// The causal key is derived from the non-decodable post-fsync frame seal
@@ -3021,6 +3218,61 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
+        Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
+    }
+
+    /// Mint the unique pending owner of one recovered Proposal/Timeout control Sign.
+    ///
+    /// The one-shot permit is private to the consuming recovered-token join.
+    /// This uses the identical locator/semantic causal-root formula as live
+    /// append and deliberately excludes phase votes, Decision, and EnterView.
+    pub(in crate::sumeragi) fn from_exact_recovered_wal_frame(
+        _permit: RecoveredWalControlPendingMintPermit,
+        wal_identity: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        if !wal_identity.is_exact()
+            || !matches!(
+                effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Proposal(_) | SignRequest::TimeoutVote(_),
+                    ..
+                }
+            )
+        {
+            return None;
+        }
+        Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
+    }
+
+    /// Mint the unique pending owner of one exact Decision-owned Fetch.
+    pub(in crate::sumeragi) fn from_exact_recovered_wal_decision_fetch(
+        _permit: RecoveredWalDecisionFetchPendingMintPermit,
+        wal_identity: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        if !wal_identity.is_exact()
+            || !matches!(
+                effect,
+                AdapterEffect::FetchBody {
+                    manifest: None,
+                    certificate: Some(_),
+                    ..
+                }
+            )
+        {
+            return None;
+        }
+        Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
+    }
+
+    fn from_exact_wal_locator(
+        locator: PersistedWalFrameLocatorV1,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        if !locator.is_exact() {
+            return None;
+        }
         let effect_kind = production_adapter_effect_kind(effect);
         let semantic_identity = production_adapter_effect_semantic_identity(effect);
         let effect_identity = runtime_effect_identity_hash(effect_kind, &semantic_identity);
@@ -3038,10 +3290,7 @@ impl PendingRuntimeEffectBinding {
             });
         let mut causal_preimage = Vec::new();
         causal_preimage.extend_from_slice(b"iroha:sumeragi:v2:live-wal-pending-root:v1");
-        append_runtime_identity_field(
-            &mut causal_preimage,
-            &wal_identity.persisted_locator().encode(),
-        );
+        append_runtime_identity_field(&mut causal_preimage, &locator.encode());
         append_runtime_identity_field(&mut causal_preimage, &semantic_identity);
         let causal_lifecycle_key = iroha_crypto::Hash::new(causal_preimage);
         let projection_hash = pending_runtime_effect_binding_projection_hash(
@@ -3527,15 +3776,28 @@ impl PendingRuntimeEffectBinding {
     /// unsigned Commit vote must preserve every coordinate and the execution
     /// commitment while monotonically promoting that Prepare authority.
     ///
-    /// TODO: a legitimate ordinary Validate may observe a concurrently
-    /// registered PrepareQC after this binding was minted. Keep that case
-    /// fail-closed until the sealed adapter/registry join can supply a
-    /// non-forgeable registered-carrier refinement capability.
+    /// An ordinary Validate which observed a concurrent PrepareQC remains
+    /// rejected here. That distinct case is accepted only by
+    /// [`Self::project_validate_sign_commit_successor_with_registered_prepare`]
+    /// with the adapter-minted opaque carrier capability.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn project_validate_sign_commit_successor(
         &self,
         predecessor: &AdapterEffect,
         successor: &AdapterEffect,
+    ) -> Option<Self> {
+        self.project_inherited_validate_commit_successor(
+            predecessor,
+            successor,
+            CommitSuccessorTagRelation::LiveExact,
+        )
+    }
+
+    fn project_inherited_validate_commit_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+        tag_relation: CommitSuccessorTagRelation,
     ) -> Option<Self> {
         let (
             AdapterEffect::ValidateBody {
@@ -3551,9 +3813,7 @@ impl PendingRuntimeEffectBinding {
         else {
             return None;
         };
-        if predecessor_tag != successor_tag
-            || successor_tag.height() != vote.round.height
-            || successor_tag.view() != vote.round.view
+        if !commit_tags_match(*predecessor_tag, *successor_tag, vote.round, tag_relation)
             || vote.phase != wire::GlobalPhase::Commit
             || vote.proposal_round != *predecessor_round
             || vote.subject != *predecessor_subject
@@ -3604,6 +3864,31 @@ impl PendingRuntimeEffectBinding {
             .then_some(successor_binding)
     }
 
+    /// Project a Commit-vote successor for an ordinary Validate only while an
+    /// opaque adapter capability proves the exact concurrently registered
+    /// Prepare certificate.
+    ///
+    /// No certificate crosses this boundary. The capability first binds the
+    /// predecessor and successor coordinates, then this runtime projection
+    /// reconstructs only the registered Prepare statement needed for the
+    /// monotone Prepare-to-Commit refinement.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn project_validate_sign_commit_successor_with_registered_prepare(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+        registered: &RegisteredPrepareValidateSignCapability,
+    ) -> Option<Self> {
+        if !registered.authorizes_ordinary_validate_commit(predecessor, successor) {
+            return None;
+        }
+        self.project_ordinary_validate_commit_after_registered_prepare(
+            predecessor,
+            successor,
+            CommitSuccessorTagRelation::LiveExact,
+        )
+    }
+
     /// Consume one adapter-authenticated WAL vote into its exact Validate
     /// successor binding.
     ///
@@ -3637,15 +3922,20 @@ impl PendingRuntimeEffectBinding {
                     self.project_validate_sign_prepare_successor(predecessor, &successor)
                 }
             }
-            wire::GlobalPhase::Commit => self
-                .project_validate_sign_commit_successor(predecessor, &successor)
+            wire::GlobalPhase::Commit => recovered.prepare_certificate().and_then(|prepare| {
+                self.project_recovered_inherited_validate_commit_successor(
+                    predecessor,
+                    &successor,
+                    prepare,
+                )
                 .or_else(|| {
                     self.project_recovered_ordinary_validate_commit_successor(
                         predecessor,
                         &successor,
-                        recovered.prepare_certificate()?,
+                        prepare,
                     )
-                }),
+                })
+            }),
         };
         let Some(pending) = pending else {
             return Err((self, recovered));
@@ -3671,6 +3961,53 @@ impl PendingRuntimeEffectBinding {
         successor: &AdapterEffect,
         prepare: &wire::QuorumCertificate,
     ) -> Option<Self> {
+        let AdapterEffect::Sign {
+            request: super::v2::SignRequest::Vote(vote),
+            ..
+        } = successor
+        else {
+            return None;
+        };
+        if !recovered_prepare_matches_commit_vote(prepare, vote) {
+            return None;
+        }
+
+        self.project_ordinary_validate_commit_after_registered_prepare(
+            predecessor,
+            successor,
+            CommitSuccessorTagRelation::RecoveredMonotone,
+        )
+    }
+
+    fn project_recovered_inherited_validate_commit_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+        prepare: &wire::QuorumCertificate,
+    ) -> Option<Self> {
+        let AdapterEffect::Sign {
+            request: super::v2::SignRequest::Vote(vote),
+            ..
+        } = successor
+        else {
+            return None;
+        };
+        if !recovered_prepare_matches_commit_vote(prepare, vote) {
+            return None;
+        }
+        self.project_inherited_validate_commit_successor(
+            predecessor,
+            successor,
+            CommitSuccessorTagRelation::RecoveredMonotone,
+        )
+    }
+
+    fn project_ordinary_validate_commit_after_registered_prepare(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+        tag_relation: CommitSuccessorTagRelation,
+    ) -> Option<Self> {
         let (
             AdapterEffect::ValidateBody {
                 tag: predecessor_tag,
@@ -3685,19 +4022,12 @@ impl PendingRuntimeEffectBinding {
         else {
             return None;
         };
-        if predecessor_tag != successor_tag
-            || successor_tag.height() != vote.round.height
-            || successor_tag.view() != vote.round.view
+        if !commit_tags_match(*predecessor_tag, *successor_tag, vote.round, tag_relation)
             || vote.phase != wire::GlobalPhase::Commit
             || vote.proposal_round != *predecessor_round
             || vote.subject != *predecessor_subject
             || !vote.signature.is_empty()
             || vote.execution_commitment.validate().is_err()
-            || prepare.phase != wire::GlobalPhase::Prepare
-            || prepare.round != vote.round
-            || prepare.proposal_round != vote.proposal_round
-            || prepare.subject != vote.subject
-            || prepare.execution_commitment != vote.execution_commitment
             || !self.validate_exact(predecessor)
         {
             return None;
@@ -16722,6 +17052,23 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 }
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Freeze the serialized shell around one registry-owned Apply completion.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(
+        &mut self,
+        authority: RecoveredDecisionApplyAdapterCompletionAuthorityV1,
+    ) -> Result<PreparedRecoveredDecisionApplyAdapterCompletionV1<'_>, AdapterError> {
+        if self.fail_closed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::RecoveredDecisionApplyCompletionMismatch);
+        }
+        self.driver
+            .prepare_recovered_decision_apply_completion(authority)
+    }
+
     fn timeout_vote_recovery_candidate_from_fair(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
@@ -19800,729 +20147,7 @@ fn network_admission_class(payload: &wire::ConsensusMessageV2Payload) -> Option<
 
 #[cfg(test)]
 mod tests {
-    fn pending_validate_binding_for_test(
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        certificate: Option<wire::QuorumCertificate>,
-        owner_marker: u128,
-    ) -> (AdapterEffect, PendingRuntimeEffectBinding) {
-        let store = AdapterEffect::StoreBody {
-            tag,
-            round,
-            subject,
-        };
-        let validate = AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        };
-        let store_binding = if let Some(certificate) = certificate {
-            let fetch = AdapterEffect::FetchBody {
-                tag,
-                round,
-                subject,
-                manifest: None,
-                certified_sources: Vec::new(),
-                certificate: Some(certificate),
-            };
-            let fetch_binding = bind_adapter_effect_batch_ownership(
-                std::slice::from_ref(&fetch),
-                vec![RuntimeEffectOwnership::fresh_for_test(tag, owner_marker)],
-            )
-            .expect("bind one certified Fetch fixture")
-            .pop()
-            .expect("one certified Fetch fixture owner")
-            .pending_adapter_effect_binding(&fetch)
-            .expect("certified Fetch fixture mints one pending binding");
-            fetch_binding
-                .project_certified_fetch_store_successor(&fetch, &store)
-                .expect("certified Fetch fixture derives Store")
-        } else {
-            bind_adapter_effect_batch_ownership(
-                std::slice::from_ref(&store),
-                vec![RuntimeEffectOwnership::fresh_for_test(tag, owner_marker)],
-            )
-            .expect("bind one ordinary Store fixture")
-            .pop()
-            .expect("one ordinary Store fixture owner")
-            .pending_adapter_effect_binding(&store)
-            .expect("ordinary Store fixture mints one pending binding")
-        };
-        let validate_binding = store_binding
-            .project_store_validate_successor(&store, &validate)
-            .expect("Store fixture derives Validate");
-        (validate, validate_binding)
-    }
-
-    #[test]
-    fn live_wal_payload_free_pending_roots_bind_all_five_stages_and_exact_frames() {
-        let (context, keys) = authenticated_runtime_context();
-        let wire::ConsensusMessageV2Payload::Proposal(mut proposal) =
-            signed_runtime_proposal(&context, &keys, 0x68).payload
-        else {
-            unreachable!("runtime proposal fixture")
-        };
-        proposal.signature.clear();
-        let prepare = signed_runtime_quorum_certificate_for_phase(
-            &context,
-            &keys,
-            0x69,
-            wire::GlobalPhase::Prepare,
-        );
-        let tag = EventTag::new(context.height, 0, Generation::new(9));
-        let prepare_vote = wire::Vote {
-            round: prepare.round,
-            proposal_round: prepare.proposal_round,
-            phase: wire::GlobalPhase::Prepare,
-            subject: prepare.subject,
-            execution_commitment: prepare.execution_commitment,
-            signer: prepare.signers[0],
-            signature: Vec::new(),
-        };
-        let commit_vote = wire::Vote {
-            phase: wire::GlobalPhase::Commit,
-            ..prepare_vote.clone()
-        };
-        let timeout_vote = wire::TimeoutVote {
-            round: prepare.round,
-            highest_prepare_qc: Some(prepare),
-            signer: 0,
-            signature: Vec::new(),
-        };
-        let enter = wire::TimeoutCertificate {
-            round: timeout_vote.round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: timeout_vote.highest_prepare_qc.clone(),
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0x69; 96],
-            }],
-        };
-        let effects = [
-            AdapterEffect::Sign {
-                tag,
-                request: SignRequest::Proposal(proposal),
-            },
-            AdapterEffect::Sign {
-                tag,
-                request: SignRequest::Vote(prepare_vote),
-            },
-            AdapterEffect::Sign {
-                tag,
-                request: SignRequest::Vote(commit_vote),
-            },
-            AdapterEffect::Sign {
-                tag,
-                request: SignRequest::TimeoutVote(timeout_vote),
-            },
-            AdapterEffect::EnterView {
-                tag,
-                certificate: enter,
-                protected_lock: None,
-            },
-        ];
-        let mut roots = Vec::new();
-        for (index, effect) in effects.iter().enumerate() {
-            let sequence = u64::try_from(index).expect("small stage index");
-            let frame_hash = if index == 0 {
-                [0; 32]
-            } else {
-                [u8::try_from(index).expect("small stage marker"); 32]
-            };
-            let identity = LiveWalFrameIdentity::for_test(
-                sequence,
-                sequence.checked_add(1).expect("bounded persistence id"),
-                frame_hash,
-            );
-            let pending =
-                PendingRuntimeEffectBinding::from_exact_live_wal_append(&identity, effect)
-                    .expect("exact payload-free live WAL effect derives one pending owner");
-            assert!(pending.exactly_binds_adapter_effect(effect));
-            roots.push(*pending.causal_lifecycle_key());
-        }
-        assert_eq!(roots.iter().collect::<BTreeSet<_>>().len(), effects.len());
-
-        let first = LiveWalFrameIdentity::for_test(9, 10, [0; 32]);
-        let second = LiveWalFrameIdentity::for_test(10, 11, [0; 32]);
-        let first_pending =
-            PendingRuntimeEffectBinding::from_exact_live_wal_append(&first, &effects[0])
-                .expect("zero-valued digest remains structurally valid");
-        let second_pending =
-            PendingRuntimeEffectBinding::from_exact_live_wal_append(&second, &effects[0])
-                .expect("second exact locator derives a pending owner");
-        assert_ne!(
-            first_pending.causal_lifecycle_key(),
-            second_pending.causal_lifecycle_key(),
-            "identical effects from different exact WAL frames cannot share causal authority"
-        );
-    }
-
-    #[test]
-    fn pending_validate_projects_exact_prepare_commit_and_report_successors() {
-        let (context, keys) = authenticated_runtime_context();
-        let prepare = signed_runtime_quorum_certificate_for_phase(
-            &context,
-            &keys,
-            0x6B,
-            wire::GlobalPhase::Prepare,
-        );
-        let tag = EventTag::new(context.height, prepare.round.view, Generation::new(4));
-        let (validate, ordinary_validate) = pending_validate_binding_for_test(
-            tag,
-            prepare.proposal_round,
-            prepare.subject,
-            None,
-            74,
-        );
-        let (_, prepare_validate) = pending_validate_binding_for_test(
-            tag,
-            prepare.proposal_round,
-            prepare.subject,
-            Some(prepare.clone()),
-            75,
-        );
-
-        let prepare_sign = AdapterEffect::Sign {
-            tag,
-            request: SignRequest::Vote(wire::Vote {
-                round: prepare.round,
-                proposal_round: prepare.proposal_round,
-                phase: wire::GlobalPhase::Prepare,
-                subject: prepare.subject,
-                execution_commitment: prepare.execution_commitment,
-                signer: prepare.signers[0],
-                signature: Vec::new(),
-            }),
-        };
-        let prepare_sign_binding = ordinary_validate
-            .project_validate_sign_prepare_successor(&validate, &prepare_sign)
-            .expect("ordinary Validate acquires exact Prepare-vote authority");
-        assert!(prepare_sign_binding.exactly_binds_adapter_effect(&prepare_sign));
-        assert_eq!(
-            prepare_sign_binding.causal_lifecycle_key(),
-            ordinary_validate.causal_lifecycle_key()
-        );
-        let prepare_statement = prepare_sign_binding
-            .candidate_statement()
-            .expect("Prepare Sign carries one candidate statement");
-        assert_eq!(prepare_statement.phase(), Some(wire::GlobalPhase::Prepare));
-        assert_eq!(
-            prepare_statement.execution_commitment(),
-            Some(prepare.execution_commitment)
-        );
-
-        let commit_sign = AdapterEffect::Sign {
-            tag,
-            request: SignRequest::Vote(wire::Vote {
-                round: prepare.round,
-                proposal_round: prepare.proposal_round,
-                phase: wire::GlobalPhase::Commit,
-                subject: prepare.subject,
-                execution_commitment: prepare.execution_commitment,
-                signer: prepare.signers[0],
-                signature: Vec::new(),
-            }),
-        };
-        let commit_sign_binding = prepare_validate
-            .project_validate_sign_commit_successor(&validate, &commit_sign)
-            .expect("Prepare-authorized Validate promotes to exact Commit vote");
-        assert!(commit_sign_binding.exactly_binds_adapter_effect(&commit_sign));
-        assert_eq!(
-            commit_sign_binding.causal_lifecycle_key(),
-            prepare_validate.causal_lifecycle_key()
-        );
-        let commit_statement = commit_sign_binding
-            .candidate_statement()
-            .expect("Commit Sign carries one candidate statement");
-        assert_eq!(commit_statement.phase(), Some(wire::GlobalPhase::Commit));
-        assert_eq!(
-            commit_statement.execution_commitment(),
-            Some(prepare.execution_commitment)
-        );
-
-        let report = AdapterEffect::ReportInvalidCertifiedBody {
-            subject: prepare.subject,
-            certificate: prepare,
-        };
-        let report_binding = prepare_validate
-            .project_validate_report_invalid_certified_body_successor(&validate, &report)
-            .expect("Prepare-authorized Validate derives its exact invalid-body report");
-        assert!(report_binding.exactly_binds_adapter_effect(&report));
-        assert_eq!(
-            report_binding.causal_lifecycle_key(),
-            prepare_validate.causal_lifecycle_key()
-        );
-        assert_eq!(report_binding.candidate_statement(), None);
-        assert_ne!(
-            report_binding.exact_effect_identity(),
-            prepare_validate.exact_effect_identity()
-        );
-    }
-
-    #[test]
-    fn pending_validate_successor_projection_rejects_forged_coordinates_and_authority() {
-        let (context, keys) = authenticated_runtime_context();
-        let prepare = signed_runtime_quorum_certificate_for_phase(
-            &context,
-            &keys,
-            0x6C,
-            wire::GlobalPhase::Prepare,
-        );
-        let commit = signed_runtime_quorum_certificate(&context, &keys, 0x6C);
-        let tag = EventTag::new(context.height, prepare.round.view, Generation::new(5));
-        let (validate, ordinary_validate) = pending_validate_binding_for_test(
-            tag,
-            prepare.proposal_round,
-            prepare.subject,
-            None,
-            76,
-        );
-        let (_, prepare_validate) = pending_validate_binding_for_test(
-            tag,
-            prepare.proposal_round,
-            prepare.subject,
-            Some(prepare.clone()),
-            77,
-        );
-        let store = AdapterEffect::StoreBody {
-            tag,
-            round: prepare.proposal_round,
-            subject: prepare.subject,
-        };
-        let prepare_sign = AdapterEffect::Sign {
-            tag,
-            request: SignRequest::Vote(wire::Vote {
-                round: prepare.round,
-                proposal_round: prepare.proposal_round,
-                phase: wire::GlobalPhase::Prepare,
-                subject: prepare.subject,
-                execution_commitment: prepare.execution_commitment,
-                signer: prepare.signers[0],
-                signature: Vec::new(),
-            }),
-        };
-        let commit_sign = AdapterEffect::Sign {
-            tag,
-            request: SignRequest::Vote(wire::Vote {
-                round: prepare.round,
-                proposal_round: prepare.proposal_round,
-                phase: wire::GlobalPhase::Commit,
-                subject: prepare.subject,
-                execution_commitment: prepare.execution_commitment,
-                signer: prepare.signers[0],
-                signature: Vec::new(),
-            }),
-        };
-        let report = AdapterEffect::ReportInvalidCertifiedBody {
-            subject: prepare.subject,
-            certificate: prepare.clone(),
-        };
-
-        assert!(
-            ordinary_validate
-                .project_validate_sign_prepare_successor(&validate, &commit_sign)
-                .is_none(),
-            "Prepare projection rejects a Commit vote"
-        );
-        assert!(
-            prepare_validate
-                .project_validate_sign_commit_successor(&validate, &prepare_sign)
-                .is_none(),
-            "Commit projection rejects a Prepare vote"
-        );
-        let commit_report = AdapterEffect::ReportInvalidCertifiedBody {
-            subject: commit.subject,
-            certificate: commit,
-        };
-        assert!(
-            prepare_validate
-                .project_validate_report_invalid_certified_body_successor(
-                    &validate,
-                    &commit_report,
-                )
-                .is_none(),
-            "invalid-body reporting requires Prepare rather than Commit authority"
-        );
-
-        let foreign = signed_runtime_quorum_certificate_for_phase(
-            &context,
-            &keys,
-            0x6D,
-            wire::GlobalPhase::Prepare,
-        );
-        let changed_commitment_sign = AdapterEffect::Sign {
-            tag,
-            request: SignRequest::Vote(wire::Vote {
-                round: prepare.round,
-                proposal_round: prepare.proposal_round,
-                phase: wire::GlobalPhase::Commit,
-                subject: prepare.subject,
-                execution_commitment: foreign.execution_commitment,
-                signer: prepare.signers[0],
-                signature: Vec::new(),
-            }),
-        };
-        assert!(
-            prepare_validate
-                .project_validate_sign_commit_successor(&validate, &changed_commitment_sign)
-                .is_none(),
-            "Commit vote cannot change the registered Prepare commitment"
-        );
-        let mut changed_commitment_certificate = prepare.clone();
-        changed_commitment_certificate.execution_commitment = foreign.execution_commitment;
-        let changed_commitment_report = AdapterEffect::ReportInvalidCertifiedBody {
-            subject: prepare.subject,
-            certificate: changed_commitment_certificate,
-        };
-        assert!(
-            prepare_validate
-                .project_validate_report_invalid_certified_body_successor(
-                    &validate,
-                    &changed_commitment_report,
-                )
-                .is_none(),
-            "report cannot change the registered Prepare commitment"
-        );
-
-        let wrong_tag_prepare = AdapterEffect::Sign {
-            tag: EventTag::new(context.height, prepare.round.view, Generation::new(6)),
-            request: SignRequest::Vote(wire::Vote {
-                round: prepare.round,
-                proposal_round: prepare.proposal_round,
-                phase: wire::GlobalPhase::Prepare,
-                subject: prepare.subject,
-                execution_commitment: prepare.execution_commitment,
-                signer: prepare.signers[0],
-                signature: Vec::new(),
-            }),
-        };
-        assert!(
-            ordinary_validate
-                .project_validate_sign_prepare_successor(&validate, &wrong_tag_prepare)
-                .is_none(),
-            "Sign successor must retain the complete predecessor tag"
-        );
-        let wrong_tag_validate = AdapterEffect::ValidateBody {
-            tag: EventTag::new(context.height, prepare.round.view, Generation::new(6)),
-            round: prepare.proposal_round,
-            subject: prepare.subject,
-        };
-        assert!(
-            prepare_validate
-                .project_validate_report_invalid_certified_body_successor(
-                    &wrong_tag_validate,
-                    &report,
-                )
-                .is_none(),
-            "report projection requires the exactly bound Validate tag"
-        );
-
-        let wrong_subject_sign = AdapterEffect::Sign {
-            tag,
-            request: SignRequest::Vote(wire::Vote {
-                round: prepare.round,
-                proposal_round: prepare.proposal_round,
-                phase: wire::GlobalPhase::Commit,
-                subject: foreign.subject,
-                execution_commitment: prepare.execution_commitment,
-                signer: prepare.signers[0],
-                signature: Vec::new(),
-            }),
-        };
-        assert!(
-            prepare_validate
-                .project_validate_sign_commit_successor(&validate, &wrong_subject_sign)
-                .is_none(),
-            "Sign successor cannot change the validated subject"
-        );
-        let mut wrong_subject_certificate = prepare.clone();
-        wrong_subject_certificate.subject = foreign.subject;
-        let wrong_subject_report = AdapterEffect::ReportInvalidCertifiedBody {
-            subject: foreign.subject,
-            certificate: wrong_subject_certificate,
-        };
-        assert!(
-            prepare_validate
-                .project_validate_report_invalid_certified_body_successor(
-                    &validate,
-                    &wrong_subject_report,
-                )
-                .is_none(),
-            "report cannot change the validated subject"
-        );
-
-        assert!(
-            ordinary_validate
-                .project_validate_sign_prepare_successor(&store, &prepare_sign)
-                .is_none(),
-            "Store cannot stand in for the exact Validate predecessor"
-        );
-        assert!(
-            prepare_validate
-                .project_validate_sign_commit_successor(&store, &commit_sign)
-                .is_none(),
-            "Store cannot stand in for the exact Validate predecessor"
-        );
-        assert!(
-            prepare_validate
-                .project_validate_report_invalid_certified_body_successor(&store, &report)
-                .is_none(),
-            "Store cannot stand in for the exact Validate predecessor"
-        );
-        assert!(
-            ordinary_validate
-                .project_validate_sign_commit_successor(&validate, &commit_sign)
-                .is_none(),
-            "ordinary Validate needs an opaque concurrent-Prepare refinement capability"
-        );
-        assert!(
-            ordinary_validate
-                .project_validate_report_invalid_certified_body_successor(&validate, &report)
-                .is_none(),
-            "ordinary Validate needs an opaque registered-report carrier capability"
-        );
-        assert!(
-            prepare_validate
-                .project_validate_sign_prepare_successor(&validate, &prepare_sign)
-                .is_none(),
-            "Prepare-authorized Validate cannot regress to the ordinary Prepare-sign branch"
-        );
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origin() {
-        let directory = TempDir::new().expect("temporary remote Proposal replay directory");
-        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
-            &directory,
-            RuntimeQueueConfig::new(8, 1, 1),
-            Some(0),
-        );
-        let now = Instant::now();
-        runtime
-            .arm_live_clocks(now)
-            .expect("arm runtime for authenticated Proposal replay");
-
-        let proposal = signed_runtime_proposal(&context, &keys, 0xA7);
-        let mut wrong_signature = proposal.clone();
-        let wire::ConsensusMessageV2Payload::Proposal(wrong) = &mut wrong_signature.payload else {
-            unreachable!("signed Proposal fixture has one Proposal payload")
-        };
-        wrong.signature[0] ^= 0xFF;
-        assert!(
-            runtime.enqueue_network(wrong_signature).is_err(),
-            "a substituted signature cannot mint remote Proposal replay authority"
-        );
-        runtime
-            .enqueue_network(proposal)
-            .expect("enqueue exact authenticated Proposal");
-        let RuntimeStep::Advanced(fetch_effects) = runtime.step(now).expect("dispatch Proposal")
-        else {
-            panic!("authenticated Proposal unexpectedly idled")
-        };
-        runtime
-            .take_last_scheduler_ownership()
-            .expect("Proposal publishes scheduler ownership");
-        let [fetch_effect] = fetch_effects.as_slice() else {
-            panic!("Proposal must emit one exact Fetch: {fetch_effects:?}")
-        };
-        let AdapterEffect::FetchBody {
-            tag,
-            manifest: Some(manifest),
-            certificate: None,
-            certified_sources,
-            ..
-        } = fetch_effect
-        else {
-            panic!("authenticated ordinary Proposal must emit manifest-bound Fetch")
-        };
-        assert!(certified_sources.is_empty());
-        let tag = *tag;
-        let manifest = manifest.clone();
-        let fetch_ownership = runtime
-            .take_effect_ownership(fetch_effects.len())
-            .expect("Fetch retains exact runtime ownership")
-            .pop()
-            .expect("one Fetch has one exact owner");
-        let fetch_pending = fetch_ownership
-            .pending_adapter_effect_binding(fetch_effect)
-            .expect("Fetch owns one exact pending binding");
-        let fetch_replay = fetch_ownership
-            .exact_remote_proposal_fetch_replay(fetch_effect)
-            .expect("authenticated Proposal attaches its replay origin");
-        assert!(fetch_replay.exactly_matches_fetch_pending(fetch_effect, &fetch_pending));
-        assert!(fetch_replay.exactly_matches_retry(&fetch_replay.clone(), fetch_effect,));
-        let mut foreign_manifest_fetch = fetch_effect.clone();
-        let AdapterEffect::FetchBody {
-            manifest: Some(foreign_manifest),
-            ..
-        } = &mut foreign_manifest_fetch
-        else {
-            unreachable!("ordinary Fetch fixture retains one manifest")
-        };
-        foreign_manifest.chunk_root = Hash::new(b"foreign remote Proposal manifest root");
-        assert!(
-            fetch_ownership
-                .exact_remote_proposal_fetch_replay(&foreign_manifest_fetch)
-                .is_none()
-        );
-        let mut certified_fetch = fetch_effect.clone();
-        let AdapterEffect::FetchBody { certificate, .. } = &mut certified_fetch else {
-            unreachable!("fixture remains FetchBody")
-        };
-        *certificate = Some(signed_runtime_quorum_certificate(&context, &keys, 0xA8));
-        assert!(
-            fetch_ownership
-                .exact_remote_proposal_fetch_replay(&certified_fetch)
-                .is_none(),
-            "certified Fetch cannot inherit ordinary Proposal replay origin"
-        );
-        let _proposal_terminals = runtime.take_leader_wire_runtime_terminals();
-
-        let reservation = runtime
-            .reserve_body_available_with_owner(tag, manifest.clone(), &fetch_ownership)
-            .expect("reserve exact reconstructed body");
-        runtime
-            .commit_body_available(reservation)
-            .expect("publish exact BodyAvailable successor");
-        let RuntimeStep::Advanced(store_effects) =
-            runtime.step(now).expect("dispatch BodyAvailable")
-        else {
-            panic!("BodyAvailable unexpectedly idled")
-        };
-        runtime
-            .take_last_scheduler_ownership()
-            .expect("BodyAvailable publishes scheduler ownership");
-        let [store_effect] = store_effects.as_slice() else {
-            panic!("BodyAvailable must emit one Store: {store_effects:?}")
-        };
-        let store_ownership = runtime
-            .take_effect_ownership(store_effects.len())
-            .expect("Store retains exact Fetch causal owner")
-            .pop()
-            .expect("one Store has one exact owner");
-        let store_pending = store_ownership
-            .pending_adapter_effect_binding(store_effect)
-            .expect("Store owns one exact pending binding");
-        assert!(fetch_replay.exactly_projects_store(store_effect, &store_pending));
-        let foreign_store_ownership = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(store_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag, 98_001)],
-        )
-        .expect("bind foreign Store root")
-        .pop()
-        .expect("one foreign Store owner");
-        let foreign_store_pending = foreign_store_ownership
-            .pending_adapter_effect_binding(store_effect)
-            .expect("foreign Store has one binding");
-        assert!(
-            fetch_replay
-                .clone()
-                .project_exact_store(store_effect, &foreign_store_pending)
-                .is_err(),
-            "matching coordinates cannot splice a foreign causal root"
-        );
-        let Ok(store_replay) = fetch_replay.project_exact_store(store_effect, &store_pending)
-        else {
-            panic!("exact Fetch owner projects one Store replay carrier")
-        };
-        assert!(store_replay.exactly_matches_store_pending(store_effect, &store_pending));
-
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        let mut foreign_manifest = manifest.clone();
-        foreign_manifest.chunk_root = Hash::new(b"foreign durable remote Proposal frame");
-        let foreign_durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&foreign_manifest),
-        );
-        assert!(
-            store_replay
-                .clone()
-                .bind_durable_body(store_effect, &foreign_durable)
-                .is_err(),
-            "a substituted durable BodyFrame cannot complete Store replay evidence"
-        );
-        let Ok(stored_replay) = store_replay.bind_durable_body(store_effect, &durable) else {
-            panic!("exact durable receipt completes Store replay evidence")
-        };
-        assert!(stored_replay.exactly_matches_store(store_effect, &durable));
-
-        runtime
-            .enqueue_body_stored_with_owner(
-                tag,
-                manifest.round,
-                manifest.subject,
-                durable.clone(),
-                &store_ownership,
-            )
-            .expect("enqueue exact durable Store completion");
-        let RuntimeStep::Advanced(validate_effects) =
-            runtime.step(now).expect("dispatch BodyStored")
-        else {
-            panic!("BodyStored unexpectedly idled")
-        };
-        runtime
-            .take_last_scheduler_ownership()
-            .expect("BodyStored publishes scheduler ownership");
-        let [validate_effect] = validate_effects.as_slice() else {
-            panic!("BodyStored must emit one Validate: {validate_effects:?}")
-        };
-        let validate_ownership = runtime
-            .take_effect_ownership(validate_effects.len())
-            .expect("Validate retains exact Store causal owner")
-            .pop()
-            .expect("one Validate has one exact owner");
-        let validate_pending = validate_ownership
-            .pending_adapter_effect_binding(validate_effect)
-            .expect("Validate owns one exact pending binding");
-        let foreign_validate_ownership = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(validate_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag, 98_002)],
-        )
-        .expect("bind foreign Validate root")
-        .pop()
-        .expect("one foreign Validate owner");
-        let foreign_validate_pending = foreign_validate_ownership
-            .pending_adapter_effect_binding(validate_effect)
-            .expect("foreign Validate has one binding");
-        assert!(
-            stored_replay
-                .clone()
-                .project_exact_validate(
-                    store_effect,
-                    &durable,
-                    validate_effect,
-                    &foreign_validate_pending,
-                )
-                .is_err(),
-            "matching Validate coordinates cannot splice a foreign causal root"
-        );
-        let Ok(validate_replay) = stored_replay.project_exact_validate(
-            store_effect,
-            &durable,
-            validate_effect,
-            &validate_pending,
-        ) else {
-            panic!("exact Store owner projects one Validate replay carrier")
-        };
-        assert!(validate_replay.exactly_matches_validate_pending(
-            validate_effect,
-            &durable,
-            &validate_pending,
-        ));
-        let queued_before_drop = runtime.queued_commands();
-        drop(validate_replay);
-        assert_eq!(runtime.queued_commands(), queued_before_drop);
-        assert!(!runtime.fail_closed);
-    }
-
+    include!("tests/v2_runtime_pending_binding_cases.rs");
     include!("tests/v2_runtime_main_00.rs");
     include!("tests/v2_runtime_main_01.rs");
     include!("tests/v2_runtime_main_02.rs");

@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 854
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa"
+        "07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "dd4e606d09316b0734ac686311412b564e9f3a1467618558ac4b4dff2cd6d8ba"
+        "b4d2ee106bb9b7654078958031fbb603c21865ccad66b4c9e1ae127f3140e998"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -3440,12 +3440,12 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             '    "sumeragi::v2_lane_work::tests": 61,',
             '    "sumeragi::v2_lane_work::tests": 60,',
             "changed-module counts must equal the exact reviewed release inventory",
-            ),
-            (
-                '    "df90ef7d94284bc805ff55ead6c6d938"',
-                '    "00000000000000000000000000000000"',
-                "canonical production TSV SHA-256 must equal",
-            ),
+        ),
+        (
+            '    "07da36398f20bccca0d535ebad55cf21"',
+            '    "00000000000000000000000000000000"',
+            "canonical production TSV SHA-256 must equal",
+        ),
         (
             "readonly expected_production_liveness_test_count="
             '${canonical_production_test_count}"',

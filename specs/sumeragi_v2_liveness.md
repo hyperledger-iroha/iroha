@@ -1103,6 +1103,21 @@ so a later ignored/retransmit publication cannot erase it. The marker starts
 the new height at progress rank zero and cannot mask a later missing-proposal
 stall.
 
+Recovered CompleteTip has an additional disk-ownership prerequisite. Its
+retired predecessor authority must first bind the exact unlaunched H+1
+lifecycle owner. Authenticated height recovery is also the sole source of its
+move-only storage authority: the capability fixes the live Kura instance,
+verified context, context-addressed lifecycle/body roots, and exact body
+signature policy. Owner construction cannot accept those components
+independently, and launch rechecks the same process-local Kura identity before
+moving either adapter or body ownership. That bound join can enter the existing
+owner-to-runtime, executor, and I/O launch only through a consuming transition whose opaque
+result retains the running H+1 stack together with the retired-H authority. It
+has no generic owner, parts, status, or activation accessor. The serialized
+runner still must consume this complete wrapper in the one-shot activation
+transaction above; until then, the recovered CompleteTip path remains
+fail-closed before status publication.
+
 Asynchronous work from the predecessor can still arrive after this handoff, as
 can work tagged for a non-current view or an older reducer generation. The
 reducer and its production refinement gates accept such wrong-height,
@@ -1304,7 +1319,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa`.
+`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`.
 Nine of those legs execute the separate 525-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 526 TSV lines and has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.

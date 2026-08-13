@@ -474,6 +474,19 @@ exact durable same-round vote whose `proposal_round`, certification round, and
 subject equal the active lock. A later lifecycle view does not retarget that
 vote. Replay cannot authorize an unlocked historical Commit intent.
 
+The source-refinement guard additionally requires the production WAL, its
+serviced-candidate sibling, and its leader-wire sibling to retain one opened
+post-open directory identity and use bounded descriptor-relative operations.
+The two sibling authorities are distinct, move-only, and one-shot. WAL append
+revalidates its leaf before write and after synchronization; adjacent atomic
+publication revalidates the promoted leaf after directory synchronization.
+Rename and final-component symlink substitutions therefore fail closed after
+open. This remains an operating-system durability contract rather than a TLA+
+theorem, and it does not yet authenticate pre-open path ancestry to an opened
+Kura-root handle. On non-Unix targets only basic WAL I/O keeps the legacy path
+fallback; the two adjacent-store authority mints fail closed before changing
+their one-shot state.
+
 The executable refinement gate does not authorize this by comparing only
 effect-shaped values. Its pending projection binds the WAL record's primary
 proposal origin, and records with embedded Prepare evidence also bind that
@@ -1611,7 +1624,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa`.
+`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`.
 The separate source-sealed G-UNIT inventory contains 525 focused tests,
 including 319 `iroha_core` tests. Its 526-line canonical TSV has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`;

@@ -2391,7 +2391,7 @@ async fn mutating_storage_soft_timeout_awaits_late_success_without_retry() {
 #[tokio::test]
 async fn newly_admitted_quarantine_is_a_receipt_bound_terminal() {
     let row = fixture_row(0x45);
-    let expected_manifest_digest = *row.pin.manifest.manifest_digest.as_bytes();
+    let expected_manifest_digest = *row.pin.manifest.digest.as_bytes();
     let (mut runtime, _, fetch, ingress) = test_runtime(
         row,
         false,

@@ -8,9 +8,11 @@
 //! while opening and before append I/O, keeping valid replay memory bounded.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    ffi::{OsStr, OsString},
+    fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use super::v2_core::{
@@ -24,6 +26,12 @@ use super::v2_core::{
 use super::v2_core::{
     SAFETY_WAL_FILE_MAGIC as FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION,
 };
+#[cfg(any(test, not(all(unix, not(target_os = "espidf")))))]
+use std::fs::OpenOptions;
+#[cfg(all(unix, not(target_os = "espidf")))]
+use std::path::Component;
+#[cfg(all(unix, not(target_os = "espidf")))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use thiserror::Error;
 
 #[cfg(test)]
@@ -184,16 +192,962 @@ pub(crate) enum SafetyWalError {
         /// WAL path.
         path: PathBuf,
     },
+    /// This platform cannot provide descriptor-relative adjacent-store ownership.
+    #[error("sumeragi safety WAL storage binding is unsupported at {path}: {reason}")]
+    UnsupportedStorageBinding {
+        /// WAL path.
+        path: PathBuf,
+        /// Fixed unsupported-platform diagnostic.
+        reason: &'static str,
+    },
+}
+
+/// Opened, no-follow owner of the post-open directory containing one safety WAL.
+///
+/// The raw directory handle and canonical path never cross this module. Fixed
+/// sibling capabilities below expose only bounded read, publication, and
+/// retirement operations for their statically derived entry names.
+// TODO: Mint this capability from an opened Kura-root directory handle at the
+// production runner cutover so pre-open ancestor substitution is authenticated
+// physically rather than accepted as part of the initial lexical path.
+#[derive(Debug)]
+struct BoundSafetyWalDirectory {
+    expected_path: PathBuf,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    canonical_path: PathBuf,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    directory: File,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    identity: (u64, u64),
+}
+
+/// Private descriptor-relative owner of one fixed safety-WAL-adjacent entry.
+#[derive(Debug)]
+struct BoundSafetyWalAdjacentEntry {
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    directory: Arc<BoundSafetyWalDirectory>,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    entry_name: OsString,
+    display_path: PathBuf,
+}
+
+/// Move-only authority for the fixed serviced-candidate sibling snapshot.
+#[derive(Debug)]
+#[must_use = "serviced-candidate storage authority must open its fixed adjacent store"]
+pub(crate) struct SafetyWalServicedCandidateStoreAuthority {
+    entry: BoundSafetyWalAdjacentEntry,
+}
+
+/// Move-only authority for the fixed leader-wire lifecycle sibling snapshot.
+#[derive(Debug)]
+#[must_use = "leader-wire storage authority must open its fixed adjacent store"]
+pub(crate) struct SafetyWalLeaderWireStoreAuthority {
+    entry: BoundSafetyWalAdjacentEntry,
+}
+
+impl SafetyWalServicedCandidateStoreAuthority {
+    /// Read the complete fixed snapshot through its retained directory owner.
+    pub(crate) fn read_bounded(&self, maximum: u64) -> Result<Option<Vec<u8>>, String> {
+        self.entry.read_bounded(maximum, "serviced-candidate")
+    }
+
+    /// Atomically replace and directory-sync the fixed snapshot.
+    pub(crate) fn publish_atomic(&self, frame: &[u8], maximum: u64) -> Result<(), String> {
+        self.entry
+            .publish_atomic(frame, maximum, "serviced-candidate")
+    }
+
+    /// Remove and directory-sync the exact fixed snapshot, when present.
+    pub(crate) fn retire(self, maximum: u64) -> Result<(), String> {
+        self.entry.retire(maximum, "serviced-candidate")
+    }
+
+    /// Return the diagnostic path only to in-module and extracted test fixtures.
+    #[cfg(test)]
+    pub(crate) fn path_for_test(&self) -> &Path {
+        &self.entry.display_path
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_path(safety_wal_path: &Path) -> Result<Self, String> {
+        BoundSafetyWalAdjacentEntry::for_test_path(safety_wal_path, ".serviced-candidates")
+            .map(|entry| Self { entry })
+    }
+}
+
+impl SafetyWalLeaderWireStoreAuthority {
+    /// Read the complete fixed snapshot through its retained directory owner.
+    pub(crate) fn read_bounded(&self, maximum: u64) -> Result<Option<Vec<u8>>, String> {
+        self.entry.read_bounded(maximum, "leader-wire lifecycle")
+    }
+
+    /// Atomically replace and directory-sync the fixed snapshot.
+    pub(crate) fn publish_atomic(&self, frame: &[u8], maximum: u64) -> Result<(), String> {
+        self.entry
+            .publish_atomic(frame, maximum, "leader-wire lifecycle")
+    }
+
+    /// Remove and directory-sync the exact fixed snapshot, when present.
+    #[allow(dead_code)]
+    pub(crate) fn retire(self, maximum: u64) -> Result<(), String> {
+        self.entry.retire(maximum, "leader-wire lifecycle")
+    }
+
+    /// Return the diagnostic path only to in-module and extracted test fixtures.
+    #[cfg(test)]
+    pub(crate) fn path_for_test(&self) -> &Path {
+        &self.entry.display_path
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_path(safety_wal_path: &Path) -> Result<Self, String> {
+        BoundSafetyWalAdjacentEntry::for_test_path(safety_wal_path, ".leader-wire-lifecycles")
+            .map(|entry| Self { entry })
+    }
+}
+
+impl BoundSafetyWalDirectory {
+    fn bind(expected_path: &Path) -> io::Result<Self> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let lexical_metadata = direct_lexical_directory_metadata(expected_path)?;
+            let canonical_path = fs::canonicalize(expected_path)?;
+            let directory = open_canonical_directory_nofollow(&canonical_path)?;
+            let metadata = directory.metadata()?;
+            let identity = unix_file_identity(&metadata);
+            if !metadata.is_dir() || unix_file_identity(&lexical_metadata) != identity {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL parent is not a directory",
+                ));
+            }
+            Ok(Self {
+                expected_path: expected_path.to_path_buf(),
+                canonical_path,
+                directory,
+                identity,
+            })
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let metadata = fs::symlink_metadata(expected_path)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL immediate parent must be a direct directory",
+                ));
+            }
+            // TODO: Add a handle-relative Windows implementation which rejects
+            // reparse points before enabling production adjacent Sumeragi v2
+            // storage. Basic WAL I/O retains its legacy path fallback here.
+            Ok(Self {
+                expected_path: expected_path.to_path_buf(),
+            })
+        }
+    }
+
+    fn verify_linked(&self) -> io::Result<()> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let lexical_metadata = direct_lexical_directory_metadata(&self.expected_path)?;
+            let canonical_path = fs::canonicalize(&self.expected_path)?;
+            if canonical_path != self.canonical_path {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL parent resolves to a different canonical directory",
+                ));
+            }
+            let linked = open_canonical_directory_nofollow(&canonical_path)?;
+            let retained_metadata = self.directory.metadata()?;
+            let linked_metadata = linked.metadata()?;
+            if !retained_metadata.is_dir()
+                || !linked_metadata.is_dir()
+                || unix_file_identity(&lexical_metadata) != self.identity
+                || unix_file_identity(&retained_metadata) != self.identity
+                || unix_file_identity(&linked_metadata) != self.identity
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL parent changed its opened directory identity",
+                ));
+            }
+            Ok(())
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            fs::symlink_metadata(&self.expected_path).and_then(|metadata| {
+                if !metadata.file_type().is_symlink() && metadata.is_dir() {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "safety WAL immediate parent must be a direct directory",
+                    ))
+                }
+            })
+        }
+    }
+
+    fn open_wal_leaf(&self, name: &OsStr) -> io::Result<(File, bool)> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_linked()?;
+            let (created, flags, existing_identity) = match rustix::fs::statat(
+                &self.directory,
+                name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Ok(stat) => {
+                    ensure_unix_regular_single_link_stat(&stat)?;
+                    (
+                        false,
+                        rustix::fs::OFlags::RDWR
+                            | rustix::fs::OFlags::NOFOLLOW
+                            | rustix::fs::OFlags::CLOEXEC,
+                        Some((stat.st_dev as u64, stat.st_ino as u64)),
+                    )
+                }
+                Err(rustix::io::Errno::NOENT) => (
+                    true,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::EXCL
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    None,
+                ),
+                Err(error) => return Err(io::Error::from(error)),
+            };
+            let file = File::from(
+                rustix::fs::openat(
+                    &self.directory,
+                    name,
+                    flags,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .map_err(io::Error::from)?,
+            );
+            if let Some(expected_identity) = existing_identity {
+                let opened = file.metadata()?;
+                if unix_file_identity(&opened) != expected_identity {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "safety WAL leaf changed between inspection and open",
+                    ));
+                }
+            }
+            self.verify_leaf(&file, name)?;
+            self.verify_linked()?;
+            Ok((file, created))
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            self.verify_linked()?;
+            let path = self.expected_path.join(name);
+            let (file, created) = match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => (file, true),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (
+                    OpenOptions::new().read(true).write(true).open(&path)?,
+                    false,
+                ),
+                Err(error) => return Err(error),
+            };
+            self.verify_leaf(&file, name)?;
+            Ok((file, created))
+        }
+    }
+
+    fn verify_leaf(&self, file: &File, name: &OsStr) -> io::Result<()> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            self.verify_linked()?;
+            let opened = file.metadata()?;
+            let linked =
+                rustix::fs::statat(&self.directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(io::Error::from)?;
+            ensure_unix_regular_single_link_stat(&linked)?;
+            if !opened.is_file()
+                || opened.nlink() != 1
+                || opened.dev() != linked.st_dev as u64
+                || opened.ino() != linked.st_ino as u64
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL leaf changed its opened file identity",
+                ));
+            }
+            Ok(())
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            self.verify_linked()?;
+            let opened = file.metadata()?;
+            let linked = fs::symlink_metadata(self.expected_path.join(name))?;
+            if !opened.is_file()
+                || linked.file_type().is_symlink()
+                || !linked.is_file()
+                || opened.len() != linked.len()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL leaf changed its opened file shape",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn sync(&self) -> io::Result<()> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_linked()?;
+            self.directory.sync_all()?;
+            self.verify_linked()
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            self.verify_linked()
+        }
+    }
+
+    fn unlink_exact_leaf(&self, name: &OsStr, file: &File) -> io::Result<()> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_leaf(file, name)?;
+            rustix::fs::unlinkat(&self.directory, name, rustix::fs::AtFlags::empty())
+                .map_err(io::Error::from)?;
+            self.sync()
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            self.verify_leaf(file, name)?;
+            fs::remove_file(self.expected_path.join(name))?;
+            self.sync()
+        }
+    }
+}
+
+impl BoundSafetyWalAdjacentEntry {
+    #[cfg(any(test, all(unix, not(target_os = "espidf"))))]
+    fn from_wal(
+        directory: Arc<BoundSafetyWalDirectory>,
+        wal_path: &Path,
+        suffix: &str,
+    ) -> io::Result<Self> {
+        let wal_name = wal_path.file_name().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "safety WAL path has no file name",
+            )
+        })?;
+        let mut entry_name = wal_name.to_os_string();
+        entry_name.push(suffix);
+        let display_path = wal_path.with_file_name(&entry_name);
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        let _ = directory;
+        Ok(Self {
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            directory,
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            entry_name,
+            display_path,
+        })
+    }
+
+    #[cfg(test)]
+    fn for_test_path(safety_wal_path: &Path, suffix: &str) -> Result<Self, String> {
+        let parent = safety_wal_parent(safety_wal_path).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
+        let directory =
+            Arc::new(BoundSafetyWalDirectory::bind(&parent).map_err(|error| error.to_string())?);
+        Self::from_wal(directory, safety_wal_path, suffix).map_err(|error| error.to_string())
+    }
+
+    fn read_bounded(&self, maximum: u64, label: &str) -> Result<Option<Vec<u8>>, String> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            self.directory.verify_linked().map_err(|error| {
+                self.error(label, "verify adjacent directory before read", error)
+            })?;
+            let linked_before = match rustix::fs::statat(
+                &self.directory.directory,
+                &self.entry_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Ok(stat) => stat,
+                Err(rustix::io::Errno::NOENT) => {
+                    self.directory.verify_linked().map_err(|error| {
+                        self.error(label, "verify absent adjacent snapshot", error)
+                    })?;
+                    return Ok(None);
+                }
+                Err(error) => {
+                    return Err(self.error(
+                        label,
+                        "inspect adjacent snapshot",
+                        io::Error::from(error),
+                    ));
+                }
+            };
+            ensure_unix_regular_single_link_stat(&linked_before)
+                .map_err(|error| self.error(label, "validate adjacent snapshot", error))?;
+            if linked_before.st_size < 0
+                || u64::try_from(linked_before.st_size).unwrap_or(u64::MAX) > maximum
+            {
+                return Err(format!(
+                    "{label} snapshot {} exceeds its bounded frame size",
+                    self.display_path.display()
+                ));
+            }
+            let mut file = File::from(
+                rustix::fs::openat(
+                    &self.directory.directory,
+                    &self.entry_name,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(io::Error::from)
+                .map_err(|error| self.error(label, "open adjacent snapshot", error))?,
+            );
+            let opened_before = file
+                .metadata()
+                .map_err(|error| self.error(label, "inspect opened adjacent snapshot", error))?;
+            if !opened_before.is_file()
+                || opened_before.nlink() != 1
+                || opened_before.dev() != linked_before.st_dev as u64
+                || opened_before.ino() != linked_before.st_ino as u64
+                || opened_before.len() > maximum
+            {
+                return Err(format!(
+                    "{label} snapshot {} changed identity while opening",
+                    self.display_path.display()
+                ));
+            }
+            let read_limit = maximum
+                .checked_add(1)
+                .ok_or_else(|| format!("{label} snapshot read bound overflowed"))?;
+            let mut bytes =
+                Vec::with_capacity(usize::try_from(opened_before.len()).unwrap_or_default());
+            Read::by_ref(&mut file)
+                .take(read_limit)
+                .read_to_end(&mut bytes)
+                .map_err(|error| self.error(label, "read adjacent snapshot", error))?;
+            let opened_after = file
+                .metadata()
+                .map_err(|error| self.error(label, "reinspect opened adjacent snapshot", error))?;
+            let linked_after = rustix::fs::statat(
+                &self.directory.directory,
+                &self.entry_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(io::Error::from)
+            .map_err(|error| self.error(label, "reinspect adjacent snapshot", error))?;
+            self.directory.verify_linked().map_err(|error| {
+                self.error(label, "verify adjacent directory after read", error)
+            })?;
+            let bytes_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            if bytes_len > maximum
+                || !unix_metadata_revision_unchanged(&opened_before, &opened_after)
+                || opened_after.dev() != linked_after.st_dev as u64
+                || opened_after.ino() != linked_after.st_ino as u64
+                || linked_after.st_nlink as u64 != 1
+                || opened_after.len() != bytes_len
+            {
+                return Err(format!(
+                    "{label} snapshot {} changed while reading",
+                    self.display_path.display()
+                ));
+            }
+            Ok(Some(bytes))
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = maximum;
+            Err(format!(
+                "{label} snapshot storage is unsupported on this platform: {}",
+                self.display_path.display()
+            ))
+        }
+    }
+
+    fn publish_atomic(&self, frame: &[u8], maximum: u64, label: &str) -> Result<(), String> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let frame_len = u64::try_from(frame.len())
+                .map_err(|_| format!("{label} snapshot frame length is not representable"))?;
+            if frame_len > maximum {
+                return Err(format!(
+                    "{label} snapshot frame exceeds its bounded publication size"
+                ));
+            }
+
+            self.directory.verify_linked().map_err(|error| {
+                self.error(label, "verify adjacent directory before publication", error)
+            })?;
+            let temporary = self.temporary_name();
+            self.remove_stale_temporary(&temporary, label)?;
+            self.ensure_replaceable_target(label)?;
+            let mut file = File::from(
+                rustix::fs::openat(
+                    &self.directory.directory,
+                    &temporary,
+                    rustix::fs::OFlags::WRONLY
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::EXCL
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .map_err(io::Error::from)
+                .map_err(|error| self.error(label, "create adjacent temporary", error))?,
+            );
+            let publication = (|| -> io::Result<()> {
+                let created = file.metadata()?;
+                let linked = rustix::fs::statat(
+                    &self.directory.directory,
+                    &temporary,
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .map_err(io::Error::from)?;
+                ensure_unix_regular_single_link_stat(&linked)?;
+                if !created.is_file()
+                    || created.nlink() != 1
+                    || created.dev() != linked.st_dev as u64
+                    || created.ino() != linked.st_ino as u64
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "adjacent temporary changed during exclusive creation",
+                    ));
+                }
+                file.write_all(frame)?;
+                file.flush()?;
+                file.sync_all()?;
+                self.directory.verify_linked()?;
+                let synced = file.metadata()?;
+                let before_promotion = rustix::fs::statat(
+                    &self.directory.directory,
+                    &temporary,
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .map_err(io::Error::from)?;
+                if synced.nlink() != 1
+                    || synced.dev() != before_promotion.st_dev as u64
+                    || synced.ino() != before_promotion.st_ino as u64
+                    || synced.len() != frame_len
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "adjacent temporary changed before promotion",
+                    ));
+                }
+                rustix::fs::renameat(
+                    &self.directory.directory,
+                    &temporary,
+                    &self.directory.directory,
+                    &self.entry_name,
+                )
+                .map_err(io::Error::from)?;
+                let promoted = rustix::fs::statat(
+                    &self.directory.directory,
+                    &self.entry_name,
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .map_err(io::Error::from)?;
+                if promoted.st_dev as u64 != synced.dev()
+                    || promoted.st_ino as u64 != synced.ino()
+                    || promoted.st_nlink as u64 != 1
+                    || promoted.st_size < 0
+                    || u64::try_from(promoted.st_size).unwrap_or(u64::MAX) != frame_len
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "promoted adjacent snapshot has the wrong identity",
+                    ));
+                }
+                self.directory.sync()?;
+                let durable = rustix::fs::statat(
+                    &self.directory.directory,
+                    &self.entry_name,
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .map_err(io::Error::from)?;
+                if durable.st_dev as u64 != synced.dev()
+                    || durable.st_ino as u64 != synced.ino()
+                    || durable.st_nlink as u64 != 1
+                    || durable.st_size < 0
+                    || u64::try_from(durable.st_size).unwrap_or(u64::MAX) != frame_len
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "promoted adjacent snapshot changed across directory sync",
+                    ));
+                }
+                self.directory.verify_linked()
+            })();
+            if let Err(error) = publication {
+                drop(file);
+                let _ = self.remove_stale_temporary(&temporary, label);
+                return Err(self.error(label, "publish adjacent snapshot", error));
+            }
+            Ok(())
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (frame, maximum);
+            Err(format!(
+                "{label} snapshot storage is unsupported on this platform: {}",
+                self.display_path.display()
+            ))
+        }
+    }
+
+    fn retire(self, maximum: u64, label: &str) -> Result<(), String> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            self.directory.verify_linked().map_err(|error| {
+                self.error(label, "verify adjacent directory before retirement", error)
+            })?;
+            let linked = match rustix::fs::statat(
+                &self.directory.directory,
+                &self.entry_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Ok(stat) => stat,
+                Err(rustix::io::Errno::NOENT) => {
+                    self.directory.verify_linked().map_err(|error| {
+                        self.error(label, "verify absent adjacent retirement", error)
+                    })?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    return Err(self.error(
+                        label,
+                        "inspect adjacent snapshot for retirement",
+                        io::Error::from(error),
+                    ));
+                }
+            };
+            ensure_unix_regular_single_link_stat(&linked)
+                .map_err(|error| self.error(label, "validate adjacent retirement", error))?;
+            if linked.st_size < 0 || u64::try_from(linked.st_size).unwrap_or(u64::MAX) > maximum {
+                return Err(format!(
+                    "{label} snapshot {} exceeds its retirement bound",
+                    self.display_path.display()
+                ));
+            }
+            let file = File::from(
+                rustix::fs::openat(
+                    &self.directory.directory,
+                    &self.entry_name,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(io::Error::from)
+                .map_err(|error| self.error(label, "open adjacent retirement", error))?,
+            );
+            let opened = file
+                .metadata()
+                .map_err(|error| self.error(label, "inspect adjacent retirement", error))?;
+            if opened.nlink() != 1
+                || opened.dev() != linked.st_dev as u64
+                || opened.ino() != linked.st_ino as u64
+            {
+                return Err(format!(
+                    "{label} snapshot {} changed before retirement",
+                    self.display_path.display()
+                ));
+            }
+            file.sync_all()
+                .map_err(|error| self.error(label, "sync adjacent retirement", error))?;
+            self.directory.verify_linked().map_err(|error| {
+                self.error(label, "verify adjacent directory during retirement", error)
+            })?;
+            let linked_after = rustix::fs::statat(
+                &self.directory.directory,
+                &self.entry_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(io::Error::from)
+            .map_err(|error| self.error(label, "reinspect adjacent retirement", error))?;
+            if linked_after.st_dev as u64 != opened.dev()
+                || linked_after.st_ino as u64 != opened.ino()
+                || linked_after.st_nlink as u64 != 1
+            {
+                return Err(format!(
+                    "{label} snapshot {} changed before unlink",
+                    self.display_path.display()
+                ));
+            }
+            drop(file);
+            rustix::fs::unlinkat(
+                &self.directory.directory,
+                &self.entry_name,
+                rustix::fs::AtFlags::empty(),
+            )
+            .map_err(io::Error::from)
+            .map_err(|error| self.error(label, "unlink adjacent snapshot", error))?;
+            self.directory
+                .sync()
+                .map_err(|error| self.error(label, "sync adjacent retirement", error))?;
+            Ok(())
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = maximum;
+            Err(format!(
+                "{label} snapshot storage is unsupported on this platform: {}",
+                self.display_path.display()
+            ))
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn temporary_name(&self) -> OsString {
+        let mut name = self.entry_name.clone();
+        name.push(".tmp");
+        name
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn remove_stale_temporary(&self, name: &OsStr, label: &str) -> Result<(), String> {
+        match rustix::fs::statat(
+            &self.directory.directory,
+            name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => {
+                Err(self.error(label, "inspect adjacent temporary", io::Error::from(error)))
+            }
+            Ok(stat) => {
+                ensure_unix_regular_single_link_stat(&stat)
+                    .map_err(|error| self.error(label, "validate adjacent temporary", error))?;
+                rustix::fs::unlinkat(
+                    &self.directory.directory,
+                    name,
+                    rustix::fs::AtFlags::empty(),
+                )
+                .map_err(io::Error::from)
+                .map_err(|error| self.error(label, "remove adjacent temporary", error))
+            }
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn ensure_replaceable_target(&self, label: &str) -> Result<(), String> {
+        match rustix::fs::statat(
+            &self.directory.directory,
+            &self.entry_name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(self.error(
+                label,
+                "inspect adjacent publication target",
+                io::Error::from(error),
+            )),
+            Ok(stat) => ensure_unix_regular_single_link_stat(&stat)
+                .map_err(|error| self.error(label, "validate adjacent publication target", error)),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn error(&self, label: &str, operation: &str, source: io::Error) -> String {
+        format!(
+            "failed to {operation} for {label} snapshot {}: {source}",
+            self.display_path.display()
+        )
+    }
+}
+
+fn safety_wal_parent(path: &Path) -> io::Result<PathBuf> {
+    if path.file_name().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "safety WAL path has no file name",
+        ));
+    }
+    Ok(path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf())
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn direct_lexical_directory_metadata(path: &Path) -> io::Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "safety WAL immediate parent must be a direct directory",
+        ));
+    }
+    Ok(metadata)
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn open_canonical_directory_nofollow(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "canonical safety WAL directory path is not absolute",
+        ));
+    }
+    let mut current = File::from(
+        rustix::fs::open(
+            "/",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(io::Error::from)?,
+    );
+    for component in path.components() {
+        let name = match component {
+            Component::RootDir => continue,
+            Component::Normal(name) => name,
+            Component::CurDir => continue,
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "canonical safety WAL directory has a non-normal component",
+                ));
+            }
+        };
+        let before = rustix::fs::statat(&current, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(io::Error::from)?;
+        if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::Directory {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "canonical safety WAL ancestry contains a non-directory component",
+            ));
+        }
+        let child = File::from(
+            rustix::fs::openat(
+                &current,
+                name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(io::Error::from)?,
+        );
+        let opened = child.metadata()?;
+        let after = rustix::fs::statat(&current, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(io::Error::from)?;
+        if !opened.is_dir()
+            || before.st_dev as u64 != opened.dev()
+            || before.st_ino as u64 != opened.ino()
+            || after.st_dev as u64 != opened.dev()
+            || after.st_ino as u64 != opened.ino()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "canonical safety WAL ancestry changed during no-follow traversal",
+            ));
+        }
+        current = child;
+    }
+    Ok(current)
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn unix_file_identity(metadata: &fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt as _;
+
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn unix_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+        && left.mode() == right.mode()
+        && left.nlink() == right.nlink()
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn wal_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    unix_metadata_revision_unchanged(left, right)
+}
+
+#[cfg(not(all(unix, not(target_os = "espidf"))))]
+fn wal_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_file()
+        && right.is_file()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+        && left.permissions().readonly() == right.permissions().readonly()
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn ensure_unix_regular_single_link_stat(stat: &rustix::fs::Stat) -> io::Result<()> {
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+        || stat.st_nlink as u64 != 1
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bound safety-WAL-adjacent entry is not a direct single-link regular file",
+        ));
+    }
+    Ok(())
 }
 
 /// Append-only, hash-chained Sumeragi safety WAL.
 #[derive(Debug)]
 pub(crate) struct SafetyWal {
     path: PathBuf,
+    directory: Arc<BoundSafetyWalDirectory>,
+    wal_name: OsString,
     file: File,
     records: Vec<RecoveredRecord>,
     payload_bytes: usize,
     append_state: WalAppendState,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    serviced_candidate_authority_minted: AtomicBool,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    leader_wire_authority_minted: AtomicBool,
 }
 
 impl SafetyWal {
@@ -209,27 +1163,40 @@ impl SafetyWal {
         key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
         let path = path.into();
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).map_err(|source| SafetyWalError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
+        let parent = safety_wal_parent(&path).map_err(|source| SafetyWalError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        fs::create_dir_all(&parent).map_err(|source| SafetyWalError::Io {
+            path: parent.clone(),
+            source,
+        })?;
+        let directory = Arc::new(BoundSafetyWalDirectory::bind(&parent).map_err(|source| {
+            if source.kind() == io::ErrorKind::Unsupported {
+                SafetyWalError::UnsupportedStorageBinding {
+                    path: path.clone(),
+                    reason: "descriptor-relative storage is unavailable",
+                }
+            } else {
+                SafetyWalError::Io {
+                    path: parent.clone(),
+                    source,
+                }
+            }
+        })?);
+        let wal_name = path
+            .file_name()
+            .expect("safety_wal_parent rejected a missing file name")
+            .to_os_string();
 
         let identity = WalFileIdentity::new(protocol_version, network_id, key_hash);
-        let created = !path.exists();
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&path)
-            .map_err(|source| SafetyWalError::Io {
-                path: path.clone(),
-                source,
-            })?;
+        let (mut file, created) =
+            directory
+                .open_wal_leaf(&wal_name)
+                .map_err(|source| SafetyWalError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
 
         if created
             || file
@@ -245,31 +1212,88 @@ impl SafetyWal {
             file.write_all(&header)
                 .and_then(|()| file.flush())
                 .and_then(|()| file.sync_data())
+                .and_then(|()| directory.verify_leaf(&file, &wal_name))
                 .map_err(|source| SafetyWalError::Io {
                     path: path.clone(),
                     source,
                 })?;
-            if let Some(parent) = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-            {
-                sync_directory(parent).map_err(|source| SafetyWalError::Io {
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
-            }
+            directory.sync().map_err(|source| SafetyWalError::Io {
+                path: parent.clone(),
+                source,
+            })?;
         }
 
+        directory
+            .verify_leaf(&file, &wal_name)
+            .map_err(|source| SafetyWalError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        let read_metadata_before = file.metadata().map_err(|source| SafetyWalError::Io {
+            path: path.clone(),
+            source,
+        })?;
         let recovery = recover_wal_stream(&mut file, &path, identity, WAL_RETENTION_LIMITS)?;
+        let read_metadata_after = file.metadata().map_err(|source| SafetyWalError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        directory
+            .verify_leaf(&file, &wal_name)
+            .map_err(|source| SafetyWalError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        if !wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after) {
+            return Err(SafetyWalError::Io {
+                path: path.clone(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL changed while recovering its durable bytes",
+                ),
+            });
+        }
         if recovery.incomplete_tail {
-            file.set_len(recovery.valid_prefix_len)
+            let valid_prefix_len = recovery.valid_prefix_len;
+            file.set_len(valid_prefix_len)
                 .and_then(|()| file.sync_data())
                 .map_err(|source| SafetyWalError::Io {
                     path: path.clone(),
                     source,
                 })?;
+            let truncated_before = file.metadata().map_err(|source| SafetyWalError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            directory
+                .verify_leaf(&file, &wal_name)
+                .map_err(|source| SafetyWalError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+            let truncated_after = file.metadata().map_err(|source| SafetyWalError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if truncated_after.len() != valid_prefix_len
+                || !wal_metadata_revision_unchanged(&truncated_before, &truncated_after)
+            {
+                return Err(SafetyWalError::Io {
+                    path: path.clone(),
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "safety WAL changed after crash-tail truncation",
+                    ),
+                });
+            }
         }
         file.seek(SeekFrom::End(0))
+            .map_err(|source| SafetyWalError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        directory
+            .verify_leaf(&file, &wal_name)
             .map_err(|source| SafetyWalError::Io {
                 path: path.clone(),
                 source,
@@ -281,16 +1305,129 @@ impl SafetyWal {
         );
         Ok(Self {
             path,
+            directory,
+            wal_name,
             file,
             records: recovery.records,
             payload_bytes: recovery.payload_bytes,
             append_state,
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            serviced_candidate_authority_minted: AtomicBool::new(false),
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            leader_wire_authority_minted: AtomicBool::new(false),
         })
     }
 
     /// Return all records recovered during open.
     pub(crate) fn recovered_records(&self) -> &[RecoveredRecord] {
         &self.records
+    }
+
+    /// Compare this open WAL with one recovery-sealed canonical path.
+    ///
+    /// The path itself stays private so lifecycle startup can validate storage
+    /// ownership without exposing a caller-selectable WAL target.
+    pub(crate) fn matches_path(&self, expected: &Path) -> bool {
+        self.path == expected
+            && self
+                .directory
+                .verify_leaf(&self.file, &self.wal_name)
+                .is_ok()
+    }
+
+    /// Mint the sole fixed serviced-candidate sibling authority.
+    pub(crate) fn mint_serviced_candidate_store_authority(
+        &self,
+        expected: &Path,
+    ) -> Result<SafetyWalServicedCandidateStoreAuthority, SafetyWalError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_expected_binding(expected)?;
+            if self
+                .serviced_candidate_authority_minted
+                .swap(true, Ordering::AcqRel)
+            {
+                return Err(SafetyWalError::FailedClosed {
+                    path: self.path.clone(),
+                });
+            }
+            let entry = BoundSafetyWalAdjacentEntry::from_wal(
+                Arc::clone(&self.directory),
+                &self.path,
+                ".serviced-candidates",
+            )
+            .map_err(|source| SafetyWalError::Io {
+                path: self.path.clone(),
+                source,
+            })?;
+            Ok(SafetyWalServicedCandidateStoreAuthority { entry })
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = expected;
+            Err(SafetyWalError::UnsupportedStorageBinding {
+                path: self.path.clone(),
+                reason: "descriptor-relative adjacent storage is unavailable",
+            })
+        }
+    }
+
+    /// Mint the sole fixed leader-wire lifecycle sibling authority.
+    pub(crate) fn mint_leader_wire_store_authority(
+        &self,
+        expected: &Path,
+    ) -> Result<SafetyWalLeaderWireStoreAuthority, SafetyWalError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_expected_binding(expected)?;
+            if self
+                .leader_wire_authority_minted
+                .swap(true, Ordering::AcqRel)
+            {
+                return Err(SafetyWalError::FailedClosed {
+                    path: self.path.clone(),
+                });
+            }
+            let entry = BoundSafetyWalAdjacentEntry::from_wal(
+                Arc::clone(&self.directory),
+                &self.path,
+                ".leader-wire-lifecycles",
+            )
+            .map_err(|source| SafetyWalError::Io {
+                path: self.path.clone(),
+                source,
+            })?;
+            Ok(SafetyWalLeaderWireStoreAuthority { entry })
+        }
+
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = expected;
+            Err(SafetyWalError::UnsupportedStorageBinding {
+                path: self.path.clone(),
+                reason: "descriptor-relative adjacent storage is unavailable",
+            })
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn verify_expected_binding(&self, expected: &Path) -> Result<(), SafetyWalError> {
+        if self.path != expected {
+            return Err(SafetyWalError::Io {
+                path: expected.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "expected path differs from the opened safety WAL",
+                ),
+            });
+        }
+        self.directory
+            .verify_leaf(&self.file, &self.wal_name)
+            .map_err(|source| SafetyWalError::Io {
+                path: self.path.clone(),
+                source,
+            })
     }
 
     /// Append and synchronise an opaque Norito record.
@@ -324,6 +1461,8 @@ impl SafetyWal {
         )?;
         let mut io = FileAppendIo {
             file: &mut self.file,
+            directory: &self.directory,
+            wal_name: &self.wal_name,
         };
         let receipt = self
             .append_state
@@ -354,30 +1493,40 @@ impl SafetyWal {
         self,
         _authorization: WalRetirementAuthorization,
     ) -> Result<(), SafetyWalError> {
-        let Self { path, file, .. } = self;
-        remove_wal_file(path, file)
+        let Self {
+            path,
+            directory,
+            wal_name,
+            file,
+            ..
+        } = self;
+        remove_wal_file(path, &directory, &wal_name, file)
     }
 }
 
-fn remove_wal_file(path: PathBuf, file: File) -> Result<(), SafetyWalError> {
+fn remove_wal_file(
+    path: PathBuf,
+    directory: &BoundSafetyWalDirectory,
+    wal_name: &OsStr,
+    file: File,
+) -> Result<(), SafetyWalError> {
     file.sync_all().map_err(|source| SafetyWalError::Io {
         path: path.clone(),
         source,
     })?;
-    drop(file);
-    fs::remove_file(&path).map_err(|source| SafetyWalError::Io {
-        path: path.clone(),
-        source,
-    })?;
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        sync_directory(parent).map_err(|source| SafetyWalError::Io {
-            path: parent.to_path_buf(),
+    directory
+        .verify_leaf(&file, wal_name)
+        .map_err(|source| SafetyWalError::Io {
+            path: path.clone(),
             source,
         })?;
-    }
+    directory
+        .unlink_exact_leaf(wal_name, &file)
+        .map_err(|source| SafetyWalError::Io {
+            path: path.clone(),
+            source,
+        })?;
+    drop(file);
     Ok(())
 }
 
@@ -635,12 +1784,15 @@ fn read_up_to(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
 
 struct FileAppendIo<'a> {
     file: &'a mut File,
+    directory: &'a BoundSafetyWalDirectory,
+    wal_name: &'a OsStr,
 }
 
 impl WalAppendIo for FileAppendIo<'_> {
     type Error = io::Error;
 
     fn write_all(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
+        self.directory.verify_leaf(self.file, self.wal_name)?;
         self.file.write_all(bytes)
     }
 
@@ -649,7 +1801,8 @@ impl WalAppendIo for FileAppendIo<'_> {
     }
 
     fn sync_data(&mut self) -> Result<(), Self::Error> {
-        self.file.sync_data()
+        self.file.sync_data()?;
+        self.directory.verify_leaf(self.file, self.wal_name)
     }
 }
 
@@ -708,10 +1861,6 @@ fn map_codec_error(path: &Path, error: WalCodecError) -> SafetyWalError {
 
 fn frame_hash(bytes: &[u8]) -> [u8; HASH_LEN] {
     *blake3::hash(bytes).as_bytes()
-}
-
-fn sync_directory(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
 }
 
 #[cfg(test)]
@@ -904,6 +2053,136 @@ mod tests {
     }
 
     #[test]
+    fn open_wal_matches_only_its_exact_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sumeragi-v2.wal");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+
+        assert!(wal.matches_path(&path));
+        assert!(!wal.matches_path(&dir.path().join("foreign.wal")));
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn open_rejects_a_preexisting_symlink_for_the_owned_wal_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let foreign = root.path().join("foreign-wal-directory");
+        fs::create_dir(&foreign).expect("create foreign WAL directory");
+        let parent = root.path().join("wal");
+        symlink(&foreign, &parent).expect("substitute the WAL directory with a symlink");
+        let path = parent.join("sumeragi-v2.wal");
+
+        assert!(matches!(
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
+            Err(SafetyWalError::Io { .. })
+        ));
+        assert!(!foreign.join("sumeragi-v2.wal").exists());
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn substitute_wal_parent(root: &Path, parent: &Path) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::symlink;
+
+        let retained = root.join("retained-wal-directory");
+        let foreign = root.join("foreign-wal-directory");
+        fs::rename(parent, &retained).expect("move the opened WAL directory");
+        fs::create_dir(&foreign).expect("create foreign WAL directory");
+        symlink(&foreign, parent).expect("substitute the canonical WAL directory name");
+        (retained, foreign)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn parent_substitution_poisoning_prevents_wal_append_acknowledgement() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let parent = root.path().join("wal");
+        let path = parent.join("sumeragi-v2.wal");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let (retained, foreign) = substitute_wal_parent(root.path(), &parent);
+
+        assert!(!wal.matches_path(&path));
+        assert!(matches!(
+            wal.append(b"must not receive a durability receipt"),
+            Err(SafetyWalError::AppendIo {
+                stage: WalIoStage::Write,
+                ..
+            })
+        ));
+        assert!(wal.append_state.is_failed_closed());
+        assert!(wal.recovered_records().is_empty());
+        assert!(retained.join("sumeragi-v2.wal").is_file());
+        assert!(!foreign.join("sumeragi-v2.wal").exists());
+        assert!(matches!(
+            wal.mint_leader_wire_store_authority(&path),
+            Err(SafetyWalError::Io { .. })
+        ));
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn adjacent_authorities_reject_parent_substitution_without_path_fallback() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let parent = root.path().join("wal");
+        let path = parent.join("sumeragi-v2.wal");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let serviced = wal
+            .mint_serviced_candidate_store_authority(&path)
+            .expect("mint serviced-candidate authority");
+        let leader = wal
+            .mint_leader_wire_store_authority(&path)
+            .expect("mint leader-wire authority");
+        assert!(matches!(
+            wal.mint_serviced_candidate_store_authority(&path),
+            Err(SafetyWalError::FailedClosed { .. })
+        ));
+        assert!(matches!(
+            wal.mint_leader_wire_store_authority(&path),
+            Err(SafetyWalError::FailedClosed { .. })
+        ));
+        let (retained, foreign) = substitute_wal_parent(root.path(), &parent);
+
+        assert!(serviced.read_bounded(1024).is_err());
+        assert!(leader.publish_atomic(b"must not publish", 1024).is_err());
+        for directory in [&retained, &foreign] {
+            assert!(
+                !directory
+                    .join("sumeragi-v2.wal.serviced-candidates")
+                    .exists()
+            );
+            assert!(
+                !directory
+                    .join("sumeragi-v2.wal.leader-wire-lifecycles")
+                    .exists()
+            );
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn adjacent_authority_bounds_publish_read_and_retirement() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("wal").join("sumeragi-v2.wal");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let leader = wal
+            .mint_leader_wire_store_authority(&path)
+            .expect("mint leader-wire authority");
+        let adjacent = path.with_file_name("sumeragi-v2.wal.leader-wire-lifecycles");
+
+        assert!(leader.publish_atomic(b"oversized", 4).is_err());
+        leader
+            .publish_atomic(b"bounded", 7)
+            .expect("publish bounded adjacent bytes");
+        assert_eq!(
+            leader.read_bounded(7).expect("read bounded bytes"),
+            Some(b"bounded".to_vec())
+        );
+        leader.retire(7).expect("retire exact adjacent entry");
+        assert!(!adjacent.exists());
+    }
+
+    #[test]
     fn incomplete_final_frame_is_truncated_as_unacknowledged() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
@@ -1071,9 +2350,15 @@ mod tests {
         let path = dir.path().join("sumeragi-v2.wal");
         let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
         let _receipt = wal.append(b"decision").expect("append decision");
-        let SafetyWal { path, file, .. } = wal;
+        let SafetyWal {
+            path,
+            directory,
+            wal_name,
+            file,
+            ..
+        } = wal;
         let retired_path = path.clone();
-        remove_wal_file(path, file).expect("retire finalized WAL bytes");
+        remove_wal_file(path, &directory, &wal_name, file).expect("retire finalized WAL bytes");
         assert!(!retired_path.exists());
     }
 }

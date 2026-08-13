@@ -2398,14 +2398,6 @@ mod protocol {
             .map_err(|_| BrokerError::Rejected)?;
         Ok((request, authorization))
     }
-    fn request_network_id(payload: &[u8]) -> Result<NetworkId, BrokerError> {
-        Ok(decode_canonical::<BootleLanternIssueRequestWireV1>(
-            payload,
-            MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
-        )?
-        .context
-        .network_id)
-    }
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct SoracloudSignerQualificationWireV1 {
         revision: u64,
@@ -5721,8 +5713,16 @@ mod protocol {
         fetch: &ProviderIngestSourceFetchRequestWireV2,
         binding: &ProviderBindingWireV1,
         admitted_provider_ids: Option<&[[u8; 32]]>,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
         source_request_from_wire(fetch.clone())?;
+        if fetch
+            .musubi_archive
+            .as_ref()
+            .is_some_and(|archive| &archive.network_id != session_network_id)
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
         let limits = binding
             .provider_ingest_source_limits
             .ok_or(BrokerError::BindingMismatch)?;
@@ -6806,13 +6806,20 @@ mod protocol {
         request: &OperationRequestV1,
         status: u8,
         result: Vec<u8>,
+        session_network_id: &NetworkId,
     ) -> Result<OperationResponseV1, BrokerError> {
-        make_operation_response_scrubbed(request, status, ScrubbedBytes::new(result))
+        make_operation_response_scrubbed(
+            request,
+            status,
+            ScrubbedBytes::new(result),
+            session_network_id,
+        )
     }
     fn make_operation_response_scrubbed(
         request: &OperationRequestV1,
         status: u8,
         mut result: ScrubbedBytes,
+        session_network_id: &NetworkId,
     ) -> Result<OperationResponseV1, BrokerError> {
         let result_digest = operation_result_digest(&result);
         let fields = OperationResponseFieldsV1 {
@@ -6841,7 +6848,7 @@ mod protocol {
             result: result.take(),
             response_digest,
         };
-        validate_operation_response(request, &response)?;
+        validate_operation_response(request, &response, session_network_id)?;
         Ok(response)
     }
     fn validate_signing_payload_len(length: usize) -> Result<(), BrokerError> {
@@ -9542,6 +9549,7 @@ mod protocol {
     fn validate_operation_response(
         request: &OperationRequestV1,
         response: &OperationResponseV1,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
         validate_operation_response_envelope(request, response)?;
         match response.status {
@@ -9550,15 +9558,19 @@ mod protocol {
             | STATUS_CONFLICT_V1
             | STATUS_STALE_OR_REVOKED_V1
             | STATUS_AMBIGUOUS_V1
-            | STATUS_UNAVAILABLE_V1 => {
-                validate_operation_result(request, response.status, &response.result)
-            }
+            | STATUS_UNAVAILABLE_V1 => validate_operation_result(
+                request,
+                response.status,
+                &response.result,
+                session_network_id,
+            ),
             _ => Err(BrokerError::Protocol),
         }
     }
     fn validate_operation_response_for_client(
         request: &OperationRequestV1,
         response: &OperationResponseV1,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
         validate_operation_response_envelope(request, response)?;
         if response.status == STATUS_OK_V1
@@ -9574,7 +9586,12 @@ mod protocol {
             // reservation without adding an independent validation boundary.
             return Ok(());
         }
-        validate_operation_result(request, response.status, &response.result)
+        validate_operation_result(
+            request,
+            response.status,
+            &response.result,
+            session_network_id,
+        )
     }
     fn validate_operation_response_envelope(
         request: &OperationRequestV1,
@@ -9623,6 +9640,7 @@ mod protocol {
         request: &OperationRequestV1,
         status: u8,
         result: &[u8],
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
         if status == STATUS_CONFLICT_V1
             && !matches!(
@@ -9796,7 +9814,7 @@ mod protocol {
                     let (issue, authorization) = decode_bootle_lantern_issue_request(
                         &request.payload,
                         &request.binding,
-                        &request_network_id(&request.payload)?,
+                        session_network_id,
                     )
                     .map_err(|_| BrokerError::Protocol)?;
                     let request_digest = decode_canonical::<[u8; 32]>(
@@ -9821,7 +9839,7 @@ mod protocol {
                     let (issue, authorization) = decode_bootle_lantern_issue_request(
                         &request.payload,
                         &request.binding,
-                        &request_network_id(&request.payload)?,
+                        session_network_id,
                     )
                     .map_err(|_| BrokerError::Protocol)?;
                     let response = decode_canonical::<BootleLanternIssuanceResponseWireV1>(
@@ -19001,6 +19019,7 @@ mod protocol {
                 &fetch,
                 &request.binding,
                 Some(&configured.provider_ingest_source_provider_ids),
+                &state.network_id,
             )?;
             let authorization = fetch.authorization.clone();
             let source_request = source_request_from_wire(fetch)?;
@@ -19043,7 +19062,8 @@ mod protocol {
                 };
                 let result =
                     encode_canonical(&header, MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1)?;
-                let response = make_operation_response(request, STATUS_OK_V1, result)?;
+                let response =
+                    make_operation_response(request, STATUS_OK_V1, result, &state.network_id)?;
                 let response_frame = encode_frame(
                     FRAME_KIND_OPERATION_RESPONSE_V1,
                     &response,
@@ -19288,6 +19308,7 @@ mod protocol {
                                 &(),
                                 MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
                             )?,
+                            &state.network_id,
                         )?;
                         let response_frame = encode_frame(
                             FRAME_KIND_OPERATION_RESPONSE_V1,
@@ -19331,7 +19352,8 @@ mod protocol {
                             )
                         }
                     };
-                let response = make_operation_response_scrubbed(&request, status, result)?;
+                let response =
+                    make_operation_response_scrubbed(&request, status, result, &state.network_id)?;
                 let response_frame_limit = operation_frame_limit(request.operation);
                 let response_frame = encode_frame(
                     FRAME_KIND_OPERATION_RESPONSE_V1,
@@ -20167,7 +20189,9 @@ mod protocol {
                         });
                     }
                 };
-                if let Err(error) = validate_operation_response_for_client(&request, &response) {
+                if let Err(error) =
+                    validate_operation_response_for_client(&request, &response, &self.network_id)
+                {
                     connection.poisoned = true;
                     return Err(if mutating {
                         BrokerError::Ambiguous
@@ -20584,6 +20608,10 @@ mod protocol {
                 [u8; 32],
                 iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1,
             > {
+                if context.network_id != self.session.network_id {
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest);
+                }
                 let expected = iroha_core::privacy_engines::bootle_lantern::issuer::
                     issuer_validate_blind_issuance_request_encoded_v1(
                         context,
@@ -20645,6 +20673,10 @@ mod protocol {
                     BootleLanternBlindIssuanceResponseV1,
                 iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1,
             >{
+                if context.network_id != self.session.network_id {
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest);
+                }
                 iroha_core::privacy_engines::bootle_lantern::issuer::
                     issuer_validate_blind_issuance_request_encoded_v1(
                         context,
@@ -20974,7 +21006,12 @@ mod protocol {
                     .checked_add(Duration::from_millis(limits.operation_timeout_ms))
                     .ok_or(BrokerError::Rejected)?;
                 let fetch = source_request_to_wire(request)?;
-                validate_source_fetch_request(&fetch, &binding, Some(&source_provider_ids))?;
+                validate_source_fetch_request(
+                    &fetch,
+                    &binding,
+                    Some(&source_provider_ids),
+                    &network_id,
+                )?;
                 let (mut connection, observations) = connect_broker_connection(
                     &endpoint,
                     &chain_id,
@@ -21027,7 +21064,7 @@ mod protocol {
                     FRAME_KIND_OPERATION_RESPONSE_V1,
                     OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                 )?;
-                validate_operation_response(&operation_request, &response)?;
+                validate_operation_response(&operation_request, &response, &network_id)?;
                 match response.status {
                     STATUS_OK_V1 => {}
                     STATUS_REJECTED_V1 => return Err(BrokerError::Rejected),
@@ -31317,9 +31354,13 @@ mod protocol {
                 validate_operation_request(&decoded_request).expect("validate compact request");
                 let result =
                     dispatch_server_operation(&state, &decoded_request).expect("dispatch request");
-                let response =
-                    make_operation_response_scrubbed(&decoded_request, STATUS_OK_V1, result)
-                        .expect("build and validate compact response");
+                let response = make_operation_response_scrubbed(
+                    &decoded_request,
+                    STATUS_OK_V1,
+                    result,
+                    &state.network_id,
+                )
+                .expect("build and validate compact response");
                 encode_frame(
                     FRAME_KIND_OPERATION_RESPONSE_V1,
                     &response,
@@ -31472,7 +31513,7 @@ mod protocol {
                     OPERATION_SIGN_V1,
                 )
                 .expect("decode actual response frame");
-                validate_operation_response(&request, &decoded_response)
+                validate_operation_response(&request, &decoded_response, &server_test_network_id())
                     .expect("validate decoded response");
                 drop(response_scope);
             }
@@ -33897,6 +33938,7 @@ mod protocol {
                 authorization: &sorafs_node::FinalizedProviderIngestAuthorizationV1,
                 manifest: &sorafs_manifest::ManifestV1,
                 plan: &sorafs_car::CarBuildPlan,
+                network_id: NetworkId,
             ) -> (
                 sorafs_node::FinalizedProviderIngestAuthorizationV1,
                 sorafs_node::ProviderIngestMusubiArchiveFetchBindingV1,
@@ -33945,12 +33987,6 @@ mod protocol {
                     archive_id,
                     commitment,
                 );
-                let network_id =
-                    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-                        iroha_data_model::block::BlockHeader,
-                    >::from_untyped_unchecked(
-                        iroha_crypto::Hash::prehashed([0xA7; 32]),
-                    ));
                 let musubi_authorization =
                     sorafs_node::FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
                         authorization.finalized_height(),
@@ -35852,23 +35888,67 @@ mod protocol {
                     MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
                 )
                 .expect("encode principal result");
-                validate_operation_result(&request, STATUS_OK_V1, &result)
-                    .expect("accept exact principal result");
+                validate_operation_result(
+                    &request,
+                    STATUS_OK_V1,
+                    &result,
+                    &server_test_network_id(),
+                )
+                .expect("accept exact principal result");
+
                 let substituted =
                     encode_canonical(&[0xB4; 32], MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1)
                         .expect("encode substituted digest result");
-                assert!(validate_operation_result(&request, STATUS_OK_V1, &substituted).is_err());
+                assert!(
+                    validate_operation_result(
+                        &request,
+                        STATUS_OK_V1,
+                        &substituted,
+                        &server_test_network_id(),
+                    )
+                    .is_err()
+                );
                 let mut truncated = result.clone();
                 truncated.pop();
-                assert!(validate_operation_result(&request, STATUS_OK_V1, &truncated).is_err());
+                assert!(
+                    validate_operation_result(
+                        &request,
+                        STATUS_OK_V1,
+                        &truncated,
+                        &server_test_network_id(),
+                    )
+                    .is_err()
+                );
                 let mut trailing = result.clone();
                 trailing.push(0);
-                assert!(validate_operation_result(&request, STATUS_OK_V1, &trailing).is_err());
-                assert!(validate_operation_result(&request, STATUS_REJECTED_V1, &result).is_err());
+                assert!(
+                    validate_operation_result(
+                        &request,
+                        STATUS_OK_V1,
+                        &trailing,
+                        &server_test_network_id(),
+                    )
+                    .is_err()
+                );
+                assert!(
+                    validate_operation_result(
+                        &request,
+                        STATUS_REJECTED_V1,
+                        &result,
+                        &server_test_network_id(),
+                    )
+                    .is_err()
+                );
                 let mut wrong_operation = request;
                 wrong_operation.operation = OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1;
                 assert!(
-                    validate_operation_result(&wrong_operation, STATUS_OK_V1, &result).is_err()
+                    validate_operation_result(
+                        &wrong_operation,
+                        STATUS_OK_V1,
+                        &result,
+                        &server_test_network_id(),
+                    )
+                    .is_err()
                 );
             }
             #[test]
@@ -37828,7 +37908,12 @@ mod protocol {
                 )
                 .expect("encode exact qualification");
                 assert_eq!(
-                    validate_operation_result(&request, STATUS_OK_V1, &exact),
+                    validate_operation_result(
+                        &request,
+                        STATUS_OK_V1,
+                        &exact,
+                        &server_test_network_id(),
+                    ),
                     Ok(())
                 );
                 let substituted = encode_canonical(
@@ -37840,7 +37925,12 @@ mod protocol {
                 )
                 .expect("encode substituted qualification");
                 assert_eq!(
-                    validate_operation_result(&request, STATUS_OK_V1, &substituted),
+                    validate_operation_result(
+                        &request,
+                        STATUS_OK_V1,
+                        &substituted,
+                        &server_test_network_id(),
+                    ),
                     Err(BrokerError::Protocol)
                 );
             }
@@ -38370,7 +38460,10 @@ mod protocol {
                     encode_canonical(&response_wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
                         .expect("encode bounded HF inference response"),
                 );
-                assert_eq!(validate_operation_response(&request, &response), Ok(()));
+                assert_eq!(
+                    validate_operation_response(&request, &response, &server_test_network_id(),),
+                    Ok(())
+                );
                 for rendered in [
                     format!("{request_wire:?}"),
                     format!("{request:?}"),
@@ -39092,13 +39185,13 @@ mod protocol {
                 )
                 .expect("encode forbidden zero output");
                 assert_eq!(
-                    make_operation_response(&request, STATUS_OK_V1, zero_output),
+                    make_operation_response(&request, STATUS_OK_V1, zero_output, &state.network_id,),
                     Err(BrokerError::Protocol)
                 );
                 let unit = encode_canonical(&(), MAX_TRANSPARENCY_PRF_FRAME_BYTES_V1)
                     .expect("encode payload-free error");
                 assert_eq!(
-                    make_operation_response(&request, STATUS_AMBIGUOUS_V1, unit),
+                    make_operation_response(&request, STATUS_AMBIGUOUS_V1, unit, &state.network_id,),
                     Err(BrokerError::Protocol),
                     "read-only PRF derivation can never report an ambiguous mutation"
                 );
@@ -39313,15 +39406,30 @@ mod protocol {
                 let unit = encode_canonical(&(), MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1)
                     .expect("encode payload-free failure");
                 assert!(
-                    make_operation_response(&compare_request, STATUS_AMBIGUOUS_V1, unit.clone(),)
-                        .is_ok()
+                    make_operation_response(
+                        &compare_request,
+                        STATUS_AMBIGUOUS_V1,
+                        unit.clone(),
+                        &state.network_id,
+                    )
+                    .is_ok()
                 );
                 assert!(
-                    make_operation_response(&compare_request, STATUS_CONFLICT_V1, unit.clone())
-                        .is_ok()
+                    make_operation_response(
+                        &compare_request,
+                        STATUS_CONFLICT_V1,
+                        unit.clone(),
+                        &state.network_id,
+                    )
+                    .is_ok()
                 );
                 assert_eq!(
-                    make_operation_response(&finalized_request, STATUS_AMBIGUOUS_V1, unit),
+                    make_operation_response(
+                        &finalized_request,
+                        STATUS_AMBIGUOUS_V1,
+                        unit,
+                        &state.network_id,
+                    ),
                     Err(BrokerError::Protocol)
                 );
                 let zero_query =
@@ -39560,10 +39668,22 @@ mod protocol {
                     .expect("encode payload-free transition failure");
                 for request in [&acquire_request, &renew_request, &release_request] {
                     assert!(
-                        make_operation_response(request, STATUS_CONFLICT_V1, unit.clone()).is_ok()
+                        make_operation_response(
+                            request,
+                            STATUS_CONFLICT_V1,
+                            unit.clone(),
+                            &state.network_id,
+                        )
+                        .is_ok()
                     );
                     assert!(
-                        make_operation_response(request, STATUS_AMBIGUOUS_V1, unit.clone()).is_ok()
+                        make_operation_response(
+                            request,
+                            STATUS_AMBIGUOUS_V1,
+                            unit.clone(),
+                            &state.network_id,
+                        )
+                        .is_ok()
                     );
                 }
             }
@@ -39878,9 +39998,23 @@ mod protocol {
                 let unit = encode_canonical(&(), MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1)
                     .expect("encode payload-free publication failure");
                 assert!(
-                    make_operation_response(&request, STATUS_CONFLICT_V1, unit.clone()).is_ok()
+                    make_operation_response(
+                        &request,
+                        STATUS_CONFLICT_V1,
+                        unit.clone(),
+                        &state.network_id,
+                    )
+                    .is_ok()
                 );
-                assert!(make_operation_response(&request, STATUS_AMBIGUOUS_V1, unit).is_ok());
+                assert!(
+                    make_operation_response(
+                        &request,
+                        STATUS_AMBIGUOUS_V1,
+                        unit,
+                        &state.network_id,
+                    )
+                    .is_ok()
+                );
             }
             #[test]
             fn fenced_privacy_head_reader_binding_is_exact_and_drift_checked() {
@@ -40101,14 +40235,32 @@ mod protocol {
                 let unit = encode_canonical(&(), MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1)
                     .expect("encode payload-free head-read failure");
                 assert_eq!(
-                    make_operation_response(&request, STATUS_CONFLICT_V1, unit.clone()),
+                    make_operation_response(
+                        &request,
+                        STATUS_CONFLICT_V1,
+                        unit.clone(),
+                        &state.network_id,
+                    ),
                     Err(BrokerError::Protocol)
                 );
                 assert_eq!(
-                    make_operation_response(&request, STATUS_AMBIGUOUS_V1, unit.clone()),
+                    make_operation_response(
+                        &request,
+                        STATUS_AMBIGUOUS_V1,
+                        unit.clone(),
+                        &state.network_id,
+                    ),
                     Err(BrokerError::Protocol)
                 );
-                assert!(make_operation_response(&request, STATUS_UNAVAILABLE_V1, unit).is_ok());
+                assert!(
+                    make_operation_response(
+                        &request,
+                        STATUS_UNAVAILABLE_V1,
+                        unit,
+                        &state.network_id,
+                    )
+                    .is_ok()
+                );
             }
             #[test]
             fn por_replay_archive_binding_is_exact_bounded_and_drift_checked() {
@@ -40382,8 +40534,13 @@ mod protocol {
                 let unit = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                     .expect("encode payload-free failure");
                 assert!(
-                    make_operation_response(&append_request, STATUS_AMBIGUOUS_V1, unit.clone(),)
-                        .is_ok(),
+                    make_operation_response(
+                        &append_request,
+                        STATUS_AMBIGUOUS_V1,
+                        unit.clone(),
+                        &state.network_id,
+                    )
+                    .is_ok(),
                     "append is the only replay-archive operation allowed to be ambiguous"
                 );
                 let lookup_request = make_operation_request(
@@ -40396,7 +40553,12 @@ mod protocol {
                 )
                 .expect("construct lookup envelope");
                 assert_eq!(
-                    make_operation_response(&lookup_request, STATUS_AMBIGUOUS_V1, unit),
+                    make_operation_response(
+                        &lookup_request,
+                        STATUS_AMBIGUOUS_V1,
+                        unit,
+                        &state.network_id,
+                    ),
                     Err(BrokerError::Protocol)
                 );
             }
@@ -40439,10 +40601,15 @@ mod protocol {
                     STATUS_AMBIGUOUS_V1,
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                         .expect("encode empty ambiguous result"),
+                    &server_test_network_id(),
                 )
                 .expect("construct ACME ambiguous response");
                 assert_eq!(
-                    validate_operation_response(&acme_request, &ambiguous),
+                    validate_operation_response(
+                        &acme_request,
+                        &ambiguous,
+                        &server_test_network_id(),
+                    ),
                     Ok(())
                 );
                 let compliance_binding = plain_runtime_binding(
@@ -40498,7 +40665,11 @@ mod protocol {
                     "the canonical invalid-status fixture is within the compliance wire cap"
                 );
                 assert_eq!(
-                    validate_operation_response(&compliance_request, &invalid_ambiguity),
+                    validate_operation_response(
+                        &compliance_request,
+                        &invalid_ambiguity,
+                        &server_test_network_id(),
+                    ),
                     Err(BrokerError::Protocol)
                 );
                 let pop_binding = pop_runtime_binding();
@@ -40517,10 +40688,15 @@ mod protocol {
                     STATUS_AMBIGUOUS_V1,
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                         .expect("encode empty ambiguous result"),
+                    &server_test_network_id(),
                 )
                 .expect("construct PoP resolve ambiguity");
                 assert_eq!(
-                    validate_operation_response(&pop_resolve, &ambiguous_resolve),
+                    validate_operation_response(
+                        &pop_resolve,
+                        &ambiguous_resolve,
+                        &server_test_network_id(),
+                    ),
                     Ok(())
                 );
                 let pop_wrap = validated_test_operation(
@@ -40540,10 +40716,15 @@ mod protocol {
                     STATUS_AMBIGUOUS_V1,
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                         .expect("encode empty ambiguous result"),
+                    &server_test_network_id(),
                 )
                 .expect("construct PoP wrap ambiguity");
                 assert_eq!(
-                    validate_operation_response(&pop_wrap, &ambiguous_wrap),
+                    validate_operation_response(
+                        &pop_wrap,
+                        &ambiguous_wrap,
+                        &server_test_network_id(),
+                    ),
                     Ok(())
                 );
             }
@@ -40702,7 +40883,7 @@ mod protocol {
                     .expect("decode empty checkpoint head"),
                     None
                 );
-                validate_operation_result(&request, STATUS_OK_V1, &result)
+                validate_operation_result(&request, STATUS_OK_V1, &result, &state.network_id)
                     .expect("validate checkpoint load result");
                 let unsupported_version = CHECKPOINT_LOAD_REQUEST_VERSION_V1 ^ u8::MAX;
                 let alternate_version = make_operation_request(
@@ -40763,10 +40944,15 @@ mod protocol {
                     STATUS_AMBIGUOUS_V1,
                     encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                         .expect("encode empty ambiguous checkpoint result"),
+                    &state.network_id,
                 )
                 .expect("construct checkpoint CAS ambiguity");
                 assert_eq!(
-                    validate_operation_response(&malformed_compare, &ambiguous_compare),
+                    validate_operation_response(
+                        &malformed_compare,
+                        &ambiguous_compare,
+                        &state.network_id,
+                    ),
                     Ok(())
                 );
                 let journal_binding = reputation_runtime_test_binding(
@@ -40844,8 +41030,13 @@ mod protocol {
                 validate_operation_request(&supports).expect("validate supports-authority request");
                 let supports_result = dispatch_server_operation(&journal_state, &supports)
                     .expect("dispatch supports-authority request");
-                validate_operation_result(&supports, STATUS_OK_V1, &supports_result)
-                    .expect("validate supports-authority result");
+                validate_operation_result(
+                    &supports,
+                    STATUS_OK_V1,
+                    &supports_result,
+                    &journal_state.network_id,
+                )
+                .expect("validate supports-authority result");
                 assert!(
                     decode_canonical::<bool>(
                         &supports_result,
@@ -40998,8 +41189,13 @@ mod protocol {
                         .expect("validate reputation threshold request");
                     let result = dispatch_server_operation(&threshold_state, &operation)
                         .expect("reconcile reputation threshold request");
-                    validate_operation_result(&operation, STATUS_OK_V1, &result)
-                        .expect("validate pending threshold result");
+                    validate_operation_result(
+                        &operation,
+                        STATUS_OK_V1,
+                        &result,
+                        &threshold_state.network_id,
+                    )
+                    .expect("validate pending threshold result");
                     assert_eq!(
                         decode_canonical::<ReputationReconcileResultWireV1>(
                             &result,
@@ -41074,8 +41270,13 @@ mod protocol {
                         .expect("validate reputation governance request");
                     let result = dispatch_server_operation(&governance_state, &operation)
                         .expect("reconcile reputation governance request");
-                    validate_operation_result(&operation, STATUS_OK_V1, &result)
-                        .expect("validate pending governance result");
+                    validate_operation_result(
+                        &operation,
+                        STATUS_OK_V1,
+                        &result,
+                        &governance_state.network_id,
+                    )
+                    .expect("validate pending governance result");
                 }
                 assert_eq!(
                     governance_backend
@@ -41171,7 +41372,12 @@ mod protocol {
                     let exact = encode_canonical(&exact, MAX_OPERATION_FRAME_BYTES_V1)
                         .expect("encode exact reputation qualification");
                     assert_eq!(
-                        validate_operation_result(&operation, STATUS_OK_V1, &exact),
+                        validate_operation_result(
+                            &operation,
+                            STATUS_OK_V1,
+                            &exact,
+                            &server_test_network_id(),
+                        ),
                         Ok(()),
                         "{slot:?}"
                     );
@@ -41185,14 +41391,24 @@ mod protocol {
                     let stale = encode_canonical(&stale, MAX_OPERATION_FRAME_BYTES_V1)
                         .expect("encode stale reputation qualification");
                     assert_eq!(
-                        validate_operation_result(&operation, STATUS_OK_V1, &stale),
+                        validate_operation_result(
+                            &operation,
+                            STATUS_OK_V1,
+                            &stale,
+                            &server_test_network_id(),
+                        ),
                         Err(BrokerError::Protocol),
                         "{slot:?}"
                     );
                     let mut trailing = exact;
                     trailing.push(0);
                     assert_eq!(
-                        validate_operation_result(&operation, STATUS_OK_V1, &trailing),
+                        validate_operation_result(
+                            &operation,
+                            STATUS_OK_V1,
+                            &trailing,
+                            &server_test_network_id(),
+                        ),
                         Err(BrokerError::Protocol),
                         "{slot:?}"
                     );
@@ -41227,8 +41443,13 @@ mod protocol {
                 };
                 let pending = encode_canonical(&pending, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1)
                     .expect("encode pending reconciliation");
-                validate_operation_result(&threshold_operation, STATUS_OK_V1, &pending)
-                    .expect("accept canonical pending result");
+                validate_operation_result(
+                    &threshold_operation,
+                    STATUS_OK_V1,
+                    &pending,
+                    &server_test_network_id(),
+                )
+                .expect("accept canonical pending result");
                 for invalid in [
                     ReputationReconcileResultWireV1 {
                         outcome: 0,
@@ -41249,14 +41470,24 @@ mod protocol {
                     let invalid = encode_canonical(&invalid, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1)
                         .expect("encode invalid reconciliation result");
                     assert_eq!(
-                        validate_operation_result(&threshold_operation, STATUS_OK_V1, &invalid,),
+                        validate_operation_result(
+                            &threshold_operation,
+                            STATUS_OK_V1,
+                            &invalid,
+                            &server_test_network_id(),
+                        ),
                         Err(BrokerError::Protocol)
                     );
                 }
                 let unit = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                     .expect("encode payload-free broker status");
                 assert_eq!(
-                    validate_operation_result(&threshold_operation, STATUS_AMBIGUOUS_V1, &unit,),
+                    validate_operation_result(
+                        &threshold_operation,
+                        STATUS_AMBIGUOUS_V1,
+                        &unit,
+                        &server_test_network_id(),
+                    ),
                     Ok(())
                 );
                 let governance_request = reputation_test_governance_request();
@@ -41280,7 +41511,12 @@ mod protocol {
                 validate_operation_request(&governance_operation)
                     .expect("validate governance operation");
                 assert_eq!(
-                    validate_operation_result(&governance_operation, STATUS_AMBIGUOUS_V1, &unit,),
+                    validate_operation_result(
+                        &governance_operation,
+                        STATUS_AMBIGUOUS_V1,
+                        &unit,
+                        &server_test_network_id(),
+                    ),
                     Ok(())
                 );
                 let journal_binding = reputation_runtime_test_binding(
@@ -41311,13 +41547,23 @@ mod protocol {
                 validate_operation_request(&journal_operation)
                     .expect("validate supports-authority operation");
                 assert_eq!(
-                    validate_operation_result(&journal_operation, STATUS_AMBIGUOUS_V1, &unit,),
+                    validate_operation_result(
+                        &journal_operation,
+                        STATUS_AMBIGUOUS_V1,
+                        &unit,
+                        &server_test_network_id(),
+                    ),
                     Err(BrokerError::Protocol),
                     "read-only authority probing cannot be ambiguous"
                 );
                 journal_operation.operation = OPERATION_REPUTATION_JOURNAL_SUBMIT_V1;
                 assert_eq!(
-                    validate_operation_result(&journal_operation, STATUS_AMBIGUOUS_V1, &unit,),
+                    validate_operation_result(
+                        &journal_operation,
+                        STATUS_AMBIGUOUS_V1,
+                        &unit,
+                        &server_test_network_id(),
+                    ),
                     Ok(()),
                     "journal submission is mutation-ambiguous"
                 );
@@ -41733,8 +41979,13 @@ mod protocol {
                 .expect("validate exact archive install");
                 let install_result = dispatch_server_operation(&state, &install)
                     .expect("install genuine archive fixture");
-                validate_operation_result(&install, STATUS_OK_V1, &install_result)
-                    .expect("validate exact archive install result");
+                validate_operation_result(
+                    &install,
+                    STATUS_OK_V1,
+                    &install_result,
+                    &state.network_id,
+                )
+                .expect("validate exact archive install result");
                 let install_result = decode_canonical::<
                     ModerationPanelNotificationArchiveInstallResultWireV1,
                 >(
@@ -41897,8 +42148,13 @@ mod protocol {
                 .expect("validate empty archive-head readback request");
                 let empty_head_read_result = dispatch_server_operation(&state, &empty_head_read)
                     .expect("read empty public archive head");
-                validate_operation_result(&empty_head_read, STATUS_OK_V1, &empty_head_read_result)
-                    .expect("validate empty archive-head readback result");
+                validate_operation_result(
+                    &empty_head_read,
+                    STATUS_OK_V1,
+                    &empty_head_read_result,
+                    &state.network_id,
+                )
+                .expect("validate empty archive-head readback result");
                 let empty_head_read_result =
                     decode_canonical::<ModerationPanelNotificationArchiveHeadReadResultWireV1>(
                         &empty_head_read_result,
@@ -42034,8 +42290,13 @@ mod protocol {
                 .expect("validate genuine archive-head publication");
                 let publish_result = dispatch_server_operation(&state, &publish)
                     .expect("publish genuine signed archive head");
-                validate_operation_result(&publish, STATUS_OK_V1, &publish_result)
-                    .expect("validate dedicated archive-head result");
+                validate_operation_result(
+                    &publish,
+                    STATUS_OK_V1,
+                    &publish_result,
+                    &state.network_id,
+                )
+                .expect("validate dedicated archive-head result");
                 let publish_result = decode_canonical::<
                     ModerationPanelNotificationArchiveHeadPublishResultWireV1,
                 >(
@@ -42069,6 +42330,7 @@ mod protocol {
                     &published_head_read,
                     STATUS_OK_V1,
                     &published_head_read_result,
+                    &state.network_id,
                 )
                 .expect("validate published archive-head readback result");
                 let published_head_read_result =

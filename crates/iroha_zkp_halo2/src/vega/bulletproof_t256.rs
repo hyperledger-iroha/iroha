@@ -60,9 +60,35 @@ const ZK_AMS_MEMBERSHIP_FIXED_PROOF_SCALARS_V1: usize = 5;
 /// the generalized-Bulletproof RAII containers.
 pub(super) struct ZeroizingT256ScalarCopyV1(Scalar);
 
+struct BorrowedT256ScalarCopyV1<'a>(&'a mut Scalar);
+
+impl BorrowedT256ScalarCopyV1<'_> {
+    fn get(&self) -> Scalar {
+        *self.0
+    }
+}
+
+impl Drop for BorrowedT256ScalarCopyV1<'_> {
+    fn drop(&mut self) {
+        self.0.clear_secret();
+    }
+}
+
 impl ZeroizingT256ScalarCopyV1 {
-    pub(super) fn new(value: Scalar) -> Self {
-        Self(value)
+    pub(super) fn new(mut value: Scalar) -> Self {
+        let incoming = BorrowedT256ScalarCopyV1(&mut value);
+        let owned = Self(incoming.get());
+        drop(incoming);
+        owned
+    }
+
+    /// Transfer a named scalar slot into this owner and clear the source slot
+    /// on normal return or unwind.
+    pub(super) fn take(value: &mut Scalar) -> Self {
+        let incoming = BorrowedT256ScalarCopyV1(value);
+        let owned = Self(incoming.get());
+        drop(incoming);
+        owned
     }
 
     pub(super) fn get(&self) -> Scalar {
@@ -71,6 +97,12 @@ impl ZeroizingT256ScalarCopyV1 {
 
     pub(super) fn as_ref(&self) -> &Scalar {
         &self.0
+    }
+
+    /// Accumulate one borrowed product without materializing either operand or
+    /// the running secret in a caller-owned `Copy` slot.
+    pub(super) fn add_product_assign(&mut self, left: &Scalar, right: &Scalar) {
+        self.0 += *left * *right;
     }
 }
 
@@ -96,8 +128,13 @@ impl ZeroizingT256ScalarVecV1 {
         Self(Vec::with_capacity(capacity))
     }
 
-    pub(super) fn push(&mut self, value: Scalar) {
-        self.0.push(value);
+    pub(super) fn push(&mut self, mut value: Scalar) {
+        let incoming = BorrowedT256ScalarCopyV1(&mut value);
+        self.0.push(incoming.get());
+        // `Scalar` is `Copy`, so the retained vector element does not consume
+        // this callee-owned parameter slot. Clear it on success; the guard
+        // performs the same erasure if allocation unwinds inside `Vec::push`.
+        drop(incoming);
     }
 
     pub(super) fn len(&self) -> usize {
@@ -675,9 +712,9 @@ fn append_boolean_witness(
     a_r: &mut ZeroizingT256ScalarVecV1,
     bit: bool,
 ) {
-    let bit = Scalar::from_u64(u64::from(bit));
-    a_l.push(bit);
-    a_r.push(bit);
+    let bit = ZeroizingT256ScalarCopyV1::new(Scalar::from_u64(u64::from(bit)));
+    a_l.push(bit.get());
+    a_r.push(bit.get());
 }
 
 fn membership_commitment_for_suite<S>(
@@ -704,15 +741,10 @@ where
         values.push(signed_scalar(coefficient));
     }
     let mut commitment_terms = SecretMultiexpBuilder::<S>::new(values.0.len() + 1)?;
-    for (scalar, point) in values
-        .0
-        .iter()
-        .copied()
-        .zip(generators.g_bold.iter().copied())
-    {
+    for (scalar, point) in values.0.iter().zip(generators.g_bold) {
         commitment_terms.push(scalar, point)?;
     }
-    commitment_terms.push(blinding.get(), generators.h)?;
+    commitment_terms.push(blinding.as_ref(), &generators.h)?;
     let commitment = commitment_terms.evaluate()?;
     if commitment.is_identity() {
         return Err(ZkAmsT256MembershipErrorV1::CommitmentIdentity);
@@ -1174,6 +1206,41 @@ mod tests {
         vega::VEGA_T256_SCALAR_MODULUS_BE_V1,
     };
 
+    #[test]
+    fn scalar_copy_owner_take_clears_named_source_and_guards_by_value_boundary() {
+        let expected = Scalar::from_u64(41);
+        let mut source_scalar = expected;
+        let owned = ZeroizingT256ScalarCopyV1::take(&mut source_scalar);
+        assert!(source_scalar.is_zero());
+        assert_eq!(owned.get(), expected);
+
+        let source = include_str!("bulletproof_t256.rs");
+        assert!(source.contains("pub(super) fn new(mut value: Scalar) -> Self"));
+        assert!(source.contains("let incoming = BorrowedT256ScalarCopyV1(&mut value);"));
+        assert!(source.contains("pub(super) fn take(value: &mut Scalar) -> Self"));
+        assert!(source.contains("impl Drop for BorrowedT256ScalarCopyV1<'_>"));
+        let vector_owner = source
+            .split_once("impl ZeroizingT256ScalarVecV1 {")
+            .expect("scalar-vector owner")
+            .1
+            .split_once("impl core::fmt::Debug for ZeroizingT256ScalarVecV1")
+            .expect("scalar-vector owner boundary")
+            .0;
+        assert!(vector_owner.contains("pub(super) fn push(&mut self, mut value: Scalar)"));
+        assert!(vector_owner.contains("let incoming = BorrowedT256ScalarCopyV1(&mut value);"));
+        assert!(vector_owner.contains("self.0.push(incoming.get());"));
+        assert!(vector_owner.contains("drop(incoming);"));
+        let boolean_witness = source
+            .split_once("fn append_boolean_witness(")
+            .expect("Boolean witness helper")
+            .1
+            .split_once("\nfn membership_commitment_for_suite")
+            .expect("Boolean witness helper boundary")
+            .0;
+        assert!(boolean_witness.contains("let bit = ZeroizingT256ScalarCopyV1::new("));
+        assert_eq!(boolean_witness.matches("push(bit.get())").count(), 2);
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct TinyT256Suite;
 
@@ -1274,17 +1341,13 @@ mod tests {
         let mask = Scalar::from_u64(13);
         let mut commitment_terms = SecretMultiexpBuilder::<TinyT256Suite>::new(values.len() + 1)
             .expect("fixed fixture commitment capacity");
-        for (scalar, point) in values
-            .iter()
-            .copied()
-            .zip(generators.g_bold.iter().copied())
-        {
+        for (scalar, point) in values.iter().zip(generators.g_bold) {
             commitment_terms
                 .push(scalar, point)
                 .expect("fixture term fits fixed commitment capacity");
         }
         commitment_terms
-            .push(mask, generators.h)
+            .push(&mask, &generators.h)
             .expect("fixture mask fits fixed commitment capacity");
         let commitment = commitment_terms
             .evaluate()
@@ -1337,10 +1400,10 @@ mod tests {
         let mut terms = SecretMultiexpBuilder::<TinyT256Suite>::new(2)
             .expect("fixed scalar commitment capacity");
         terms
-            .push(value, generators.g)
+            .push(&value, &generators.g)
             .expect("scalar value term fits exact capacity");
         terms
-            .push(mask, generators.h)
+            .push(&mask, &generators.h)
             .expect("scalar mask term fits exact capacity");
         terms.evaluate().expect("complete scalar commitment")
     }
@@ -1454,17 +1517,13 @@ mod tests {
         let mask = Scalar::from_u64(37);
         let mut terms = SecretMultiexpBuilder::<TinyT256Suite>::new(values.len() + 1)
             .expect("fixed mixed commitment capacity");
-        for (value, generator) in values
-            .iter()
-            .copied()
-            .zip(generators.g_bold.iter().copied())
-        {
+        for (value, generator) in values.iter().zip(generators.g_bold) {
             terms
                 .push(value, generator)
                 .expect("mixed value fits exact capacity");
         }
         terms
-            .push(mask, generators.h)
+            .push(&mask, &generators.h)
             .expect("mixed mask fits exact capacity");
         (
             terms.evaluate().expect("complete mixed commitment"),
@@ -1533,17 +1592,13 @@ mod tests {
         values[coefficients.len()] = tail;
         let mut commitment_terms = SecretMultiexpBuilder::<TinyT256Suite>::new(padded_gates + 1)
             .expect("padded commitment capacity");
-        for (scalar, point) in values
-            .iter()
-            .copied()
-            .zip(generators.g_bold.iter().copied())
-        {
+        for (scalar, point) in values.iter().zip(generators.g_bold) {
             commitment_terms
                 .push(scalar, point)
                 .expect("padded commitment term fits capacity");
         }
         commitment_terms
-            .push(mask, generators.h)
+            .push(&mask, &generators.h)
             .expect("padded commitment mask fits capacity");
         let commitment = commitment_terms
             .evaluate()

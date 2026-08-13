@@ -388,7 +388,10 @@ fn drain_v2_ingress(
         // later owner.
         return Ok(());
     }
-    for turn in outer_ingress_turns(limit, executor.context().id(), executor.context().height) {
+    let mut outer_turns =
+        outer_ingress_turns(limit, executor.context().id(), executor.context().height);
+    while let Some(current_turn) = outer_turns.next_current() {
+        let turn = current_turn.turn();
         if mode != V2IngressDrainMode::Ordinary && turn != OuterIngressTurn::Ingress {
             continue;
         }

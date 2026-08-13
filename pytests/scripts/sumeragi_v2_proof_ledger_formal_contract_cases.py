@@ -253,6 +253,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_adapter_main_03.rs"),
         Path("tests/v2_adapter_main_04.rs"),
         Path("tests/v2_adapter_04_wal_recovery.rs"),
+        Path("tests/v2_adapter_04b_lifecycle_startup.rs"),
         Path("tests/v2_adapter_05_direct_lifecycle.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/tests/v2_adapter_main_00.rs"): (
@@ -277,11 +278,14 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_lifecycle_work_registry_01.rs"),
         Path("tests/v2_lifecycle_work_registry_02.rs"),
         Path("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_exact_registry_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_recovery_surface_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_replay_evidence_cases.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (
+        Path("tests/v2_runtime_pending_binding_cases.rs"),
         Path("tests/v2_runtime_main_00.rs"),
         Path("tests/v2_runtime_main_01.rs"),
         Path("tests/v2_runtime_main_02.rs"),
@@ -298,6 +302,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("v2_worker/current_lane_output_rollover_claim.rs"),
         Path("tests/v2_worker_main_00.rs"),
         Path("tests/v2_worker_main_01.rs"),
+        Path("tests/v2_worker_lifecycle_capacity_cases.rs"),
         Path("tests/v2_worker_equivocation_and_selected_serve_fixture.rs"),
         Path("v2_worker/applied_height_handoff_tests.rs"),
         Path("v2_worker/upstream_reply_route_test.rs"),
@@ -356,6 +361,24 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_effects_main_04.rs"),
         Path("tests/v2_effects_main_05.rs"),
         Path("tests/v2_effects_03_locked_body_and_sidecar.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs"): (
+        Path("v2_effects_kura_tip_replay.rs"),
+        Path("v2_effects_01_view_churn_and_runtime_steps.rs"),
+        Path("v2_effects_02_admission_handoffs.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/tests/v2_runtime_main_06.rs"): (
+        Path("v2_runtime_periodic_fairness.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs"): (
+        Path("v2_worker_reply_route_cases.rs"),
+        Path("v2_worker_backpressure_cases.rs"),
+        Path("v2_worker_nonzero_view_restart.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs"): (
+        Path("v2_worker_serve_unsealed_cases.rs"),
+        Path("v2_worker_serve_decision_restart_cases.rs"),
+        Path("v2_worker_certified_serve_budget_cases.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
         Path("v2_lane_work/canonical_executed_block_application_repair.rs"),
@@ -2056,13 +2079,7 @@ def test_each_reviewed_rust_include_manifest_fails_closed(
     parent.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT_DIR / parent_relative, parent)
     components = REVIEWED_RUST_INCLUDE_MANIFESTS[parent_relative]
-    for component_relative in components:
-        destination = parent.parent / component_relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(
-            (ROOT_DIR / parent_relative).parent / component_relative,
-            destination,
-        )
+    copy_reviewed_rust_include_components(repo_root)
     relative = parent_relative.as_posix()
     errors: list[str] = []
     _path, expanded = module._read_reviewed_rust_source(
@@ -4551,3 +4568,167 @@ def _assert_commit_import_release_or_stale_artifact(
             f"Commit-import release theorem {symbol} must state only" in error
             for error in errors
         ), errors
+
+
+def test_borrow_bound_outer_ingress_cursor_contract_is_current(tmp_path: Path) -> None:
+    """The live cursor advances only when its exact current-turn borrow drops."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    runner_source = runner_path.read_text(encoding="utf-8")
+    item_errors: list[str] = []
+    outer_turns = module._require_rust_item(
+        runner_path, runner_source, "outer_ingress_turns", item_errors
+    )
+
+    assert item_errors == []
+    assert module._outer_ingress_cursor_source_fidelity_errors(
+        runner_path, runner_source, outer_turns
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("item_name", "context", "old", "new", "expected_error"),
+    (
+        (
+            "next_current",
+            (("impl", "OuterIngressTurns"),),
+            "fn next_current",
+            "fn removed_next_current",
+            "borrow-bound outer-ingress current-turn mint; found 0",
+        ),
+        (
+            "next_current",
+            (("impl", "OuterIngressTurns"),),
+            """Some(LifecycleCurrentRunnerTurn {
+            turn: self.next_turn,
+            cursor: self,
+        })""",
+            """Some(LifecycleCurrentRunnerTurn {
+            cursor: self,
+            turn: self.next_turn,
+        })""",
+            "current-turn mint must freeze the exact next turn",
+        ),
+        (
+            "advance_current",
+            (("impl", "OuterIngressTurns"),),
+            """OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
+            OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,""",
+            """OuterIngressTurn::Completion => OuterIngressTurn::Ingress,
+            OuterIngressTurn::Runtime => OuterIngressTurn::Runtime,""",
+            "cursor advance must preserve Completion/Runtime/Ingress",
+        ),
+        (
+            "drop",
+            (("impl", "Drop", "for", "LifecycleCurrentRunnerTurn", "<", "'", "_", ">"),),
+            "fn drop",
+            "fn removed_drop",
+            "borrow-bound outer-ingress current-turn Drop; found 0",
+        ),
+    ),
+)
+def test_borrow_bound_outer_ingress_cursor_mutations_fail_closed(
+    tmp_path: Path,
+    item_name: str,
+    context: tuple[tuple[str, ...], ...],
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Removal or reordering cannot bypass the borrow-bound cursor contract."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    mutate_rust_item_source_in_context(
+        module, runner_path, item_name, context, old, new
+    )
+    runner_source = runner_path.read_text(encoding="utf-8")
+    outer_turns = module._require_rust_item(
+        runner_path, runner_source, "outer_ingress_turns", []
+    )
+    errors = module._outer_ingress_cursor_source_fidelity_errors(
+        runner_path, runner_source, outer_turns
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_borrow_bound_outer_ingress_reordering_fails_closed(tmp_path: Path) -> None:
+    """The checked ingress receive cannot move before serialized Runtime service."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    drain_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+    )
+    source = drain_path.read_text(encoding="utf-8")
+    (drain,) = module.rust_items(source, "drain_v2_ingress")
+    assert module._borrow_bound_outer_ingress_order_errors(drain_path, drain) == []
+    selector = "try_recv_if_checked_retiring_obsolete_with_barrier_bypass"
+    advance = "advance_executor(receiver, executor, services, 1)?;"
+    mutated = drain.source.replace(selector, "removed_checked_selector", 1)
+    mutated = mutated.replace(
+        advance,
+        "receiver.try_recv_if_checked_retiring_obsolete_with_barrier_bypass("
+        "FairV2IngressBarrierBypass::None, |_| false);\n            " + advance,
+        1,
+    )
+    drain_path.write_text(source.replace(drain.source, mutated, 1), encoding="utf-8")
+    (mutated_drain,) = module.rust_items(
+        drain_path.read_text(encoding="utf-8"), "drain_v2_ingress"
+    )
+
+    errors = module._borrow_bound_outer_ingress_order_errors(
+        drain_path, mutated_drain
+    )
+    assert any("serialized advance_executor turn" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected_counts"),
+    (
+        ("let linked_before = match removed_statat(", "(0, 0, 0)"),
+        (
+            """if false {
+                let linked_before = match rustix::fs::statat(
+                    &self.directory.directory,
+                    &self.entry_name,
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                ) {
+                    Ok(stat) => stat,
+                    Err(_) => unreachable!(),
+                };
+                let _ = linked_before;
+            }
+            let linked_before = match rustix::fs::statat(""",
+            "(0, 0, 2)",
+        ),
+    ),
+)
+def test_serviced_candidate_read_discriminator_fails_closed_without_crashing(
+    tmp_path: Path,
+    replacement: str,
+    expected_counts: str,
+) -> None:
+    """Missing or duplicate bounded-read ownership returns a diagnostic."""
+
+    module = load_checker()
+    copy_serviced_candidate_production_fixture(tmp_path)
+    assert module._serviced_candidate_production_source_fidelity_errors(tmp_path) == []
+    safety_path = tmp_path / "crates/iroha_core/src/sumeragi/safety_wal.rs"
+    mutate_source_once(
+        safety_path,
+        "let linked_before = match rustix::fs::statat(",
+        replacement,
+    )
+
+    errors = module._serviced_candidate_production_source_fidelity_errors(tmp_path)
+    assert any(
+        "require exactly one parsed bounded adjacent read" in error
+        and f"discriminator_counts={expected_counts}" in error
+        for error in errors
+    ), errors

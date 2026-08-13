@@ -25,6 +25,71 @@ use zeroize::{Zeroize, Zeroizing};
 
 use super::FcmpNativeErrorV1;
 
+/// Clears one function-owned secret slot on success, error, and unwind.
+struct BorrowedZeroizingCopySlot<'a, T: Zeroize>(&'a mut T);
+
+impl<'a, T: Zeroize> BorrowedZeroizingCopySlot<'a, T> {
+    fn as_ref(&self) -> &T {
+        self.0
+    }
+}
+
+impl<T: Zeroize> Drop for BorrowedZeroizingCopySlot<'_, T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *self.0);
+    }
+}
+
+struct SecretCopyValueV1<T: Copy + Zeroize>(T);
+
+impl<T: Copy + Zeroize> SecretCopyValueV1<T> {
+    fn new(mut value: T) -> Self {
+        let incoming = BorrowedZeroizingCopySlot(&mut value);
+        let owned = Self(*incoming.as_ref());
+        drop(incoming);
+        owned
+    }
+
+    fn as_ref(&self) -> &T {
+        &self.0
+    }
+
+    fn take(value: &mut T) -> Self {
+        let incoming = BorrowedZeroizingCopySlot(value);
+        let owned = Self(*incoming.as_ref());
+        drop(incoming);
+        owned
+    }
+
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+
+    fn expose_copy(&self) -> T {
+        self.0
+    }
+}
+
+impl<T: Copy + Zeroize> Drop for SecretCopyValueV1<T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.0);
+    }
+}
+
+struct SecretU256V1(U256);
+
+impl Drop for SecretU256V1 {
+    fn drop(&mut self) {
+        self.0 = U256::ZERO;
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.0);
+    }
+}
+
 impl_modulus!(
     Field25519Modulus,
     U256,
@@ -64,6 +129,30 @@ macro_rules! define_local_field {
 
             pub(super) const fn square(&self) -> Self {
                 Self(self.0.square())
+            }
+
+            pub(super) fn mul_ref(&self, rhs: &Self) -> Self {
+                Self(self.0 * rhs.0)
+            }
+
+            pub(super) fn add_ref(&self, rhs: &Self) -> Self {
+                Self(self.0 + rhs.0)
+            }
+
+            pub(super) fn sub_ref(&self, rhs: &Self) -> Self {
+                Self(self.0 - rhs.0)
+            }
+
+            pub(super) fn neg_ref(&self) -> Self {
+                Self(-self.0)
+            }
+
+            pub(super) fn is_odd_ref(&self) -> bool {
+                self.retrieve().to_le_bytes()[0] & 1 == 1
+            }
+
+            pub(super) fn eq_ref(&self, rhs: &Self) -> bool {
+                self.0 == rhs.0
             }
 
             pub(super) const fn pow(&self, exponent: &U256) -> Self {
@@ -354,6 +443,25 @@ macro_rules! define_cycle_point {
                 Some((self.x * inverse, self.y * inverse))
             }
 
+            /// Convert a secret-derived owned projective point to the two
+            /// intentional witness coordinates while erasing both the point
+            /// slot and its projective inverse on every exit path.
+            pub(super) fn secret_coordinates_v1(mut self) -> Option<($field, $field)> {
+                let point = BorrowedZeroizingCopySlot(&mut self);
+                let (mut inverse, is_some) = point.as_ref().z.invert();
+                let inverse = BorrowedZeroizingCopySlot(&mut inverse);
+                if !bool::from(is_some) {
+                    return None;
+                }
+                let coordinates = (
+                    point.as_ref().x.mul_ref(inverse.as_ref()),
+                    point.as_ref().y.mul_ref(inverse.as_ref()),
+                );
+                drop(inverse);
+                drop(point);
+                Some(coordinates)
+            }
+
             pub(super) fn x(self) -> Option<$field> {
                 self.coordinates().map(|(x, _)| x)
             }
@@ -530,6 +638,110 @@ pub(super) fn edwards_to_wei25519(
     Ok((wei_x, wei_y))
 }
 
+fn secret_decode_field25519_v1(bytes: &[u8; 32]) -> Option<Field25519> {
+    let integer = SecretU256V1(U256::from_le_slice(bytes));
+    (integer.0 < FIELD25519_MODULUS).then(|| Field25519::new(&integer.0))
+}
+
+fn secret_invert_field25519_v1(value: &Field25519) -> Option<SecretCopyValueV1<Field25519>> {
+    let (mut inverse, is_some) = value.invert();
+    let inverse = SecretCopyValueV1::take(&mut inverse);
+    bool::from(is_some).then_some(inverse)
+}
+
+fn secret_sqrt_field25519_v1(value: &Field25519) -> Option<SecretCopyValueV1<Field25519>> {
+    let first = SecretCopyValueV1::new(value.pow(&FIELD25519_SQRT_EXPONENT));
+    let candidate = if first.as_ref().square().eq_ref(value) {
+        first
+    } else {
+        SecretCopyValueV1::new(
+            first
+                .as_ref()
+                .mul_ref(&Field25519::new(&FIELD25519_SQRT_M1)),
+        )
+    };
+    candidate
+        .as_ref()
+        .square()
+        .eq_ref(value)
+        .then_some(candidate)
+}
+
+/// Secret-safe Edwards-to-Weierstrass conversion for prover blind points.
+/// Every named compressed-point, point, field, inverse, and coordinate slot is
+/// owned until the final intentional coordinate tuple is returned.
+pub(super) fn secret_edwards_to_wei25519_v1(
+    bytes: &[u8; 32],
+) -> Result<(Field25519, Field25519), FcmpNativeErrorV1> {
+    let compressed = SecretCopyValueV1::new(CompressedEdwardsY(*bytes));
+    let point = SecretCopyValueV1::new(
+        compressed
+            .as_ref()
+            .decompress()
+            .ok_or(FcmpNativeErrorV1::EdwardsPointEncoding)?,
+    );
+    let recompressed = SecretCopyValueV1::new(point.as_ref().compress());
+    if recompressed.as_ref().as_bytes() != bytes || !point.as_ref().is_torsion_free() {
+        return Err(FcmpNativeErrorV1::EdwardsPointEncoding);
+    }
+    if *point.as_ref() == EdwardsPoint::identity() {
+        return Err(FcmpNativeErrorV1::EdwardsPointIdentity);
+    }
+
+    let x_sign = SecretCopyValueV1::new(bytes[31] >> 7);
+    let mut y_bytes = SecretCopyValueV1::new(*bytes);
+    y_bytes.as_mut()[31] &= 0x7f;
+    let y = SecretCopyValueV1::new(
+        secret_decode_field25519_v1(y_bytes.as_ref())
+            .ok_or(FcmpNativeErrorV1::EdwardsPointEncoding)?,
+    );
+    let y_squared = SecretCopyValueV1::new(y.as_ref().square());
+    let d = -field25519_from_u64(121_665)
+        * invert_field25519(field25519_from_u64(121_666))
+            .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+    let denominator =
+        SecretCopyValueV1::new(d.mul_ref(y_squared.as_ref()).add_ref(&Field25519::ONE));
+    let denominator_inverse = secret_invert_field25519_v1(denominator.as_ref())
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+    let x_argument = SecretCopyValueV1::new(
+        y_squared
+            .as_ref()
+            .sub_ref(&Field25519::ONE)
+            .mul_ref(denominator_inverse.as_ref()),
+    );
+    let mut x = secret_sqrt_field25519_v1(x_argument.as_ref())
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+    if x.as_ref().is_odd_ref() != (x_sign.as_ref() == &1) {
+        *x.as_mut() = x.as_ref().neg_ref();
+    }
+
+    let y_plus_one = SecretCopyValueV1::new(Field25519::ONE.add_ref(y.as_ref()));
+    let one_minus_y = SecretCopyValueV1::new(Field25519::ONE.sub_ref(y.as_ref()));
+    let one_minus_y_inverse = secret_invert_field25519_v1(one_minus_y.as_ref())
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+    let wei_x = SecretCopyValueV1::new(
+        y_plus_one
+            .as_ref()
+            .mul_ref(one_minus_y_inverse.as_ref())
+            .add_ref(
+                &field25519_from_u64(486_662).mul_ref(
+                    &invert_field25519(field25519_from_u64(3))
+                        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
+                ),
+            ),
+    );
+    let c = sqrt_field25519(-field25519_from_u64(486_664))
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+    let wei_y_denominator = SecretCopyValueV1::new(one_minus_y.as_ref().mul_ref(x.as_ref()));
+    let wei_y_inverse = secret_invert_field25519_v1(wei_y_denominator.as_ref())
+        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+    let wei_y = SecretCopyValueV1::new(
+        c.mul_ref(y_plus_one.as_ref())
+            .mul_ref(wei_y_inverse.as_ref()),
+    );
+    Ok((wei_x.expose_copy(), wei_y.expose_copy()))
+}
+
 pub(super) fn monero_varint(mut value: u32) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(5);
     loop {
@@ -658,6 +870,32 @@ pub(super) fn decode_helioselene_scalar(
     decode_helioselene(bytes).ok_or(FcmpNativeErrorV1::ScalarEncoding)
 }
 
+/// Decode a private Field25519 scalar without creating a by-value encoded
+/// input slot or leaving the decoded integer outside an erasing owner.
+pub(super) fn decode_secret_field25519_scalar_v1(
+    bytes: &[u8; 32],
+) -> Result<Field25519, FcmpNativeErrorV1> {
+    let integer = SecretU256V1(U256::from_le_slice(bytes));
+    if integer.0 >= FIELD25519_MODULUS {
+        return Err(FcmpNativeErrorV1::ScalarEncoding);
+    }
+    let scalar = SecretCopyValueV1::new(Field25519::new(&integer.0));
+    Ok(scalar.expose_copy())
+}
+
+/// Decode a private Helioselene scalar without creating a by-value encoded
+/// input slot or leaving the decoded integer outside an erasing owner.
+pub(super) fn decode_secret_helioselene_scalar_v1(
+    bytes: &[u8; 32],
+) -> Result<HelioseleneField, FcmpNativeErrorV1> {
+    let integer = SecretU256V1(U256::from_le_slice(bytes));
+    if integer.0 >= HELIOSELENE_MODULUS {
+        return Err(FcmpNativeErrorV1::ScalarEncoding);
+    }
+    let scalar = SecretCopyValueV1::new(HelioseleneField::new(&integer.0));
+    Ok(scalar.expose_copy())
+}
+
 pub(super) fn validate_edwards_scalar(bytes: [u8; 32]) -> Result<(), FcmpNativeErrorV1> {
     Option::<curve25519_dalek::scalar::Scalar>::from(
         curve25519_dalek::scalar::Scalar::from_canonical_bytes(bytes),
@@ -668,9 +906,81 @@ pub(super) fn validate_edwards_scalar(bytes: [u8; 32]) -> Result<(), FcmpNativeE
 
 #[cfg(test)]
 mod tests {
+    use core::cell::Cell;
+
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
 
     use super::*;
+
+    thread_local! {
+        static TRACKING_CLEARS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[derive(Clone, Copy)]
+    struct TrackingCopy(u64);
+
+    impl Zeroize for TrackingCopy {
+        fn zeroize(&mut self) {
+            self.0 = 0;
+            TRACKING_CLEARS.with(|calls| calls.set(calls.get() + 1));
+        }
+    }
+
+    #[test]
+    fn secret_copy_take_clears_source_and_owned_slots() {
+        TRACKING_CLEARS.with(|calls| calls.set(0));
+        let mut source = TrackingCopy(7);
+        let owned = SecretCopyValueV1::take(&mut source);
+        assert_eq!(source.0, 0);
+        assert_eq!(owned.as_ref().0, 7);
+        assert_eq!(TRACKING_CLEARS.with(Cell::get), 1);
+        drop(owned);
+        assert_eq!(TRACKING_CLEARS.with(Cell::get), 2);
+    }
+
+    #[test]
+    fn private_scalar_decoders_borrow_bytes_and_own_integer_scratch() {
+        let source = include_str!("field.rs");
+        let field_decoder = source
+            .split_once("pub(super) fn decode_secret_field25519_scalar_v1(")
+            .expect("secret Field25519 decoder")
+            .1
+            .split_once("/// Decode a private Helioselene scalar")
+            .expect("Field25519 decoder boundary")
+            .0;
+        let helios_decoder = source
+            .split_once("pub(super) fn decode_secret_helioselene_scalar_v1(")
+            .expect("secret Helioselene decoder")
+            .1
+            .split_once("pub(super) fn validate_edwards_scalar")
+            .expect("Helioselene decoder boundary")
+            .0;
+        for decoder in [field_decoder, helios_decoder] {
+            assert!(decoder.contains("bytes: &[u8; 32]"));
+            assert!(decoder.contains("SecretU256V1(U256::from_le_slice(bytes))"));
+            assert!(decoder.contains("SecretCopyValueV1::new("));
+            assert!(decoder.contains("Ok(scalar.expose_copy())"));
+            assert!(!decoder.contains("from_le_bytes"));
+        }
+
+        let one = U256::ONE.to_le_bytes();
+        assert_eq!(
+            decode_secret_field25519_scalar_v1(&one).expect("canonical Field25519"),
+            decode_field25519_scalar(one).expect("public Field25519 decoder")
+        );
+        assert_eq!(
+            decode_secret_helioselene_scalar_v1(&one).expect("canonical Helioselene"),
+            decode_helioselene_scalar(one).expect("public Helioselene decoder")
+        );
+        assert_eq!(
+            decode_secret_field25519_scalar_v1(&FIELD25519_MODULUS.to_le_bytes()),
+            Err(FcmpNativeErrorV1::ScalarEncoding)
+        );
+        assert_eq!(
+            decode_secret_helioselene_scalar_v1(&HELIOSELENE_MODULUS.to_le_bytes()),
+            Err(FcmpNativeErrorV1::ScalarEncoding)
+        );
+    }
 
     fn vector(encoded: &str) -> [u8; 32] {
         assert_eq!(encoded.len(), 64);

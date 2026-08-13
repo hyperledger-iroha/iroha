@@ -707,7 +707,6 @@ use self::{message::*, output_guard::ConsensusOutputGuard};
 use crate::{EventsSender, IrohaNetwork, kura::Kura, queue::Queue};
 
 /// Bundle of genesis block and its publishing key.
-#[derive(Clone)]
 pub struct GenesisWithPubKey {
     /// Optional genesis block to seed the chain; `None` when submitted elsewhere.
     pub genesis: Option<GenesisBlock>,

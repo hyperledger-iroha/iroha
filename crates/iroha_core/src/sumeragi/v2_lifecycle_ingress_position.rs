@@ -47,7 +47,7 @@ impl FairIngressQueuePositions {
 /// its carrier-derived context equals this bound context. The identity contains
 /// no superseded runtime lifecycle or scheduler ordinal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PendingFairIngressIdentity {
+pub(in crate::sumeragi) struct PendingFairIngressIdentity {
     context: LifecycleContext,
     digest: LifecycleDigest,
     physical_admission_ordinal: u64,
@@ -254,6 +254,7 @@ pub(super) struct FairIngressQueueCut<'a> {
     leader_wire_projection: FairV2IngressLeaderWireSelectorProjection,
     selected_identity: PendingFairIngressIdentity,
     selected_positions: FairIngressQueuePositions,
+    selected_disposition: FairV2IngressDequeueDisposition,
 }
 
 /// Borrow-free opaque witness of one fully revalidated pre-cut queue.
@@ -274,6 +275,7 @@ pub(super) struct PreparedFairIngressQueueWitness {
     leader_wire_projection: FairV2IngressLeaderWireSelectorProjection,
     selected_identity: PendingFairIngressIdentity,
     selected_positions: FairIngressQueuePositions,
+    selected_disposition: FairV2IngressDequeueDisposition,
 }
 
 struct PreparedFairIngressQueueSelection {
@@ -323,6 +325,74 @@ impl PreparedFairIngressQueueWitness {
             && self.pending_identities.get(&selected_ordinal) == Some(&self.selected_identity)
     }
 
+    /// Return the frozen ordinary dequeue disposition for the selected row.
+    pub(super) const fn selected_disposition(&self) -> FairV2IngressDequeueDisposition {
+        self.selected_disposition
+    }
+
+    /// Atomically remove the exact selected occurrence while retaining this
+    /// witness on every rejected comparison.
+    ///
+    /// The lifecycle LedgerV1 transaction uses this surface after its durable
+    /// cut. A failed CAS can therefore carry the still-live queue authority
+    /// into a restart-required result instead of degrading it into raw
+    /// coordinates or a retryable error.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn commit_exact_dequeue_retaining(
+        self,
+        queue: &FairV2Ingress,
+        expected_context: LifecycleContext,
+        expected_physical_ordinal: u64,
+    ) -> Result<
+        (InboundBlockMessage, FairV2IngressDequeueDisposition),
+        (FairIngressQueueCutError, Self),
+    > {
+        macro_rules! retain {
+            ($result:expr) => {
+                match $result {
+                    Ok(value) => value,
+                    Err(error) => return Err((error, self)),
+                }
+            };
+        }
+        if !Arc::ptr_eq(&self.queue_identity, &queue.queue_identity) {
+            return Err((FairIngressQueueCutError::ForeignQueue, self));
+        }
+        if self.selected_identity.context != expected_context {
+            return Err((FairIngressQueueCutError::ForeignCommitContext, self));
+        }
+        if self.selected_identity.physical_admission_ordinal != expected_physical_ordinal {
+            return Err((FairIngressQueueCutError::ForeignCommitOrdinal, self));
+        }
+        if !self.is_internally_exact() {
+            return Err((FairIngressQueueCutError::QueueCutChanged, self));
+        }
+
+        let _service_guard = queue.service_lock.lock();
+        let selection = retain!(self.revalidate_for_commit(queue));
+        if selection.disposition != self.selected_disposition {
+            return Err((FairIngressQueueCutError::QueueCutChanged, self));
+        }
+        let mut state = queue.state.lock();
+        if !self.metadata_matches_locked(&state) {
+            return Err((FairIngressQueueCutError::QueueCutChanged, self));
+        }
+        let dequeued = retain!(
+            queue
+                .dequeue_selected_locked(
+                    &mut state,
+                    &selection.ready_sources,
+                    selection.selected_source_index,
+                    selection.physical_admission_ordinal,
+                    selection.disposition,
+                    true,
+                    Instant::now(),
+                )
+                .map_err(|_| FairIngressQueueCutError::DequeueFailed)
+        );
+        Ok(dequeued)
+    }
+
     /// Atomically remove the exact selected occurrence after revalidating this
     /// complete prepared cut.
     ///
@@ -336,43 +406,15 @@ impl PreparedFairIngressQueueWitness {
     /// enclosing selector transaction must already have dropped its retained
     /// inbound `Arc` clones; the shared tail refuses non-exclusive envelopes.
     #[cfg_attr(not(test), allow(dead_code))]
-    fn commit_exact_dequeue(
+    pub(super) fn commit_exact_dequeue(
         self,
         queue: &FairV2Ingress,
         expected_context: LifecycleContext,
         expected_physical_ordinal: u64,
     ) -> Result<(InboundBlockMessage, FairV2IngressDequeueDisposition), FairIngressQueueCutError>
     {
-        if !Arc::ptr_eq(&self.queue_identity, &queue.queue_identity) {
-            return Err(FairIngressQueueCutError::ForeignQueue);
-        }
-        if self.selected_identity.context != expected_context {
-            return Err(FairIngressQueueCutError::ForeignCommitContext);
-        }
-        if self.selected_identity.physical_admission_ordinal != expected_physical_ordinal {
-            return Err(FairIngressQueueCutError::ForeignCommitOrdinal);
-        }
-        if !self.is_internally_exact() {
-            return Err(FairIngressQueueCutError::QueueCutChanged);
-        }
-
-        let _service_guard = queue.service_lock.lock();
-        let selection = self.revalidate_for_commit(queue)?;
-        let mut state = queue.state.lock();
-        if !self.metadata_matches_locked(&state) {
-            return Err(FairIngressQueueCutError::QueueCutChanged);
-        }
-        queue
-            .dequeue_selected_locked(
-                &mut state,
-                &selection.ready_sources,
-                selection.selected_source_index,
-                selection.physical_admission_ordinal,
-                selection.disposition,
-                true,
-                Instant::now(),
-            )
-            .map_err(|_| FairIngressQueueCutError::DequeueFailed)
+        self.commit_exact_dequeue_retaining(queue, expected_context, expected_physical_ordinal)
+            .map_err(|(error, _witness)| error)
     }
 
     fn revalidate_for_commit(
@@ -591,6 +633,7 @@ impl FairIngressQueueCut<'_> {
             leader_wire_projection,
             selected_identity,
             selected_positions,
+            selected_disposition,
         } = self;
         let queue_identity = Arc::clone(&queue.queue_identity);
         drop(_service_guard);
@@ -603,6 +646,7 @@ impl FairIngressQueueCut<'_> {
             leader_wire_projection,
             selected_identity,
             selected_positions,
+            selected_disposition,
         }
     }
 
@@ -801,6 +845,11 @@ impl FairV2Ingress {
         if pending_identities.get(&target_physical_ordinal) != Some(&selected_identity) {
             return Err(FairIngressQueueCutError::InvalidOccurrenceIdentity);
         }
+        let selected_disposition = if selected_projection.obsolete {
+            FairV2IngressDequeueDisposition::RetireObsolete
+        } else {
+            FairV2IngressDequeueDisposition::Admit
+        };
         let cut = FairIngressQueueCut {
             queue: self,
             _service_guard: service_guard,
@@ -812,6 +861,7 @@ impl FairV2Ingress {
             leader_wire_projection,
             selected_identity,
             selected_positions,
+            selected_disposition,
         };
         if !cut.metadata_is_current() {
             return Err(FairIngressQueueCutError::InvalidOccurrenceIdentity);
@@ -1579,6 +1629,13 @@ mod tests {
         ))
     }
 
+    fn assert_same_v2_message(actual: &BlockMessage, expected: &BlockMessage) {
+        let (BlockMessage::V2(actual), BlockMessage::V2(expected)) = (actual, expected) else {
+            panic!("expected two Sumeragi V2 messages: {actual:?}, {expected:?}")
+        };
+        assert_eq!(actual, expected);
+    }
+
     fn single_commit_request_ingress(
         signature_byte: u8,
     ) -> (FairV2Ingress, LifecycleContext, PeerId, BlockMessage, u64) {
@@ -1841,10 +1898,7 @@ mod tests {
             FairV2IngressQueueGateVerdict::Strict
         );
         assert!(!selector_row.is_obsolete());
-        assert_eq!(
-            selector_row.inbound().message().encode(),
-            target_message.encode()
-        );
+        assert_same_v2_message(selector_row.inbound().message(), &target_message);
 
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::new(
@@ -2025,6 +2079,11 @@ mod tests {
             .capture_lifecycle_queue_cut(selected_ordinal)
             .expect("capture exact selected occurrence")
             .into_prepared_witness();
+        assert_eq!(
+            witness.selected_disposition(),
+            FairV2IngressDequeueDisposition::Admit,
+            "the borrow-free witness retains the exact frozen disposition",
+        );
         let (inbound, disposition) = witness
             .commit_exact_dequeue(
                 &ingress,
@@ -2033,7 +2092,7 @@ mod tests {
             )
             .expect("unchanged prepared cut commits exactly once");
 
-        assert_eq!(inbound.message().encode(), selected.encode());
+        assert_same_v2_message(inbound.message(), &selected);
         assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
         assert_eq!(
             inbound
@@ -2103,14 +2162,8 @@ mod tests {
             Some(u128::from(append_ordinal) + 1)
         );
         assert_eq!(ingress.len(), 1);
-        assert_eq!(
-            ingress
-                .try_recv()
-                .expect("post-cut append remains queued")
-                .message()
-                .encode(),
-            appended.encode()
-        );
+        let retained = ingress.try_recv().expect("post-cut append remains queued");
+        assert_same_v2_message(retained.message(), &appended);
     }
 
     #[test]
@@ -2261,6 +2314,26 @@ mod tests {
             ingress.capture_lifecycle_queue_cut(ordinal),
             Err(FairIngressQueueCutError::MissingTarget)
         ));
+    }
+
+    #[test]
+    fn prepared_commit_revalidates_the_frozen_disposition_before_dequeue() {
+        let (ingress, context, _, _, ordinal) = single_commit_request_ingress(23);
+        let mut witness = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture exact ordinary-admission disposition")
+            .into_prepared_witness();
+        assert_eq!(
+            witness.selected_disposition(),
+            FairV2IngressDequeueDisposition::Admit
+        );
+        witness.selected_disposition = FairV2IngressDequeueDisposition::RetireObsolete;
+
+        assert!(matches!(
+            witness.commit_exact_dequeue(&ingress, context, ordinal),
+            Err(FairIngressQueueCutError::QueueCutChanged)
+        ));
+        assert_eq!(ingress.len(), 1, "disposition drift cannot consume the row");
     }
 
     #[test]

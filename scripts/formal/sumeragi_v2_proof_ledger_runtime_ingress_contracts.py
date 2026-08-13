@@ -59,36 +59,101 @@ fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) ->
         "outer-ingress cursor must freeze its height context and start at Completion with a positive finite cycle bound",
         errors,
     )
-    next_context = (("impl", "Iterator", "for", "OuterIngressTurns"),)
-    next_items = tuple(
-        item
-        for item in rust_items(runner_source, "next")
-        if item.brace_context == next_context
-    )
-    if len(next_items) != 1:
-        errors.append(
-            f"{runner_path}: require exactly one outer-ingress cursor "
-            f"Iterator::next implementation; found {len(next_items)}"
+    def exact_context_item(
+        name: str,
+        context: tuple[tuple[str, ...], ...],
+        description: str,
+    ) -> RustItem | None:
+        matches = tuple(
+            item for item in rust_items(runner_source, name) if item.brace_context == context
         )
-        next_item = None
+        if len(matches) != 1:
+            errors.append(f"{runner_path}: require exactly one {description}; found {len(matches)}")
+            return None
+        item = matches[0]
+        _require_rust_item_context(runner_path, item, context, description, errors)
+        return item
+
+    current_turn_structs = rust_struct_items(runner_source, "LifecycleCurrentRunnerTurn")
+    if len(current_turn_structs) != 1:
+        errors.append(
+            f"{runner_path}: require exactly one borrow-bound current runner turn; "
+            f"found {len(current_turn_structs)}"
+        )
+        current_turn_struct = None
     else:
-        next_item = next_items[0]
+        current_turn_struct = current_turn_structs[0]
         _require_rust_item_context(
             runner_path,
-            next_item,
-            next_context,
-            "finite outer-ingress cursor alternation",
+            current_turn_struct,
+            (),
+            "borrow-bound current runner turn",
             errors,
+            expected_attributes=(
+                "#[derive(Debug)]",
+                '#[must_use = "the current runner turn must be serviced before the cursor advances"]',
+            ),
         )
+    _require_exact_rust_tokens(
+        runner_path,
+        current_turn_struct,
+        """
+pub(crate) struct LifecycleCurrentRunnerTurn<'cursor> {
+    cursor: &'cursor mut OuterIngressTurns,
+    turn: OuterIngressTurn,
+}
+""",
+        "current runner turn must retain the sole mutable cursor borrow and exact turn",
+        errors,
+    )
+    owner_context = (("impl", "OuterIngressTurns"),)
+    current_context = (("impl", "LifecycleCurrentRunnerTurn", "<", "'", "_", ">"),)
+    drop_context = (
+        ("impl", "Drop", "for", "LifecycleCurrentRunnerTurn", "<", "'", "_", ">"),
+    )
+    next_item = exact_context_item(
+        "next_current", owner_context, "borrow-bound outer-ingress current-turn mint"
+    )
     _require_exact_rust_tokens(
         runner_path,
         next_item,
         """
-fn next(&mut self) -> Option<Self::Item> {
+fn next_current(&mut self) -> Option<LifecycleCurrentRunnerTurn<'_>> {
     if self.cycles_remaining == 0 {
         return None;
     }
-    let turn = self.next_turn;
+    Some(LifecycleCurrentRunnerTurn {
+        turn: self.next_turn,
+        cursor: self,
+    })
+}
+""",
+        "current-turn mint must freeze the exact next turn under the sole mutable cursor borrow",
+        errors,
+    )
+    turn_item = exact_context_item(
+        "turn", current_context, "borrow-bound outer-ingress turn projection"
+    )
+    _require_exact_rust_tokens(
+        runner_path,
+        turn_item,
+        """
+const fn turn(&self) -> OuterIngressTurn {
+    self.turn
+}
+""",
+        "borrow-bound turn projection must expose only its frozen current turn",
+        errors,
+    )
+    advance_item = exact_context_item(
+        "advance_current", owner_context, "borrow-bound outer-ingress cursor advance"
+    )
+    _require_exact_rust_tokens(
+        runner_path,
+        advance_item,
+        """
+fn advance_current(&mut self, turn: OuterIngressTurn) {
+    assert_eq!(self.next_turn, turn, "borrow-bound outer runner turn must remain current until drop");
     self.next_turn = match turn {
         OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
         OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,
@@ -97,12 +162,35 @@ fn next(&mut self) -> Option<Self::Item> {
             OuterIngressTurn::Completion
         }
     };
-    Some(turn)
 }
 """,
-        "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",
+        "cursor advance must preserve Completion/Runtime/Ingress and decrement only after Ingress",
         errors,
     )
+    drop_item = exact_context_item(
+        "drop", drop_context, "borrow-bound outer-ingress current-turn Drop"
+    )
+    _require_exact_rust_tokens(
+        runner_path,
+        drop_item,
+        """
+fn drop(&mut self) {
+    self.cursor.advance_current(self.turn);
+}
+""",
+        "current-turn Drop must advance exactly the still-current borrowed turn",
+        errors,
+    )
+    legacy_next_context = (("impl", "Iterator", "for", "OuterIngressTurns"),)
+    legacy_next = tuple(
+        item for item in rust_items(runner_source, "next")
+        if item.brace_context == legacy_next_context
+    )
+    if legacy_next:
+        errors.append(
+            f"{runner_path}: borrow-bound outer-ingress cursor may not retain an "
+            f"independent Iterator::next bypass; found {len(legacy_next)}"
+        )
     rank_item = _require_rust_item(
         runner_path, runner_source, "outer_ingress_turn_index", errors
     )
@@ -122,6 +210,38 @@ const fn outer_ingress_turn_index(turn: OuterIngressTurn) -> u8 {
         errors,
     )
     return errors
+
+
+def _borrow_bound_outer_ingress_order_errors(
+    drain_path: Path,
+    drain: RustItem | None,
+) -> list[str]:
+    """Require one current-turn borrow and Runtime service before ingress."""
+
+    sequences = (
+        "let mut outer_turns = outer_ingress_turns(limit, executor.context().id(), executor.context().height);",
+        "while let Some(current_turn) = outer_turns.next_current()",
+        "let turn = current_turn.turn();",
+        "if turn == OuterIngressTurn::Runtime",
+        "advance_executor(receiver, executor, services, 1)?",
+        "try_recv_if_checked_retiring_obsolete_with_barrier_bypass(",
+    )
+    tokens = rust_code_tokens("" if drain is None else drain.source)
+    positions = tuple(
+        _token_sequence_positions(tokens, rust_code_tokens(sequence))
+        for sequence in sequences
+    )
+    if any(len(found) != 1 for found in positions) or any(
+        left[0] >= right[0]
+        for left, right in zip(positions, positions[1:])
+        if left and right
+    ):
+        return [
+            f"{drain_path}: every ordinary outer ingress occurrence must be preceded "
+            "by one borrow-bound Completion/Runtime cursor turn and serialized "
+            "advance_executor turn"
+        ]
+    return []
 
 
 _REMOTE_PROPOSAL_REPLAY_ITEM_SHA256 = {

@@ -1,11 +1,23 @@
-use std::{fs::OpenOptions, io::Write as _, time::Duration};
+use std::{fs::OpenOptions, io::Write as _, num::NonZeroU64, time::Duration};
 
-use iroha_crypto::{Algorithm, HashOf, KeyPair};
+#[cfg(feature = "bls")]
+use std::collections::BTreeMap;
+
+use iroha_config::parameters::actual::{
+    SUMERAGI_V2_CONFIG_FORMAT_VERSION, SumeragiV2Config, SumeragiV2KeyPolicy, SumeragiV2Limits,
+};
+use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
 use tempfile::TempDir;
 
 use super::super::serviced_candidate_store::ProducerContinuationSourceClass;
 use super::*;
-use crate::sumeragi::v2_chunks::encode_payload;
+use crate::sumeragi::{
+    v2_chunks::encode_payload,
+    v2_runtime::{
+        PendingRuntimeEffectBinding, RuntimeEffectOwnership, bind_adapter_effect_batch_ownership,
+    },
+};
 
 fn test_network_id(seed: u8) -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -2586,4 +2598,549 @@ fn assert_restored_stage_seven_retirement_does_not_resurrect(
                 .is_empty(),
         "a terminally retired stage-7 producer cannot resurrect on restart"
     );
+}
+
+#[test]
+fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
+    let kura = Kura::blank_kura_for_testing();
+    let foreign_kura = Kura::blank_kura_for_testing();
+    let binding = RecoveredLifecycleOwnerKuraBindingV1::for_test(kura.as_ref());
+
+    let storage_root = kura.sumeragi_v2_storage_root();
+    let expected_chunk_root = storage_root.join("chunks");
+    let paths = binding
+        .storage_paths_for_launch(kura.as_ref())
+        .expect("the exact Kura projects its sealed launch paths");
+    assert_eq!(
+        paths.wal_path(),
+        storage_root.join("wal").join(format!("{:020}.wal", 1_u64))
+    );
+    assert_eq!(paths.chunk_root(), expected_chunk_root);
+    assert!(
+        binding
+            .storage_paths_for_launch(foreign_kura.as_ref())
+            .is_none(),
+        "a foreign Kura must not project launch storage paths"
+    );
+    assert_eq!(paths.into_chunk_root(), expected_chunk_root);
+}
+
+#[cfg(feature = "bls")]
+fn authenticated_timeout_certificate(
+    round: wire::ConsensusRound,
+    highest_prepare_qc: Option<wire::QuorumCertificate>,
+    signers: Vec<wire::ValidatorIndex>,
+    keys: &[KeyPair],
+) -> wire::TimeoutCertificate {
+    let signer = signers
+        .first()
+        .copied()
+        .expect("fixture timeout certificate has signers");
+    let preimage = wire::TimeoutVote {
+        round,
+        highest_prepare_qc: highest_prepare_qc.clone(),
+        signer,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = signers
+        .iter()
+        .map(|signer| {
+            let index = usize::try_from(*signer).expect("small timeout signer index");
+            Signature::new(keys[index].private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate fixture timeout certificate");
+    wire::TimeoutCertificate {
+        round,
+        groups: vec![wire::TimeoutVoteGroup {
+            highest_prepare_qc,
+            signers,
+            aggregate_signature,
+        }],
+    }
+}
+
+#[test]
+fn production_leader_wire_launch_authority_requires_exact_wal_and_opens_gate() {
+    let directory = TempDir::new().expect("temporary leader-wire launch directory");
+    let wal_path = directory.path().join("safety.wal");
+    let (adapter, effects) = open_test(&directory).expect("open exact adapter");
+    assert!(effects.is_empty());
+    let context = adapter.wire_context.clone();
+    let mut startup = ProductionLifecycleAdapterStartupV1::recovered(adapter, effects);
+
+    assert!(
+        startup
+            .prepare_leader_wire_launch(&directory.path().join("foreign.wal"))
+            .is_err(),
+        "a foreign WAL path must not project leader-wire launch authority"
+    );
+    let launch = startup
+        .prepare_leader_wire_launch(&wal_path)
+        .expect("exact WAL projects one leader-wire launch authority");
+    assert!(
+        startup.prepare_leader_wire_launch(&wal_path).is_err(),
+        "the adapter can mint its leader-wire launch authority only once"
+    );
+    assert_eq!(launch.restored_producer_ordinal_high_watermark(), None);
+    let (gate, restore, _service_recovery_authority) = launch
+        .open_gate(
+            &context,
+            &super::super::v2_body_store::V2BodyStore::open_with_policy(
+                directory.path().join("bodies"),
+                context.clone(),
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+            )
+            .expect("open exact empty body store"),
+        )
+        .expect("adapter-bound authority opens the adjacent gate");
+    assert_eq!(restore.scheduler_ordinal_high_watermark(), 0);
+    assert!(gate.restore().is_ok());
+}
+
+fn open_recovered_leader_startup_test(
+    directory: &TempDir,
+) -> Result<RecoveredAdapterStartup, AdapterError> {
+    let context = context();
+    let leader = context.leader(0);
+    SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+        directory.path().join("leader-safety.wal"),
+        verified_genesis(context),
+        Some(leader),
+        reducer::Generation::new(1),
+        [0x22; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+}
+
+#[cfg(feature = "bls")]
+fn write_and_reopen_authenticated_wal_startup(
+    directory: &TempDir,
+    context: &wire::HeightContext,
+    proofs_of_possession: &[Vec<u8>],
+    local_validator: wire::ValidatorIndex,
+    consensus_key_hash: [u8; 32],
+    records: Vec<WalRecordV2>,
+) -> RecoveredAdapterStartup {
+    let wal_path = directory.path().join("authenticated-fifo-safety.wal");
+    let verified = VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
+        .expect("verify authenticated FIFO context");
+    let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
+        wal_path.clone(),
+        verified,
+        Some(local_validator),
+        reducer::Generation::new(50),
+        consensus_key_hash,
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("open authenticated FIFO WAL writer");
+    assert!(startup.is_empty());
+    for (index, record) in records.into_iter().enumerate() {
+        let persistence_id = u64::try_from(index)
+            .expect("small FIFO index")
+            .checked_add(1)
+            .expect("FIFO persistence id");
+        let payload = WalEnvelopeV2 {
+            protocol_version: wire::PROTOCOL_VERSION,
+            persistence_id,
+            record,
+        }
+        .encode();
+        let receipt = adapter.wal.append(&payload).expect("append FIFO WAL frame");
+        assert_eq!(receipt.sequence().checked_add(1), Some(persistence_id));
+    }
+    drop(adapter);
+
+    let verified = VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
+        .expect("reverify authenticated FIFO context");
+    SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+        wal_path,
+        verified,
+        Some(local_validator),
+        reducer::Generation::new(50),
+        consensus_key_hash,
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("reopen authenticated FIFO WAL")
+}
+
+fn take_current_sign(effects: &mut Vec<AdapterEffect>) -> AdapterEffect {
+    let signs = effects
+        .iter()
+        .enumerate()
+        .filter_map(|(index, effect)| matches!(effect, AdapterEffect::Sign { .. }).then_some(index))
+        .collect::<Vec<_>>();
+    let [index] = signs.as_slice() else {
+        panic!("expected one current Sign beside inert completion effects: {effects:?}")
+    };
+    effects.remove(*index)
+}
+
+fn persist_proposal_intent_for_control_recovery(directory: &TempDir, marker: u8) {
+    let (mut adapter, startup) =
+        open_test_as_leader(directory).expect("open local ProposalIntent fixture");
+    assert!(startup.is_empty());
+    let proposal = proposal(
+        &adapter.wire_context,
+        adapter.wire_context.leader(0),
+        subject(marker),
+    );
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal fixture")
+    };
+    let (durable, validated) =
+        validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
+    let sign = adapter
+        .local_proposal_ready(
+            adapter.current_tag(),
+            proposal.manifest,
+            &durable,
+            &validated,
+        )
+        .expect("persist exact ProposalIntent");
+    assert!(matches!(
+        sign.effects(),
+        [AdapterEffect::Sign {
+            request: SignRequest::Proposal(_),
+            ..
+        }]
+    ));
+}
+
+fn persist_timeout_intent_for_control_recovery(directory: &TempDir) {
+    let (mut adapter, startup) = open_test(directory).expect("open TimeoutIntent fixture");
+    assert!(startup.is_empty());
+    let sign = adapter
+        .timeout_elapsed(adapter.current_tag())
+        .expect("persist exact TimeoutIntent");
+    assert!(matches!(
+        sign.effects(),
+        [AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(_),
+            ..
+        }]
+    ));
+}
+
+fn open_control_owner_for_test(
+    safety: &TempDir,
+    storage: &TempDir,
+    proposal: bool,
+) -> ProductionLifecycleOwnerV1 {
+    let startup = if proposal {
+        open_recovered_leader_startup_test(safety)
+    } else {
+        open_recovered_startup_test(safety)
+    }
+    .expect("open exact recovered control startup");
+    let authenticated = startup
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _startup)| {
+            panic!("authenticate exact recovered control startup: {error}")
+        });
+    assert!(authenticated.has_recovered_control_sign_for_test());
+    assert!(authenticated.effects.is_empty());
+    let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+        .expect("deterministic BLS control-startup signer");
+    authenticated
+        .open_production_lifecycle_owner_v1_from_roots_for_test(
+            &lifecycle_owner_config(),
+            4,
+            &storage.path().join("ledger"),
+            &storage.path().join("serve"),
+            &storage.path().join("body"),
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+            &local_signer,
+        )
+        .unwrap_or_else(|error| panic!("open exact recovered control owner: {error}"))
+}
+
+#[cfg(feature = "bls")]
+fn write_authenticated_decision_startup(
+    safety: &TempDir,
+    marker: u8,
+) -> (RecoveredAdapterStartup, wire::HeightContext, Vec<Vec<u8>>) {
+    let (context, keys, proofs) = authenticated_context();
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let mut decision = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject: subject(marker),
+        execution_commitment: execution_commitment(marker),
+        signers: vec![0, 1, 2],
+        aggregate_signature: Vec::new(),
+    };
+    authenticate_qc(&mut decision, &keys);
+    let startup = write_and_reopen_authenticated_wal_startup(
+        safety,
+        &context,
+        &proofs,
+        0,
+        [marker; 32],
+        vec![WalRecordV2::Decision(decision)],
+    );
+    (startup, context, proofs)
+}
+
+#[cfg(feature = "bls")]
+fn reopen_authenticated_decision_startup(
+    safety: &TempDir,
+    context: &wire::HeightContext,
+    proofs: Vec<Vec<u8>>,
+    marker: u8,
+) -> RecoveredAdapterStartup {
+    let verified = VerifiedHeightContext::genesis(context.clone(), proofs)
+        .expect("reverify Decision Fetch context");
+    SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+        safety.path().join("authenticated-fifo-safety.wal"),
+        verified,
+        Some(0),
+        reducer::Generation::new(50),
+        [marker; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("reopen authenticated Decision WAL")
+}
+
+#[cfg(feature = "bls")]
+#[derive(Clone, Copy)]
+enum DecisionBodyMarkerFixture {
+    Validated,
+    Rejected,
+}
+
+#[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
+fn write_decision_startup_with_body_marker(
+    safety: &TempDir,
+    body_root: &std::path::Path,
+    marker: u8,
+    outcome: DecisionBodyMarkerFixture,
+) -> (
+    RecoveredAdapterStartup,
+    super::super::v2_body_store::V2BodyStore,
+) {
+    let (context, keys, proofs) = authenticated_context();
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let leader = context.leader(round.view);
+    let leader_index = usize::try_from(leader).expect("fixture leader index fits usize");
+    let header = BlockHeader::new(
+        NonZeroU64::new(round.height).expect("fixture height is non-zero"),
+        None,
+        None,
+        None,
+        8_000 + u64::from(marker),
+        round.view,
+    );
+    let signature = SignatureOf::try_from_hash(keys[leader_index].private_key(), header.hash())
+        .expect("sign Decision body-marker fixture");
+    let block = SignedBlock::presigned(
+        BlockSignature::new(u64::from(leader), signature),
+        header,
+        Vec::new(),
+    );
+    let canonical_wire = block
+        .encode_wire()
+        .expect("encode Decision body-marker SignedBlockWire");
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: block.hash(),
+        payload_hash: Hash::new(&canonical_wire),
+    };
+    let chunks = wire::encode_payload_chunks(context.da_layout, &canonical_wire)
+        .expect("encode Decision body-marker chunks");
+    let manifest = wire::PayloadManifest::derive(
+        &context,
+        round,
+        subject,
+        u64::try_from(canonical_wire.len()).expect("fixture body length fits u64"),
+        &chunks,
+    )
+    .expect("derive Decision body-marker manifest");
+    let mut body_store = super::super::v2_body_store::V2BodyStore::open(body_root, context.clone())
+        .expect("open Decision body-marker store");
+    let durable = body_store
+        .store(manifest, canonical_wire)
+        .expect("fsync Decision body-marker body");
+    let commitment = execution_commitment(marker);
+    let validation = match outcome {
+        DecisionBodyMarkerFixture::Validated => {
+            body_store.execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                Ok::<_, String>(commitment)
+            })
+        }
+        DecisionBodyMarkerFixture::Rejected => {
+            body_store.execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                Err::<wire::ExecutionCommitment, _>(
+                    "deterministic Decision body rejection".to_owned(),
+                )
+            })
+        }
+    }
+    .expect("fsync Decision body outcome marker");
+    match outcome {
+        DecisionBodyMarkerFixture::Validated => {
+            assert!(validation.validated_receipt().is_some())
+        }
+        DecisionBodyMarkerFixture::Rejected => {
+            assert!(validation.rejection_reason().is_some())
+        }
+    }
+
+    let mut decision = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment: commitment,
+        signers: vec![0, 1, 2],
+        aggregate_signature: Vec::new(),
+    };
+    authenticate_qc(&mut decision, &keys);
+    let startup = write_and_reopen_authenticated_wal_startup(
+        safety,
+        &context,
+        &proofs,
+        0,
+        [marker; 32],
+        vec![WalRecordV2::Decision(decision)],
+    );
+    (startup, body_store)
+}
+
+fn lifecycle_owner_config() -> SumeragiV2Config {
+    SumeragiV2Config {
+        format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,
+        protocol_version: wire::PROTOCOL_VERSION,
+        mode: wire::ConsensusMode::Permissioned,
+        block_cadence_ms: 1_000,
+        limits: SumeragiV2Limits {
+            max_transactions: 512,
+            max_payload_bytes: 16 * 1024 * 1024,
+            max_queue_scan: 2_048,
+            control_queue_capacity: 128,
+            runtime_command_capacity: 8,
+            runtime_progress_reserve: 2,
+            runtime_completion_reserve: 2,
+            body_queue_capacity: 16,
+            authenticated_non_validator_source_capacity: 2,
+            body_bytes: 160 * 1024 * 1024,
+            body_source_bytes: 32 * 1024 * 1024,
+            chunk_queue_capacity: 64,
+            effect_work_capacity: 2,
+            ready_body_capacity: 8,
+            ready_body_bytes: 32 * 1024 * 1024,
+            certified_request_capacity: 8,
+            authenticated_merge_qc_capacity: 64,
+            merge_leader_body_frame_headroom_bytes: 1024 * 1024,
+            autonomous_carrier_headroom_bytes: 1024 * 1024,
+            autonomous_producer_recheck_ms: 100,
+            historical_recovery_stuck_attempts: 32,
+            historical_recovery_retry_tier_attempts: 4,
+            historical_recovery_max_retry_tier: 6,
+            sidecar_service_burst: 8,
+            merge_sidecar_inbound_session_capacity: 32,
+            merge_sidecar_inbound_sessions_per_peer: 4,
+            merge_sidecar_inbound_assembly_bytes: 64 * 1024 * 1024,
+            merge_sidecar_inbound_assembly_bytes_per_peer: 32 * 1024 * 1024,
+            merge_sidecar_deferred_block_capacity: 128,
+            merge_sidecar_future_block_distance: 64,
+            merge_sidecar_request_timeout_ms: 10_000,
+            merge_sidecar_outbound_sessions_per_source: 2,
+            merge_sidecar_outbound_bytes_per_source: 16 * 1024 * 1024,
+            merge_sidecar_server_request_gates_per_source: 4,
+            pending_certified_merge_entry_capacity: 1_024,
+            pending_queue_plan_admission_capacity: 1_024,
+            pending_control_sidecar_bytes: 256 * 1024 * 1024,
+            merge_signing_guard_record_capacity: 1_024,
+            merge_signing_guard_record_bytes: 16 * 1024 * 1024 + 64 * 1024,
+            merge_signing_guard_total_bytes: 256 * 1024 * 1024,
+            native_amx_signing_guard_record_capacity: 524_288,
+            native_amx_signing_guard_record_bytes: 16 * 1024,
+            native_amx_signing_guard_anchor_bytes: 4 * 1024,
+        },
+        key_policy: SumeragiV2KeyPolicy {
+            activation_lead_blocks: 1,
+            overlap_grace_blocks: 1,
+            expiry_grace_blocks: 1,
+            require_hsm: false,
+            allowed_algorithms: vec![Algorithm::BlsNormal],
+            allowed_hsm_providers: Vec::new(),
+        },
+    }
+}
+
+fn lifecycle_factory_state_for_test(
+    kura: Arc<Kura>,
+    network_id: iroha_data_model::NetworkId,
+) -> Arc<crate::state::State> {
+    Arc::new(
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            crate::state::World::default(),
+            kura,
+            crate::query::store::LiveQueryStore::start_test(),
+            "sumeragi-v2-lifecycle-test"
+                .parse()
+                .expect("lifecycle fixture chain id"),
+            network_id,
+        ),
+    )
+}
+
+fn lifecycle_factory_inputs_for_test(
+    startup: &AuthenticatedRecoveredAdapterStartup,
+    storage: RecoveredLifecycleStorageAuthorityV1,
+    kura: Arc<Kura>,
+) -> RecoveredLifecycleOwnerFactoryInputsV1 {
+    let state = lifecycle_factory_state_for_test(
+        Arc::clone(&kura),
+        startup.adapter.wire_context.network_id,
+    );
+    try_lifecycle_factory_inputs_for_test(startup, storage, state, kura)
+        .unwrap_or_else(|error| panic!("bind exact lifecycle factory inputs: {error}"))
+}
+
+fn try_lifecycle_factory_inputs_for_test(
+    startup: &AuthenticatedRecoveredAdapterStartup,
+    storage: RecoveredLifecycleStorageAuthorityV1,
+    state: Arc<crate::state::State>,
+    kura: Arc<Kura>,
+) -> Result<RecoveredLifecycleOwnerFactoryInputsV1, ProductionLifecycleOwnerStartupErrorV1> {
+    let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+    let queue = Arc::new(crate::queue::Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events_sender.clone(),
+    ));
+    startup.bind_production_lifecycle_owner_factory_inputs_v1(
+        storage,
+        state,
+        queue,
+        kura,
+        None,
+        None,
+        events_sender,
+    )
 }

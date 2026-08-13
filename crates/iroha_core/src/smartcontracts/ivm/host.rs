@@ -23307,6 +23307,7 @@ seiyaku Callee {
             .asset(asset_id)
             .expect(expected)
             .value()
+            .as_ref()
             .clone()
             .into_inner()
     }

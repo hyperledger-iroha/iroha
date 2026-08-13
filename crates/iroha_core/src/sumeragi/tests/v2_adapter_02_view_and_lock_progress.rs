@@ -82,32 +82,32 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
                 adapter.record_ingress_delivery(admission);
             }
         };
-    let admit_timeout_roster =
-        |adapter: &mut SumeragiV2Adapter, wire_round: wire::ConsensusRound| {
-            let roster_len = adapter.wire_context.roster.len();
-            for signer in 0..roster_len {
-                let signer = u32::try_from(signer).expect("fixture signer index fits u32");
-                let payload = wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
-                    round: wire_round,
-                    highest_prepare_qc: None,
-                    signer,
-                    signature: vec![0xE0 ^ u8::try_from(signer).expect("small fixture signer")],
-                });
-                let (outcome, admission) = adapter
-                    .admit_authenticated_payload(&payload)
-                    .expect("retained TimeoutVote bypasses ordinary capacity");
-                assert!(outcome.is_none());
-                let admission = admission.expect("TimeoutVote owns a capacity-bypass record");
-                assert!(
-                    adapter
-                        .ingress_equivocations
-                        .get(&admission.key)
-                        .expect("inserted TimeoutVote admission")
-                        .capacity_bypass
-                );
-                adapter.record_ingress_delivery(admission);
-            }
-        };
+    let admit_timeout_roster = |adapter: &mut SumeragiV2Adapter,
+                                wire_round: wire::ConsensusRound| {
+        let roster_len = adapter.wire_context.roster.len();
+        for signer in 0..roster_len {
+            let signer = u32::try_from(signer).expect("fixture signer index fits u32");
+            let payload = wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                round: wire_round,
+                highest_prepare_qc: None,
+                signer,
+                signature: vec![0xE0 ^ u8::try_from(signer).expect("small fixture signer")],
+            });
+            let (outcome, admission) = adapter
+                .admit_authenticated_payload(&payload)
+                .expect("retained TimeoutVote bypasses ordinary capacity");
+            assert!(outcome.is_none());
+            let admission = admission.expect("TimeoutVote owns a capacity-bypass record");
+            assert!(
+                adapter
+                    .ingress_equivocations
+                    .get(&admission.key)
+                    .expect("inserted TimeoutVote admission")
+                    .capacity_bypass
+            );
+            adapter.record_ingress_delivery(admission);
+        }
+    };
 
     let first_lock = install_lock(&mut adapter, 0xDB);
     let ordinary_round = first_lock.0;

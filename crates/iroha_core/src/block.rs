@@ -29007,11 +29007,7 @@ mod tests {
             .iter()
             .find(|keypair| keypair.public_key() == producer.public_key())
             .expect("fixture retains its producer key");
-        let network_id = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(
-            Hash::new(b"native-amx-test-genesis"),
-        ));
+        let network_id = native_amx_test_network_id();
         let epoch = 0;
         let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
             network_id,

@@ -60,14 +60,27 @@ fn outer_ingress_cursor_preserves_sequence_and_attests_runner_reach() {
     assert_eq!(turns.reach_debt(OuterIngressTurn::Runtime), Some(1));
     assert_eq!(turns.reach_debt(OuterIngressTurn::Ingress), Some(2));
 
-    assert_eq!(turns.next(), Some(OuterIngressTurn::Completion));
+    {
+        let turn = turns.next_current().expect("Completion turn");
+        assert_eq!(turn.turn(), OuterIngressTurn::Completion);
+    }
     assert_eq!(turns.reach_debt(OuterIngressTurn::Completion), Some(2));
-    assert_eq!(turns.next(), Some(OuterIngressTurn::Runtime));
+    {
+        let turn = turns.next_current().expect("Runtime turn");
+        assert_eq!(turn.turn(), OuterIngressTurn::Runtime);
+    }
     assert_eq!(turns.reach_debt(OuterIngressTurn::Completion), Some(1));
-    assert_eq!(turns.next(), Some(OuterIngressTurn::Ingress));
+    {
+        let turn = turns.next_current().expect("Ingress turn");
+        assert_eq!(turn.turn(), OuterIngressTurn::Ingress);
+    }
     assert_eq!(turns.reach_debt(OuterIngressTurn::Completion), Some(0));
+    let mut remaining = Vec::new();
+    while let Some(turn) = turns.next_current() {
+        remaining.push(turn.turn());
+    }
     assert_eq!(
-        turns.collect::<Vec<_>>(),
+        remaining,
         vec![
             OuterIngressTurn::Completion,
             OuterIngressTurn::Runtime,
@@ -76,6 +89,10 @@ fn outer_ingress_cursor_preserves_sequence_and_attests_runner_reach() {
     );
 
     let mut minimum = outer_ingress_turns(0, context_id, height);
-    assert_eq!(minimum.by_ref().count(), 3);
+    let mut count = 0;
+    while minimum.next_current().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 3);
     assert_eq!(minimum.reach_debt(OuterIngressTurn::Ingress), None);
 }

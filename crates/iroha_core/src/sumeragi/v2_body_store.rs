@@ -13,6 +13,7 @@ use std::{
     io::{Read, Write},
     mem::size_of,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use super::v2_core::EventTag;
@@ -28,8 +29,9 @@ use super::{
     v2_apply::VerifiedRecoveredFinalitySubject,
     v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId},
     v2_lifecycle_coordinator::{
+        AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, LifecycleContext,
-        TerminalValidateNoSuccessorClaim,
+        RecoveredDecisionApplyReplayLineageV1, TerminalValidateNoSuccessorClaim,
     },
     v2_transport::AuthenticatedCertifiedBodyResponse,
 };
@@ -198,6 +200,234 @@ pub(super) enum RecoveredValidatedBodyCutError {
     CommitmentMismatch,
 }
 
+/// Move-only ownership of the exact revalidated body named by a recovered Decision.
+///
+/// The complete body envelope, durable index entry, manifest, and successful
+/// validation marker stay private and inseparable. The cut also retains the
+/// identity and immutable context of the exact open store which minted it.
+/// Dropping the cut before the restart-closed Apply transaction accepts it
+/// restores every detached in-memory value exactly; it performs no storage
+/// write and exposes no body, manifest, receipt, or validation-marker accessor.
+#[must_use = "a detached recovered Decision body must be transferred or restored"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyBodyCut<'store> {
+    store: &'store mut V2BodyStore,
+    store_identity: V2BodyStoreInstanceIdentity,
+    context: wire::HeightContext,
+    key: (wire::ConsensusRound, wire::BlockSubject),
+    envelope: StoredBodyEnvelope,
+    durable: Option<DurableBodyReceipt>,
+    manifest: Option<wire::PayloadManifest>,
+    validated: Option<ValidatedBodyReceipt>,
+}
+
+/// Move-only recovered-Decision adapter preview with every authority kept whole.
+///
+/// The original Fetch projection retains its effect, pending binding, WAL
+/// identity, replay evidence, and candidate internally. The body cut and replay
+/// lineage remain inseparable from the staged adapter and its private
+/// predecessor-derived Store/Validate/Apply pending chain. This value exposes
+/// no effect, candidate, body, replay, pending, or parts accessor.
+#[must_use = "a recovered Decision Apply preview must remain sealed through publication"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterPreviewV1<'store> {
+    _fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
+    _body: RecoveredDecisionApplyBodyCut<'store>,
+    _replay: RecoveredDecisionApplyReplayLineageV1,
+    _staged: super::v2::RecoveredDecisionApplyStagedAdapterV1,
+}
+
+/// Closed storage-ready Decision Apply preview.
+///
+/// The reducer-derived logical lineage remains attached to the same-store
+/// detached body cut. The exact lifecycle transaction must restore the body
+/// before authenticating the complete startup census and publishing LedgerV1.
+#[must_use = "recovered Decision storage preview must enter exact publication"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyStoragePreviewV1<'store> {
+    staged: super::v2::RecoveredDecisionApplyStagedStorageV1,
+    body: RecoveredDecisionApplyBodyCut<'store>,
+}
+
+/// Storage-ready state after the exact body has been restored to its owner.
+///
+/// This value no longer borrows the body store. A persistence failure retains
+/// all adapter and lifecycle authority here for restart-only handling.
+#[must_use = "restored Decision Apply state must enter the single-fsync transaction"]
+pub(in crate::sumeragi) struct RestoredRecoveredDecisionApplyStorageV1 {
+    staged: super::v2::RecoveredDecisionApplyStagedStorageV1,
+}
+
+/// Opaque failure while closing the adapter preview for storage publication.
+#[must_use = "failed recovered Decision storage projection requires restart"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyStoragePreviewErrorV1<'store> {
+    _body: RecoveredDecisionApplyBodyCut<'store>,
+    _projection: super::v2::RecoveredDecisionApplyStorageProjectionErrorV1,
+}
+
+#[cfg(all(test, feature = "bls"))]
+impl RecoveredDecisionApplyAdapterPreviewV1<'_> {
+    /// Recheck the sealed Fetch/body join and staged adapter state in tests.
+    pub(in crate::sumeragi) fn validates_for_test(&self) -> bool {
+        self._body.exactly_matches_decision(&self._fetch) && self._staged.validates()
+    }
+}
+
+impl<'store> RecoveredDecisionApplyAdapterPreviewV1<'store> {
+    /// Consume the reducer preview into the sole storage-ready closed form.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_storage_preview(
+        self,
+        verified: &super::v2::VerifiedHeightContext,
+    ) -> Result<
+        RecoveredDecisionApplyStoragePreviewV1<'store>,
+        RecoveredDecisionApplyStoragePreviewErrorV1<'store>,
+    > {
+        let Self {
+            _fetch: fetch,
+            _body: body,
+            _replay: replay,
+            _staged: staged,
+        } = self;
+        let durable = body
+            .durable
+            .as_ref()
+            .expect("a live Decision body cut retains its durable receipt");
+        let validated = body
+            .validated
+            .as_ref()
+            .expect("a live Decision body cut retains its validation receipt");
+        match staged.into_storage_projection(verified, fetch, replay, durable, validated) {
+            Ok(staged) => Ok(RecoveredDecisionApplyStoragePreviewV1 { staged, body }),
+            Err(projection) => Err(RecoveredDecisionApplyStoragePreviewErrorV1 {
+                _body: body,
+                _projection: projection,
+            }),
+        }
+    }
+}
+
+impl RecoveredDecisionApplyStoragePreviewV1<'_> {
+    /// Recheck the same-store Fetch/body/lineage join without exposing parts.
+    pub(in crate::sumeragi) fn validates(
+        &self,
+        verified: &super::v2::VerifiedHeightContext,
+    ) -> bool {
+        self.staged.validates(verified) && self.body.exactly_matches_decision(self.staged.fetch())
+    }
+
+    /// Borrow the opaque logical lineage for exact ledger staging.
+    pub(in crate::sumeragi) const fn staged(
+        &self,
+    ) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
+        &self.staged
+    }
+
+    /// Restore the exact body frame and marker, ending the store borrow before
+    /// the external LedgerV1 publication can begin.
+    pub(in crate::sumeragi) fn restore_body(self) -> RestoredRecoveredDecisionApplyStorageV1 {
+        let Self { staged, body } = self;
+        drop(body);
+        RestoredRecoveredDecisionApplyStorageV1 { staged }
+    }
+}
+
+impl RestoredRecoveredDecisionApplyStorageV1 {
+    /// Borrow the exact staged lineage for the final pre-fsync recheck.
+    pub(in crate::sumeragi) const fn staged(
+        &self,
+    ) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
+        &self.staged
+    }
+
+    /// Consume the restored state only inside the lifecycle publication tail.
+    pub(in crate::sumeragi) fn into_staged(
+        self,
+    ) -> super::v2::RecoveredDecisionApplyStagedStorageV1 {
+        self.staged
+    }
+}
+
+/// Opaque failed preview retaining every move-only input until fail-stop restart.
+///
+/// Dropping this value restores the detached body cut exactly. The adapter is
+/// either the untouched input or the explicitly rolled-back cold state, and no
+/// constituent can be recovered for an in-process retry.
+#[must_use = "a failed recovered Decision Apply preview requires restart"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterPreviewError<'store> {
+    reason: &'static str,
+    _failure: RecoveredDecisionApplyAdapterPreviewFailure<'store>,
+}
+
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum RecoveredDecisionApplyAdapterPreviewFailure<'store> {
+    Inputs {
+        _adapter: super::v2::SumeragiV2Adapter,
+        _fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
+        _body: RecoveredDecisionApplyBodyCut<'store>,
+        _replay: RecoveredDecisionApplyReplayLineageV1,
+    },
+    Staging {
+        _fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
+        _body: RecoveredDecisionApplyBodyCut<'store>,
+        _replay: RecoveredDecisionApplyReplayLineageV1,
+        _staging: super::v2::RecoveredDecisionApplyAdapterStagingError,
+    },
+}
+
+impl RecoveredDecisionApplyAdapterPreviewError<'_> {
+    /// Return one stable non-authorizing diagnostic without releasing inputs.
+    pub(in crate::sumeragi) const fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+/// One-shot call capability for deriving the inert recovered-Decision replay family.
+///
+/// Construction stays beside the same-store body cut, so no caller can submit
+/// arbitrary manifest or receipt parts to the WAL projection.
+pub(in crate::sumeragi) struct RecoveredDecisionApplyReplayPermit {
+    _linearity: RecoveredDecisionApplyReplayLinearity,
+}
+
+/// One-shot capability for the fixed recovered-Decision reducer preview.
+pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterPreviewPermit {
+    _linearity: RecoveredDecisionApplyAdapterPreviewLinearity,
+}
+
+struct RecoveredDecisionApplyAdapterPreviewLinearity;
+
+impl Drop for RecoveredDecisionApplyAdapterPreviewLinearity {
+    fn drop(&mut self) {}
+}
+
+struct RecoveredDecisionApplyReplayLinearity;
+
+impl Drop for RecoveredDecisionApplyReplayLinearity {
+    fn drop(&mut self) {}
+}
+
+/// Closed reason a revalidated same-store Decision body could not be detached.
+#[derive(Debug, Error)]
+#[allow(variant_size_differences)]
+pub(in crate::sumeragi) enum RecoveredDecisionApplyBodyCutError {
+    /// The Decision projection belongs to another immutable height context.
+    #[error("recovered Decision body belongs to another height context")]
+    ForeignContext,
+    /// The store still contains checksummed markers which have not been revalidated.
+    #[error("recovered Decision body markers require semantic revalidation")]
+    UnrevalidatedMarkers,
+    /// Deterministic replay rejected the exact body named by the Decision.
+    #[error("recovered Decision body was deterministically rejected")]
+    DeterministicRejection,
+    /// No successful revalidated marker matches the exact Decision body.
+    #[error("recovered Decision has no exact revalidated body marker")]
+    MissingMarker,
+    /// More than one successful marker claimed the exact Decision body.
+    #[error("recovered Decision body marker is ambiguous")]
+    AmbiguousMarker,
+    /// The accepted in-memory frame, manifest, marker, or durable file drifted.
+    #[error("recovered Decision body-store frame failed exact revalidation: {0}")]
+    BodyStore(#[source] V2BodyStoreError),
+}
+
 #[derive(Debug, PartialEq, Eq)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum DurableBodyValidationOutcomeBody {
@@ -340,6 +570,169 @@ impl Drop for RecoveredValidatedBodyCut<'_> {
         };
         let displaced = self.store.validated.insert(self.key, validated);
         debug_assert!(displaced.is_none());
+    }
+}
+
+impl<'store> RecoveredDecisionApplyBodyCut<'store> {
+    /// Recheck the opaque cut against the same authenticated recovered Decision.
+    ///
+    /// This comparison deliberately returns only a boolean. It cannot release
+    /// any constituent which a caller could splice into another transition.
+    pub(in crate::sumeragi) fn exactly_matches_decision(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        let Some(durable) = self.durable.as_ref() else {
+            return false;
+        };
+        let Some(manifest) = self.manifest.as_ref() else {
+            return false;
+        };
+        let Some(validated) = self.validated.as_ref() else {
+            return false;
+        };
+        self.store
+            .instance_identity()
+            .same_instance(&self.store_identity)
+            && self.store.context == self.context
+            && self.key == (durable.round(), durable.subject())
+            && self.context.id() == durable.context_id()
+            && self.context.height == durable.round().height
+            && validated.durable() == durable
+            && projection.matches_validated_body(validated)
+            && &self.envelope.manifest == manifest
+            && self.envelope.context_id == durable.context_id()
+            && self.envelope.round == durable.round()
+            && self.envelope.subject == durable.subject()
+            && HashOf::new(manifest) == durable.manifest_hash()
+    }
+
+    /// Derive the inert Store/Validate/Apply replay family without exposing body parts.
+    pub(in crate::sumeragi) fn prepare_replay_lineage(
+        &self,
+        verified: &super::v2::VerifiedHeightContext,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> Option<RecoveredDecisionApplyReplayLineageV1> {
+        if !self.exactly_matches_decision(projection) {
+            return None;
+        }
+        projection.project_decision_apply_replay_lineage(
+            RecoveredDecisionApplyReplayPermit {
+                _linearity: RecoveredDecisionApplyReplayLinearity,
+            },
+            verified,
+            self.manifest.as_ref()?,
+            self.durable.as_ref()?,
+        )
+    }
+
+    /// Consume every exact input into one fixed three-event reducer fast-forward.
+    ///
+    /// The supplied replay lineage is re-derived and compared before the body
+    /// parts reach the adapter. A typed failure keeps the complete projection,
+    /// body cut, replay lineage, and original or rolled-back adapter opaque.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_adapter_preview(
+        self,
+        adapter: super::v2::SumeragiV2Adapter,
+        verified: &super::v2::VerifiedHeightContext,
+        projection: AuthenticatedRecoveredWalDecisionFetchProjection,
+        replay: RecoveredDecisionApplyReplayLineageV1,
+    ) -> Result<
+        RecoveredDecisionApplyAdapterPreviewV1<'store>,
+        RecoveredDecisionApplyAdapterPreviewError<'store>,
+    > {
+        let exact = self.exactly_matches_decision(&projection)
+            && self
+                .prepare_replay_lineage(verified, &projection)
+                .is_some_and(|expected| expected == replay);
+        if !exact {
+            return Err(RecoveredDecisionApplyAdapterPreviewError {
+                reason: "Decision body, Fetch projection, and replay lineage do not match",
+                _failure: RecoveredDecisionApplyAdapterPreviewFailure::Inputs {
+                    _adapter: adapter,
+                    _fetch: projection,
+                    _body: self,
+                    _replay: replay,
+                },
+            });
+        }
+        match adapter.prepare_recovered_decision_apply_fast_forward(
+            RecoveredDecisionApplyAdapterPreviewPermit {
+                _linearity: RecoveredDecisionApplyAdapterPreviewLinearity,
+            },
+            verified,
+            &projection,
+            self.manifest
+                .as_ref()
+                .expect("a live Decision body cut retains its manifest"),
+            self.durable
+                .as_ref()
+                .expect("a live Decision body cut retains its durable receipt"),
+            self.validated
+                .as_ref()
+                .expect("a live Decision body cut retains its validation marker"),
+        ) {
+            Ok(staged) => Ok(RecoveredDecisionApplyAdapterPreviewV1 {
+                _fetch: projection,
+                _body: self,
+                _replay: replay,
+                _staged: staged,
+            }),
+            Err(staging) => {
+                let _ = staging.error();
+                Err(RecoveredDecisionApplyAdapterPreviewError {
+                    reason: "Decision body reducer fast-forward is inconsistent",
+                    _failure: RecoveredDecisionApplyAdapterPreviewFailure::Staging {
+                        _fetch: projection,
+                        _body: self,
+                        _replay: replay,
+                        _staging: staging,
+                    },
+                })
+            }
+        }
+    }
+
+    /// Compare the retained process identity and full immutable context in tests.
+    #[cfg(all(test, feature = "bls"))]
+    pub(in crate::sumeragi) fn exactly_matches_store_for_test(
+        &self,
+        identity: &V2BodyStoreInstanceIdentity,
+        context: &wire::HeightContext,
+    ) -> bool {
+        self.store_identity.same_instance(identity) && &self.context == context
+    }
+}
+
+impl Drop for RecoveredDecisionApplyBodyCut<'_> {
+    fn drop(&mut self) {
+        let durable = self
+            .durable
+            .take()
+            .expect("a live recovered Decision body cut retains its durable frame");
+        let manifest = self
+            .manifest
+            .take()
+            .expect("a live recovered Decision body cut retains its manifest");
+        let validated = self
+            .validated
+            .take()
+            .expect("a live recovered Decision body cut retains its validation marker");
+        debug_assert_eq!(&durable, validated.durable());
+        debug_assert_eq!(&manifest, &self.envelope.manifest);
+        assert!(
+            !self.store.entries.contains_key(&self.key)
+                && !self.store.manifests.contains_key(&self.key)
+                && !self.store.validated.contains_key(&self.key),
+            "a detached recovered Decision body cannot collide while restoring"
+        );
+        let displaced_durable = self.store.entries.insert(self.key, durable);
+        let displaced_manifest = self.store.manifests.insert(self.key, manifest);
+        let displaced_validated = self.store.validated.insert(self.key, validated);
+        assert!(displaced_durable.is_none());
+        assert!(displaced_manifest.is_none());
+        assert!(displaced_validated.is_none());
     }
 }
 // DURABLE_BODY_VALIDATION_SURFACE_END
@@ -725,6 +1118,7 @@ impl DurableBodyReceipt {
 /// new height context. Validation receipts remain bound to one exact proposal
 /// round and are never promoted across views.
 pub(crate) struct V2BodyStore {
+    identity: Arc<V2BodyStoreInstanceIdentityMarker>,
     context: wire::HeightContext,
     signature_policy: BlockSignaturePolicy,
     directory: PathBuf,
@@ -750,6 +1144,204 @@ pub(crate) struct V2BodyStore {
     /// body-store-instance-bound terminal Validate recovery join. The raw
     /// diagnostic string remains non-authoritative.
     rejected: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RevalidatedRejectedBody>,
+}
+
+/// Move-only same-store input accepted by unified production lifecycle startup.
+///
+/// Construction consumes an already-open body store only after every recovered
+/// terminal marker has crossed deterministic semantic replay. There is no
+/// production constructor from a filesystem root and no raw parts API: the
+/// unified owner must consume this exact instance or startup stops.
+#[must_use = "the revalidated body-store cut must enter unified lifecycle startup"]
+pub(crate) struct RevalidatedV2BodyStore(V2BodyStore);
+
+impl RevalidatedV2BodyStore {
+    /// Compare the complete immutable context without releasing the store.
+    pub(in crate::sumeragi) fn matches_context(&self, context: &wire::HeightContext) -> bool {
+        &self.0.context == context
+    }
+
+    /// Compare the still-owned store with one canonical context-addressed root.
+    ///
+    /// This is a fixed boolean oracle: neither the opened directory nor the
+    /// signature policy crosses the sealed startup handoff. Production uses it
+    /// to prove that the body owner came from the same Kura-derived storage
+    /// layout as the lifecycle ledger before either owner is opened.
+    pub(in crate::sumeragi) fn matches_lifecycle_storage_root(
+        &self,
+        root: &Path,
+        context: &wire::HeightContext,
+        signature_policy: &BlockSignaturePolicy,
+    ) -> bool {
+        &self.0.context == context
+            && &self.0.signature_policy == signature_policy
+            && self.0.directory == root.join(hex::encode(context.id().0.as_ref()))
+    }
+
+    /// Return a comparison-only identity for this exact still-owned store.
+    #[cfg(all(test, feature = "bls"))]
+    pub(in crate::sumeragi) fn instance_identity(&self) -> V2BodyStoreInstanceIdentity {
+        self.0.instance_identity()
+    }
+
+    /// Return whether this revalidated store owns the exact successful marker
+    /// needed to replace a recovered Decision Fetch with Apply.
+    pub(in crate::sumeragi) fn has_exact_recovered_decision_fetch_parent(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.0.has_exact_recovered_decision_fetch_parent(projection)
+    }
+
+    /// Return whether deterministic replay rejected the body named by a
+    /// recovered Decision.
+    pub(in crate::sumeragi) fn has_rejected_recovered_decision_body(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.0.has_rejected_recovered_decision_body(projection)
+    }
+
+    /// Detach the exact successful body frame named by a recovered Decision.
+    ///
+    /// Every fallible context, marker, index, manifest, checksum, canonical
+    /// wire, and signature check completes before any in-memory value moves.
+    /// Deterministic rejection is a distinct fatal classification and never
+    /// becomes either Fetch or Apply authority.
+    pub(in crate::sumeragi) fn detach_recovered_decision_apply_body(
+        &mut self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> Result<RecoveredDecisionApplyBodyCut<'_>, RecoveredDecisionApplyBodyCutError> {
+        self.0
+            .ensure_recovered_markers_revalidated()
+            .map_err(|error| {
+                debug_assert!(matches!(
+                    error,
+                    V2BodyStoreError::UnrevalidatedValidationMarkers
+                ));
+                RecoveredDecisionApplyBodyCutError::UnrevalidatedMarkers
+            })?;
+        let lifecycle_context = super::v2_lifecycle_coordinator::lifecycle_context(&self.0.context);
+        if !projection.belongs_to_context(lifecycle_context) {
+            return Err(RecoveredDecisionApplyBodyCutError::ForeignContext);
+        }
+        if self
+            .0
+            .rejected
+            .values()
+            .any(|rejected| projection.matches_durable_body(&rejected.durable))
+        {
+            return Err(RecoveredDecisionApplyBodyCutError::DeterministicRejection);
+        }
+
+        let mut matching = self
+            .0
+            .validated
+            .iter()
+            .filter(|(_, validated)| projection.matches_validated_body(validated));
+        let Some((key, validated)) = matching.next() else {
+            return Err(RecoveredDecisionApplyBodyCutError::MissingMarker);
+        };
+        if matching.next().is_some() {
+            return Err(RecoveredDecisionApplyBodyCutError::AmbiguousMarker);
+        }
+        let key = *key;
+        let durable = self
+            .0
+            .entries
+            .get(&key)
+            .ok_or(V2BodyStoreError::ReceiptMismatch)
+            .map_err(RecoveredDecisionApplyBodyCutError::BodyStore)?;
+        let manifest = self
+            .0
+            .manifests
+            .get(&key)
+            .ok_or(V2BodyStoreError::ReceiptMismatch)
+            .map_err(RecoveredDecisionApplyBodyCutError::BodyStore)?;
+        if validated.durable() != durable
+            || key != (durable.round(), durable.subject())
+            || manifest.round != durable.round()
+            || manifest.subject != durable.subject()
+            || HashOf::new(manifest) != durable.manifest_hash()
+        {
+            return Err(RecoveredDecisionApplyBodyCutError::BodyStore(
+                V2BodyStoreError::ReceiptMismatch,
+            ));
+        }
+        let envelope = self
+            .0
+            .load_envelope(durable)
+            .map_err(RecoveredDecisionApplyBodyCutError::BodyStore)?;
+        if envelope.manifest != *manifest
+            || envelope.context_id != self.0.context.id()
+            || !projection.matches_validated_body(validated)
+        {
+            return Err(RecoveredDecisionApplyBodyCutError::BodyStore(
+                V2BodyStoreError::ReceiptMismatch,
+            ));
+        }
+
+        let store_identity = self.0.instance_identity();
+        let context = self.0.context.clone();
+        let durable = self
+            .0
+            .entries
+            .remove(&key)
+            .expect("the exact Decision durable frame was checked before detach");
+        let manifest = self
+            .0
+            .manifests
+            .remove(&key)
+            .expect("the exact Decision manifest was checked before detach");
+        let validated = self
+            .0
+            .validated
+            .remove(&key)
+            .expect("the exact Decision marker was checked before detach");
+        Ok(RecoveredDecisionApplyBodyCut {
+            store: &mut self.0,
+            store_identity,
+            context,
+            key,
+            envelope,
+            durable: Some(durable),
+            manifest: Some(manifest),
+            validated: Some(validated),
+        })
+    }
+
+    /// Consume the sealed instance into the unified production owner.
+    ///
+    /// The expected context comparison is repeated at the transfer boundary so
+    /// a revalidated store opened for another height cannot be substituted.
+    pub(in crate::sumeragi) fn into_lifecycle_owner_store(
+        self,
+        expected_context: &wire::HeightContext,
+    ) -> Result<V2BodyStore, V2BodyStoreError> {
+        self.0.ensure_recovered_markers_revalidated()?;
+        if &self.0.context != expected_context {
+            return Err(V2BodyStoreError::ContextMismatch);
+        }
+        Ok(self.0)
+    }
+}
+
+#[derive(Debug)]
+struct V2BodyStoreInstanceIdentityMarker;
+
+/// Comparison-only process identity for one exact open body-store instance.
+///
+/// This seal is not durable authority. It only proves that a lifecycle owner
+/// and its height-local I/O worker refer to the same move-only store instance
+/// during the live process transition.
+#[derive(Clone, Debug)]
+pub(crate) struct V2BodyStoreInstanceIdentity(Arc<V2BodyStoreInstanceIdentityMarker>);
+
+impl V2BodyStoreInstanceIdentity {
+    /// Return whether both seals were projected from the same open store.
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// Immutable post-finality deletion authority for one exact body directory.
@@ -784,12 +1376,72 @@ impl V2BodyRetirementJob {
 }
 
 impl V2BodyStore {
+    /// Project a comparison-only identity before moving this store to its worker.
+    pub(crate) fn instance_identity(&self) -> V2BodyStoreInstanceIdentity {
+        V2BodyStoreInstanceIdentity(Arc::clone(&self.identity))
+    }
+
     /// Return whether this already-open store belongs to the exact context.
     ///
     /// Production startup uses this when a durable recovery catalog must be
     /// inspected before the serialized runtime is constructed.
     pub(crate) fn matches_context(&self, context: &wire::HeightContext) -> bool {
         &self.context == context
+    }
+
+    /// Compare this exact opened store with one sealed lifecycle storage root.
+    ///
+    /// The caller receives only a boolean. The context-addressed directory and
+    /// signature policy remain private to the store, so this cannot be used to
+    /// reconstruct or redirect body ownership.
+    pub(in crate::sumeragi) fn matches_lifecycle_storage_root(
+        &self,
+        root: &Path,
+        context: &wire::HeightContext,
+        signature_policy: &BlockSignaturePolicy,
+    ) -> bool {
+        &self.context == context
+            && &self.signature_policy == signature_policy
+            && self.directory == root.join(hex::encode(context.id().0.as_ref()))
+    }
+
+    /// Compare a receipt with the exact in-memory entry owned by this open store.
+    ///
+    /// This deliberately performs no filesystem I/O. A caller can therefore
+    /// distinguish an unowned receipt, which is rejected before accepting any
+    /// storage authority, from corruption discovered while reloading a receipt
+    /// that this store already accepted and indexed.
+    pub(super) fn owns_receipt(&self, receipt: &DurableBodyReceipt) -> bool {
+        receipt.context_id == self.context.id()
+            && receipt.round.context_id == receipt.context_id
+            && receipt.round.height == self.context.height
+            && self
+                .entries
+                .get(&(receipt.round, receipt.subject))
+                .is_some_and(|known| known == receipt)
+    }
+
+    /// Replace an accepted frame after its receipt was minted.
+    #[cfg(test)]
+    pub(super) fn corrupt_owned_frame_for_test(
+        &self,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<(), V2BodyStoreError> {
+        if !self.owns_receipt(receipt) {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        let path = self.path_for(receipt.round, receipt.subject);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.write_all(b"corrupt accepted body frame")
+            .and_then(|()| file.sync_all())
+            .map_err(|source| V2BodyStoreError::Io { path, source })
     }
 
     /// Open the active context directory and fail closed on every malformed
@@ -829,6 +1481,7 @@ impl V2BodyStore {
         }
 
         let mut store = Self {
+            identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
             context,
             signature_policy,
             directory,
@@ -907,6 +1560,36 @@ impl V2BodyStore {
             return Err(V2BodyStoreError::UnexpectedEntry(path.clone()));
         }
         Ok(store)
+    }
+
+    /// Open an empty, context-addressed store for non-cryptographic lifecycle fixtures.
+    ///
+    /// Production must use [`Self::open_with_policy`]. This helper exists only
+    /// because replay-authority unit fixtures deliberately retain structural
+    /// certificates rather than usable voting signatures.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn open_lifecycle_fixture_for_test(
+        root: impl AsRef<Path>,
+        context: wire::HeightContext,
+        signature_policy: BlockSignaturePolicy,
+    ) -> Result<Self, V2BodyStoreError> {
+        let directory = root.as_ref().join(hex::encode(context.id().0.as_ref()));
+        fs::create_dir_all(&directory).map_err(|source| V2BodyStoreError::Io {
+            path: directory.clone(),
+            source,
+        })?;
+        Ok(Self {
+            identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
+            context,
+            signature_policy,
+            directory,
+            entries: BTreeMap::new(),
+            manifests: BTreeMap::new(),
+            pending_revalidation: BTreeMap::new(),
+            retired_revalidation: BTreeMap::new(),
+            validated: BTreeMap::new(),
+            rejected: BTreeMap::new(),
+        })
     }
 
     /// Recover the durable receipt indexed by an exact round and subject.
@@ -1138,6 +1821,21 @@ impl V2BodyStore {
         }
     }
 
+    /// Consume this exact open store into the sole production-startup handoff.
+    ///
+    /// Checksummed restart markers cannot cross this boundary. The store is
+    /// consumed even on error so there is no raw fallback path after a failed
+    /// attempt to seal unrevalidated state.
+    // TODO: Runner cutover must call this immediately after semantic marker
+    // replay and move the result into the unified lifecycle-owner factory.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn into_revalidated_startup(
+        self,
+    ) -> Result<RevalidatedV2BodyStore, V2BodyStoreError> {
+        self.ensure_recovered_markers_revalidated()?;
+        Ok(RevalidatedV2BodyStore(self))
+    }
+
     /// Snapshot semantically revalidated success receipts for WAL recovery.
     ///
     /// Deterministic rejections remain in a separate private map and cannot be
@@ -1146,6 +1844,57 @@ impl V2BodyStore {
         &self,
     ) -> BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt> {
         self.validated.clone()
+    }
+
+    /// Detect the exact validated predecessor reserved for Decision Apply publication.
+    ///
+    /// This read-only oracle exposes no receipt. A matching marker prevents the
+    /// recovered Decision Fetch from being installed as a second executable
+    /// owner; the publication composite consumes and replaces both atomically.
+    pub(in crate::sumeragi) fn has_exact_recovered_decision_fetch_parent(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.validated
+            .values()
+            .any(|validated| projection.matches_validated_body(validated))
+    }
+
+    /// Detect a matching success marker still awaiting semantic replay.
+    ///
+    /// This is a rejection-only oracle. A quarantined marker is not Apply
+    /// authority, but startup must not install a duplicate Decision Fetch before
+    /// semantic revalidation can classify and consume the marker.
+    pub(in crate::sumeragi) fn has_quarantined_recovered_decision_fetch_parent(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.pending_revalidation
+            .values()
+            .any(|pending| match &pending.outcome {
+                ValidationOutcomeMarkerKind::Validated(commitment) => {
+                    projection.matches_durable_body_and_commitment(&pending.durable, *commitment)
+                }
+                ValidationOutcomeMarkerKind::Rejected(_) => false,
+            })
+    }
+
+    /// Detect a deterministic rejection for the body named by a Commit Decision.
+    ///
+    /// Both semantically replayed and quarantined rejection markers are
+    /// invariant conflicts. They authorize neither refetch nor Apply and force
+    /// startup to stop before LedgerV1 can change.
+    pub(in crate::sumeragi) fn has_rejected_recovered_decision_body(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.rejected
+            .values()
+            .any(|rejected| projection.matches_durable_body(&rejected.durable))
+            || self.pending_revalidation.values().any(|pending| {
+                matches!(&pending.outcome, ValidationOutcomeMarkerKind::Rejected(_))
+                    && projection.matches_durable_body(&pending.durable)
+            })
     }
 
     /// Detach the aggregate semantically revalidated terminal outcome catalog.
@@ -1190,10 +1939,14 @@ impl V2BodyStore {
         recovered: &RecoveredWalVoteSign,
     ) -> Result<RecoveredValidatedBodyCut<'_>, RecoveredValidatedBodyCutError> {
         let vote = recovered.vote();
+        let tag_matches_vote = recovered.tag().height() == vote.round.height
+            && match vote.phase {
+                wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view,
+                wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view,
+            };
         if self.context.id() != vote.round.context_id
             || self.context.height != vote.round.height
-            || recovered.tag().height() != vote.round.height
-            || recovered.tag().view() != vote.round.view
+            || !tag_matches_vote
         {
             return Err(RecoveredValidatedBodyCutError::ForeignContext);
         }
@@ -1371,8 +2124,9 @@ impl V2BodyStore {
     /// file and its directory entry have been synchronised. Exact repeats reuse
     /// that already durable frame; a different body for the same round and
     /// subject fails closed under the existing store contract.
-    // TODO: Move the blocking I/O to the bounded storage worker and consume
-    // this sealed receipt in the future composite Fetch-to-Store transaction.
+    // The bounded storage worker owns this blocking call. Its typed completion
+    // retains the sealed receipt until the fresh-selector lifecycle transaction
+    // either commits or closes output for restart.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn persist_authenticated_certified_fetch_response(
         &mut self,
@@ -1795,14 +2549,7 @@ impl V2BodyStore {
     }
 
     fn verify_receipt(&self, receipt: &DurableBodyReceipt) -> Result<(), V2BodyStoreError> {
-        if receipt.context_id != self.context.id()
-            || receipt.round.context_id != receipt.context_id
-            || receipt.round.height != self.context.height
-            || self
-                .entries
-                .get(&(receipt.round, receipt.subject))
-                .is_none_or(|known| known != receipt)
-        {
+        if !self.owns_receipt(receipt) {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
         Ok(())
@@ -2191,6 +2938,9 @@ pub(crate) enum V2BodyStoreError {
     /// Stored metadata does not belong to the active context.
     #[error("Sumeragi v2 body-store context, round, subject, or manifest mismatch")]
     ContextMismatch,
+    /// The opened body store is outside the canonical lifecycle storage owner.
+    #[error("Sumeragi v2 body-store publication target mismatch")]
+    StoreRootMismatch,
     /// Canonical body size cannot be represented safely.
     #[error("Sumeragi v2 body is too large")]
     BodyTooLarge,
@@ -2492,6 +3242,23 @@ mod tests {
             .manifest()
             .clone();
         (canonical_wire, manifest)
+    }
+
+    #[test]
+    fn body_store_instance_identity_distinguishes_a_same_path_reopen() {
+        let directory = TempDir::new().expect("temporary identity body store");
+        let (context, _) = context_and_keys();
+        let store = V2BodyStore::open(directory.path(), context.clone())
+            .expect("open first body-store instance");
+        let first = store.instance_identity();
+        assert!(first.same_instance(&store.instance_identity()));
+
+        let reopened = V2BodyStore::open(directory.path(), context)
+            .expect("reopen the same body-store path independently");
+        assert!(
+            !first.same_instance(&reopened.instance_identity()),
+            "path and context equality cannot substitute for move-only instance ownership"
+        );
     }
 
     fn store_with_promoted_terminal_outcomes(

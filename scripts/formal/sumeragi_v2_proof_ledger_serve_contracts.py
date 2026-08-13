@@ -1400,7 +1400,7 @@ _SERVICED_CANDIDATE_V4_STORE_STRUCT_SHA256 = {
         "513bcbab69e770685d1c32b901aba58927aaeb681c4bd114efb196ed333aad5e"
     ),
     "ServicedCandidateStore": (
-        "7098d19291be10396014a59d8083053dcbbb28bad1e80e1be329f63beb503791"
+        "abc4a9edd831d00f0296143653aeb340c018aad9e4e8d9a4372e35ff759bf796"
     ),
 }
 _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
@@ -1441,22 +1441,22 @@ _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
         "3e025a26fdd14c00e5664a2d34355169bc7b650de2534939586f3a7b50ebb9d4"
     ),
     "leader_wire_load_and_reconcile": (
-        "79c56818f0977881a26b4069afd457216b04ba5839bb220409cf4927d27b0c88"
+        "56b48215d914a764d9eadf2c4f7d49ba7c380289d9c4c89f9fc2238da7d98f17"
     ),
     "store_open": (
-        "89ddfaf9974da9f175de80d61767eb020c49b5672c2a73de8610fddd8d0b0e76"
+        "a87131cdea8fcf204ab3a04992f93e05fc32400f475abcda450f2636d08b97de"
     ),
     "store_open_with_capacities": (
-        "5b754c14060c56c57d91ec48147d0afd45df29e1215f543703298a606469cfc3"
+        "efd1503685bf7b1871785e2dcc66f7b24286035c043015f0faef8ac7679d6199"
     ),
     "store_load": (
-        "8ad2fa2d46a62e9428cd175f7869c8a247fe53776b1a9c0c01c7fb028a9799d5"
+        "7d11d50560c963ae104e22e07e706dc6625f39263047391023a715127fb57de6"
     ),
     "store_reserve_producer_continuation": (
         "452de9ed84f0d1f83c17df83d58f87f7530b60e98d022f11694e9896a5181b4e"
     ),
     "store_persist_with_producer_continuations": (
-        "6e358bdb8fe65c77795efd88adc49a6054b95e812217854d2757e07aa028b942"
+        "5f238302d23375639a031d0276d9abd06a52c16b004540d4749cbf0767dca3d5"
     ),
     "encode_payload_frame": (
         "7cb4861444e43a3904493bfcb15ff8eb92f5ee6fdbe763eec691701a11efa71f"
@@ -1508,7 +1508,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "ec34728709a11989ad8d0dafc0162f7848c0436a1fc68792362a36f1ff19e842"
+        "e91ac22cf354ee698ce40c2d49b423fedd0bb054728337b14d43940e43802600"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1643,11 +1643,28 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
-    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
+    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
+}
+_SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
+    "open_rejects_a_preexisting_symlink_for_the_owned_wal_directory": (
+        "b7c12ab1ab457087eb7f0dbf0b8fa2611953ed92e2b6a97428ee4826d641d8a1"
+    ),
+    "parent_substitution_poisoning_prevents_wal_append_acknowledgement": (
+        "7f1cc2e7b64e61b0c979167871c0cc3427bd24ae4c35c94f72d9164866e53aea"
+    ),
+    "adjacent_authorities_reject_parent_substitution_without_path_fallback": (
+        "71f4a45dd544def294eb0a663a2fee199130996a3db769fd5db1468e10a69687"
+    ),
+    "adjacent_authority_bounds_publish_read_and_retirement": (
+        "a9cfdc40522e1b1bf9243607d0fece4d38c407ac1a84117b13c05517dfcabcdb"
+    ),
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
     "snapshot_roundtrips_and_rejects_a_b_a_resurrection": (
         "d19e863f444d25bb405fcfc183438c9abd6e64fd7ce82453c91059bb2874007d"
+    ),
+    "serviced_candidate_recovery_rejects_substituted_wal_directory": (
+        "bef464622aa061ccf1d5e580647f03a3222d3897069acf4a581d7cdcc9bf1d01"
     ),
     "v4_roundtrips_terminal_producer_continuations_and_v3_upgrades_canonically": (
         "10a637f7e21143470bdd72792630231d35801c52bbfa745786c836067b7dd244"
@@ -1657,6 +1674,9 @@ _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
     ),
     "leader_wire_gate_rejects_producer_terminal_from_foreign_view_or_phase": (
         "064f2e9ca4a8fc96c2f26ae5735d5a057785acf57c5fd9dc9c55230c0c1055e1"
+    ),
+    "leader_wire_gate_rejects_substituted_wal_directory": (
+        "908d8f626ae3cb7eca6f0e8946afa2459deec32802007e0903c4c379dc7828b2"
     ),
     "snapshot_rejects_corruption_stale_context_and_capacity_exhaustion": (
         "9092b4ebab5ec88f8ad99a573352aedb05fe29385f5ff01215bf088c35511059"

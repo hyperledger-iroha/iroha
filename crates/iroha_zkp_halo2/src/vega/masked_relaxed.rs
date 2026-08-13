@@ -538,7 +538,6 @@ pub(super) fn prove_masked_relaxed_precomputation_v1(
 /// That hard boundary prevents a malicious PBS from replacing the encrypted
 /// fold history with an independently satisfiable relaxed assignment.
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
 pub(super) fn prove_precomputed_masked_relaxed_v1(
     domain: &'static [u8],
     context_frame: &[u8],
@@ -975,6 +974,34 @@ fn sample_relaxed_mask<R: MaskedRelaxedRandomSourceV1>(
             error_blindings: core::mem::take(&mut *error_blindings),
         },
     ))
+}
+
+/// Construct the sole masked-Nova composition transcript used by plaintext,
+/// encrypted, prover, and verifier paths.
+pub(super) fn masked_relaxed_composition_transcript_v1(
+    domain: &'static [u8],
+    context_frame: &[u8],
+    shape: &Shape,
+    strict_public_inputs: &[Vec<Scalar>],
+) -> Result<VegaTranscriptV1, MaskedRelaxedErrorV1> {
+    validate_count(strict_public_inputs.len())?;
+    if domain.is_empty() || context_frame.is_empty() {
+        return Err(MaskedRelaxedErrorV1::InvalidProfile);
+    }
+    let dimensions = MaskedRelaxedDimensionsV1::from_shape(shape)?;
+    if strict_public_inputs
+        .iter()
+        .any(|inputs| inputs.len() != dimensions.public_input_count)
+    {
+        return Err(MaskedRelaxedErrorV1::InvalidProfile);
+    }
+    composition_transcript(
+        domain,
+        context_frame,
+        shape,
+        strict_public_inputs,
+        dimensions,
+    )
 }
 
 fn composition_transcript(

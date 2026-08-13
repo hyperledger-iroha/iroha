@@ -835,7 +835,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "successor_begin": "f95cef32673e4198e82e345d2c65013bfbd4ce2b805d23577c1a1d4e095f8c2a",
     "successor_fail": "9b5397ef6ec9c1ec10afcd09f165cca3b490745fa5116bbcc987195d8f665164",
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
-    "successor_retry": "6891e48b93cba8622846afda4f0f08fb5efaa7fb98f5d58d5cfb791ce64cc203",
+    "successor_retry": "18d0d9f57698c98fed549b3901c76f2f7750f0066c65eced99b4a4e9b2acb255",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
     "historical_body": "61abf0bd81035ebb5776a4a8893fd955249d6b2dfc2dcb23904749e75e71de79",
     "terminal_application": "be93d5b4fb78680ddab5a473fb2f54741dda8ef5d6a86e49003ec7e86e64cdc2",
@@ -49454,7 +49454,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "replayed_proposal_sign": (
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
-    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
+    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "6799b44549fe649a8253b718b8f3ba76fcce296e594f41e212d9c8c7e3bc3d23"
     ),
@@ -57361,27 +57361,7 @@ asyncServeProducerEpisodeDue' =
             drain_path, drain_source, "drain_v2_ingress", errors
         )
         drain_body = "" if drain is None else " ".join(drain.source.split())
-        turn_loop = drain_body.find(
-            "for turn in outer_ingress_turns(limit, executor.context().id(), "
-            "executor.context().height)"
-        )
-        runtime_turn = drain_body.find(
-            "if turn == OuterIngressTurn::Runtime", turn_loop
-        )
-        executor_turn = drain_body.find(
-            "advance_executor(receiver, executor, services, 1)?", runtime_turn
-        )
-        ingress_receive = drain_body.find(
-            "try_recv_if_checked_retiring_obsolete_with_barrier_bypass(",
-            executor_turn,
-        )
-        if not (
-            0 <= turn_loop < runtime_turn < executor_turn < ingress_receive
-        ):
-            errors.append(
-                f"{drain_path}: every ordinary outer ingress occurrence must be preceded "
-                "by one serialized advance_executor turn"
-            )
+        errors.extend(_borrow_bound_outer_ingress_order_errors(drain_path, drain))
         for escape_contract, description in (
             (
                 "mode != V2IngressDrainMode::Ordinary "
@@ -60398,7 +60378,12 @@ def _exact_output_production_source_fidelity_errors(
             errors.append(f"{path}: {description} must be a regular file")
             loaded_sources[path] = ""
         else:
-            loaded_sources[path] = path.read_text(encoding="utf-8")
+            _loaded_path, loaded_sources[path] = _read_reviewed_rust_source(
+                repo_root,
+                path.relative_to(repo_root).as_posix(),
+                errors,
+                description,
+            )
     merge_source = loaded_sources[merge_path]
     network_message_source = loaded_sources[network_message_path]
     lane_source = loaded_sources[lane_path]
@@ -60874,15 +60859,13 @@ fn validate_shared_ownership_geometry(
     _require_rust_source_token_sequence(
         effects_path,
         effects_source,
-        """
-struct FinalityCompletion {
-    tag: EventTag,
-    receipt: KuraV2CommitReceipt,
-    artifact: wire::finality::V2FinalityArtifact,
-    ownership: RuntimeEffectOwnership,
-}
-""",
-        "durable Apply tombstone must retain the exact reducer incarnation tag and typed Kura finality",
+        """struct FinalityCompletion { tag: EventTag, receipt: KuraV2CommitReceipt,
+artifact: wire::finality::V2FinalityArtifact, ownership: FinalityCompletionOwner, }
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[derive(Debug)]
+enum FinalityCompletionOwner { Runtime(RuntimeEffectOwnership),
+RecoveredDecisionApply(RecoveredDecisionApplyDispatchKeyV1), }""",
+        "durable finality must distinguish runtime and recovered Decision Apply ownership",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -60948,19 +60931,11 @@ self.finality_completion = Some(FinalityCompletion {
     tag,
     receipt: completion.receipt,
     artifact: completion.artifact,
-    ownership,
+    ownership: FinalityCompletionOwner::Runtime(ownership),
 });
 """,
-        "durable Apply completion must retain the exact tag in its non-resurrecting tombstone",
+        "runtime Apply completion must retain its exact typed owner in the finality terminal",
         errors,
-    )
-    _require_rust_source_token_sequence(
-        effects_path,
-        effects_source,
-        "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its ten reviewed uses and no additional mutation surface",
-        errors,
-        count=10,
     )
     for expected, description in (
         (
@@ -60984,10 +60959,6 @@ let finality = self
             "a newly opened height executor must begin without fabricated finality",
         ),
         (
-            "|| self.finality_completion.is_some()",
-            "application completion must reject a second terminal installation",
-        ),
-        (
             """
 self.finality_completion
     .as_ref()
@@ -61003,13 +60974,42 @@ self.finality_completion
             description,
             errors,
         )
+    prepare_recovered_finality = _require_rust_item(effects_path, effects_source, "prepare_recovered_decision_apply_completion", errors)
+    commit_recovered_finality = _require_rust_item(effects_path, effects_source, "commit_recovered_decision_apply_finality", errors)
+    for item, description in ((prepare_recovered_finality, "preflight"),
+                              (commit_recovered_finality, "installation")):
+        _require_rust_item_context(effects_path, item, (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),), f"recovered Decision Apply finality {description}", errors)
+    _require_rust_token_sequence(
+        effects_path, prepare_recovered_finality,
+        """self.pending_work() != 0 || self.retained_effect_batch.is_some()
+|| self.parked_effect_batch.is_some() || self.retained_certified_body_response.is_some()
+|| self.pending_tip_recovery.is_some() || self.finality_completion.is_some()
+|| self.runtime.queued_commands() != 0""",
+        "recovered Decision Apply completion must not overtake retained executor work",
+        errors)
+    _require_rust_token_sequence(
+        effects_path, commit_recovered_finality,
+        """self.finality_completion.is_none() && self.pending_work() == 0
+&& dispatch_key.matches_height_context(&self.context) && artifact.height_context == self.context
+&& artifact.subject == receipt.subject() && receipt.context_id() == self.context.id()
+&& receipt.height() == self.context.height && receipt.artifact_hash() == HashOf::new(&artifact)
+&& self.runtime.driver().ready_to_finish()""",
+        "recovered Decision Apply finality must authenticate its height, artifact, receipt, and drained runtime",
+        errors)
+    _require_rust_token_sequence(
+        effects_path, commit_recovered_finality,
+        """self.finality_completion = Some(FinalityCompletion { tag, receipt, artifact,
+ownership: FinalityCompletionOwner::RecoveredDecisionApply(dispatch_key), });""",
+        "recovered Decision Apply must install its exact dispatch key in the typed terminal",
+        errors)
+    _require_rust_token_sequence(
+        effects_path, ingress_seam_items["effects::complete_application"][1],
+        "|| self.finality_completion.is_some()",
+        "runtime Apply completion must reject a second terminal installation", errors)
     _require_rust_source_token_sequence(
-        effects_path,
-        effects_source,
-        "self.finality_completion =",
-        "the durable Apply completion tombstone must be installed exactly once and never cleared or replaced",
-        errors,
-    )
+        effects_path, effects_source, "self.finality_completion = Some(FinalityCompletion",
+        "the executor must have exactly the reviewed runtime and recovered finality constructors",
+        errors, count=2)
     _require_rust_token_sequence(
         effects_path,
         ingress_seam_items["effects::begin_apply"][1],
@@ -61033,7 +61033,7 @@ if let Some(finality) = self.finality_completion.as_ref() {
 if let Some(existing) = self.pending_applications.values().next() {
     let same_decision = existing.task.tag == tag
         && existing.task.subject == subject
-        && existing.task.ownership() == &ownership
+        && existing.ownership == ownership
         && existing
             .task
             .certificate
@@ -68431,7 +68431,10 @@ fn certified_sidecar_prefix_covers_occurrence(
             f"exact-output reservation {qualified_name} production item",
             errors,
             expected_attributes=("#[allow(clippy::too_many_arguments)]",)
-            if qualified_name == "ProductionV2Services::start"
+            if qualified_name in {
+                "ProductionV2Services::start",
+                "ProductionV2Services::start_inner",
+            }
             else (),
         )
         if item is not None:
@@ -69342,6 +69345,16 @@ if let (Some(fifo_id), Some(source)) = (released_source_owner, admitted_source) 
     _require_rust_token_sequence(
         worker_path,
         reservation_items.get("ProductionV2Services::start"),
+        """let apply_service = V2ApplyService::new(Arc::clone(&state), queue,
+Arc::clone(&kura), provider_ingest_finalized_archive, reputation_finalized_archive,
+block_cadence, genesis_account, events_sender, validator_set_pops.clone(),);
+Self::start_inner(""",
+        "ordinary startup must transfer one exact Apply service into the shared constructor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("ProductionV2Services::start_inner"),
         """
 let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
 let max_peers_per_fanout = context.roster.len().max(reply_route_source_capacity).max(1);
@@ -69517,7 +69530,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                 )
     for path, item, expected, description in (
         (worker_path, exact_output_claim_items.get("accepts_superseded_reply_delivery"), "const fn accepts_superseded_reply_delivery ( & self ) -> bool { matches ! ( self , Self :: DurableCommitCertificateResponse { .. } | Self :: DurableCertifiedBodyResponse { .. } ) }", "superseded reply history must be limited to durable global response claims"),
-        (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && self . ownership == * ownership && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind tag, ownership, finality decision, and Kura receipt"),
+        (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && matches ! ( & self . ownership , FinalityCompletionOwner :: Runtime ( retained ) if retained == ownership ) && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind typed runtime ownership, finality decision, and Kura receipt"),
         (lane_path, lane_items.get("durable_historical_lane_output_source_hash"), "pub ( crate ) fn durable_historical_lane_output_source_hash ( kura : & Kura , message : & BlockMessage , ) -> Result < Option < Hash > , String > { let Some ( ( _ , proposal_hash ) ) = lane_output_identity ( message ) else { return Ok ( None ) ; } ; let ( lane_id , lane_block_height ) = match message { BlockMessage :: LaneBlockProposal ( proposal ) => ( proposal . descriptor . lane_id , proposal . descriptor . lane_block_height , ) , BlockMessage :: LaneBlockVote ( vote ) => ( vote . body . lane_id , vote . body . lane_block_height ) , BlockMessage :: LaneBlockQc ( qc ) => ( qc . body . lane_id , qc . body . lane_block_height ) , BlockMessage :: LaneBlockCertificate ( certificate ) => ( certificate . proposal . descriptor . lane_id , certificate . proposal . descriptor . lane_block_height , ) , _ => return Ok ( None ) , } ; let Some ( durable ) = kura . read_certified_lane_block_artifact ( lane_id , lane_block_height ) else { return Ok ( None ) ; } ; if durable . proposal . proposal_hash != proposal_hash { return Ok ( None ) ; } if let Err ( retained_error ) = validate_winning_lane_output ( message , & durable . proposal , & durable . signer_pops ) { let signer_pops = durable_historical_lane_verification_pops ( kura , & durable ) ? ; if signer_pops == durable . signer_pops { return Err ( retained_error ) ; } validate_winning_lane_output ( message , & durable . proposal , & signer_pops ) ? ; } let durable_hash = HashOf :: new ( & durable ) ; Ok ( Some ( Hash :: new_from_chunks ( & [ , durable_hash . as_ref ( ) , HashOf :: new ( message ) . as_ref ( ) , ] ) ) ) }", "historical lane retirement must authenticate the exact durable proposal and bind its output hash"),
         (lane_path, lane_items.get("durable_historical_lane_verification_pops"), "fn durable_historical_lane_verification_pops ( kura : & Kura , durable : & CertifiedLaneBlockArtifact , ) -> Result < BTreeMap < PublicKey , Vec < u8 > > , String > { let mut pops = durable . signer_pops . clone ( ) ; if let Some ( validator_pops ) = validated_autonomous_validator_pops ( & durable . prepare_qc , & durable . proposal . descriptor . validator_set , ) ? { if durable . commit_qc . validator_set != durable . proposal . descriptor . validator_set { return Err ( . to_owned ( ) ) ; } pops . extend ( validator_pops ) ; return Ok ( pops ) ; } let proposal_height = durable . proposal . descriptor . proposal_height ; let Some ( finality ) = kura . v2_finality_artifact ( proposal_height ) . map_err ( | error | format ! ( ) ) ? else { return Ok ( pops ) ; } ; let hint = durable . proposal . payload_block_hint . ok_or_else ( || . to_owned ( ) ) ? ; if finality . height != proposal_height || finality . height_context . height != proposal_height || hint . proposal_height != proposal_height || hint . proposal_block_hash != finality . block_hash { return Err ( . to_owned ( ) , ) ; } wire :: finality :: verify_validator_roster_pops ( & finality . height_context , & finality . validator_set_pops , ) . map_err ( | error | format ! ( ) ) ? ; for ( entry , pop ) in finality . height_context . roster . iter ( ) . zip ( & finality . validator_set_pops ) { if durable . proposal . descriptor . validator_set . contains ( & entry . validator ) { pops . insert ( entry . validator . public_key ( ) . clone ( ) , pop . clone ( ) ) ; } } Ok ( pops ) }", "historical lane verification must source alternate signer PoPs from the frozen finality roster"),
     ):
@@ -71955,6 +71968,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         "historical lane dispatch preserves every authenticated source route with its matching fair-ingress owner",
         errors,
     )
+    errors.extend(_postmerge_exact_output_strengthening_errors(repo_root))
     return errors
 
 
@@ -72193,10 +72207,11 @@ def _local_runner_service_contract_source_fidelity_errors(
     runner_path, runner_source = _read_reviewed_rust_source(
         repo_root, "crates/iroha_core/src/sumeragi/v2_runner.rs", errors,
         "local-runner service production source")
-    worker_source = (
-        worker_path.read_text(encoding="utf-8")
-        if worker_path.is_file() and not worker_path.is_symlink()
-        else ""
+    _loaded_worker_path, worker_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        errors,
+        "local-runner service production source",
     )
     runner_test_path, runner_test_source = _read_reviewed_rust_source(
         repo_root,
@@ -72234,7 +72249,6 @@ def _local_runner_service_contract_source_fidelity_errors(
         "advance_executor",
         "advance_pending_tip_recovery_executor",
         "outer_ingress_turns",
-        "next",
         "apply_bounded_sidecar_admissions",
         "dispatch_lane_work_effects",
         "drain_lane_relay_ingress",
@@ -72260,6 +72274,11 @@ def _local_runner_service_contract_source_fidelity_errors(
         "drain_completions",
         errors,
         "bounded local-runner completion service production item",
+    )
+    completion_lifecycle_item = _require_qualified_rust_item(
+        worker_path, worker_source, "ProductionV2Services",
+        "drain_completions_with_lifecycle", errors,
+        "typed bounded local-runner completion service production item",
     )
     sealed_items = {
         **runner_items,
@@ -73991,13 +74010,16 @@ else {
         worker_path,
         completion_item,
         """
-self.drain_completions_inner(
-    executor,
-    MAX_COMPLETION_DRAIN_BATCH,
-    CompletionDrainPolicy::Fair,
-)
+let outcome = self.drain_completions_with_lifecycle(executor)?;
+self.require_no_unowned_lifecycle_completion(executor, outcome)
 """,
-        "ordinary completion service must delegate to the fixed finite fair-policy scan",
+        "ordinary completion service must reject an unowned typed lifecycle completion",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path, completion_lifecycle_item,
+        "self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH, CompletionDrainPolicy::Fair,)",
+        "typed completion service must delegate to the fixed finite fair-policy scan",
         errors,
     )
     return errors

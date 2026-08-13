@@ -10,13 +10,31 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use curve25519_dalek::edwards::EdwardsPoint;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{
     FcmpNativeErrorV1,
     field::{Field25519, HeliosPoint, SelenePoint, edwards_to_wei25519},
     proof_math::ProofScalar,
 };
+
+struct SecretDecompositionScalarV1<F: ProofScalar>(F);
+
+impl<F: ProofScalar> SecretDecompositionScalarV1<F> {
+    fn expose_copy(&self) -> F {
+        self.0
+    }
+
+    fn expose_mut(&mut self) -> &mut F {
+        &mut self.0
+    }
+}
+
+impl<F: ProofScalar> Drop for SecretDecompositionScalarV1<F> {
+    fn drop(&mut self) {
+        self.0.clear_secret();
+    }
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct NormalizedDivisor<F: ProofScalar> {
@@ -74,22 +92,23 @@ impl<F: ProofScalar> NormalizedDivisor<F> {
 /// coefficients may exceed one.  The fixed coefficient sum makes the number
 /// of divisor points independent of the scalar.
 pub(super) fn scalar_decomposition<F: ProofScalar>(
-    scalar: F,
+    scalar: &F,
     scalar_bits: usize,
-) -> Result<Vec<u64>, FcmpNativeErrorV1> {
-    let decomposition =
-        scalar_decomposition_encoded(scalar.encode(), (-F::ONE).encode(), scalar_bits)?;
+) -> Result<Zeroizing<Vec<u64>>, FcmpNativeErrorV1> {
+    let scalar_bytes = Zeroizing::new((*scalar).encode());
+    let minus_one = (-F::ONE).encode();
+    let decomposition = scalar_decomposition_encoded(&scalar_bytes, &minus_one, scalar_bits)?;
 
     // Validate the two defining equations before using a secret-derived
     // decomposition to construct a large divisor.
-    let mut represented = F::ZERO;
+    let mut represented = SecretDecompositionScalarV1(F::ZERO);
     let mut power = F::ONE;
-    for coefficient in &decomposition {
-        represented += F::from_u64(*coefficient) * power;
+    for coefficient in decomposition.iter() {
+        *represented.expose_mut() += F::from_u64(*coefficient) * power;
         power = power.double();
     }
-    if represented != scalar
-        || decomposition.iter().copied().sum::<u64>()
+    if represented.expose_copy() != *scalar
+        || decomposition.iter().sum::<u64>()
             != u64::try_from(scalar_bits).map_err(|_| FcmpNativeErrorV1::TreeFull)?
     {
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
@@ -98,29 +117,30 @@ pub(super) fn scalar_decomposition<F: ProofScalar>(
 }
 
 pub(super) fn ed25519_scalar_decomposition(
-    scalar: curve25519_dalek::scalar::Scalar,
-) -> Result<Vec<u64>, FcmpNativeErrorV1> {
+    scalar: &curve25519_dalek::scalar::Scalar,
+) -> Result<Zeroizing<Vec<u64>>, FcmpNativeErrorV1> {
     use curve25519_dalek::scalar::Scalar;
 
-    let decomposition =
-        scalar_decomposition_encoded(scalar.to_bytes(), (-Scalar::ONE).to_bytes(), 253)?;
-    let mut represented = Scalar::ZERO;
-    let mut power = Scalar::ONE;
-    for coefficient in &decomposition {
-        represented += Scalar::from(*coefficient) * power;
-        power += power;
+    let scalar_bytes = Zeroizing::new(scalar.to_bytes());
+    let minus_one = (-Scalar::ONE).to_bytes();
+    let decomposition = scalar_decomposition_encoded(&scalar_bytes, &minus_one, 253)?;
+    let mut represented = Zeroizing::new(Scalar::ZERO);
+    let mut power = Zeroizing::new(Scalar::ONE);
+    for coefficient in decomposition.iter() {
+        *represented += Scalar::from(*coefficient) * *power;
+        *power = *power + *power;
     }
-    if represented != scalar || decomposition.iter().copied().sum::<u64>() != 253 {
+    if *represented != *scalar || decomposition.iter().sum::<u64>() != 253 {
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
     Ok(decomposition)
 }
 
 fn scalar_decomposition_encoded(
-    scalar: [u8; 32],
-    minus_one: [u8; 32],
+    scalar: &[u8; 32],
+    minus_one: &[u8; 32],
     scalar_bits: usize,
-) -> Result<Vec<u64>, FcmpNativeErrorV1> {
+) -> Result<Zeroizing<Vec<u64>>, FcmpNativeErrorV1> {
     if !(3..=255).contains(&scalar_bits) || scalar.iter().all(|byte| *byte == 0) {
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
@@ -133,28 +153,30 @@ fn scalar_decomposition_encoded(
     }
 
     let bit = |bytes: &[u8; 32], index: usize| u64::from((bytes[index / 8] >> (index % 8)) & 1);
-    let mut decomposition = (0..scalar_bits)
-        .map(|index| bit(&scalar, index))
-        .collect::<Vec<_>>();
+    let mut decomposition = Zeroizing::new(
+        (0..scalar_bits)
+            .map(|index| bit(scalar, index))
+            .collect::<Vec<_>>(),
+    );
 
     // The coefficient-rebalancing algorithm requires an integer larger than
     // the bit count.  For tiny scalars, add the field modulus as a
     // non-carried coefficient vector (`bits(-1) + 1`), preserving the value
     // modulo the scalar field.
-    let mut low_bytes = [0_u8; 8];
+    let mut low_bytes = Zeroizing::new([0_u8; 8]);
     low_bytes.copy_from_slice(&scalar[..8]);
     let is_tiny = scalar[8..].iter().all(|byte| *byte == 0)
-        && u64::from_le_bytes(low_bytes)
+        && u64::from_le_bytes(*low_bytes)
             < u64::try_from(scalar_bits).map_err(|_| FcmpNativeErrorV1::TreeFull)?;
     if is_tiny {
         for index in 0..scalar_bits {
-            decomposition[index] += bit(&minus_one, index);
+            decomposition[index] += bit(minus_one, index);
         }
         decomposition[0] += 1;
     }
 
     let target = u64::try_from(scalar_bits).map_err(|_| FcmpNativeErrorV1::TreeFull)?;
-    let mut sum = decomposition.iter().copied().sum::<u64>();
+    let mut sum = Zeroizing::new(decomposition.iter().sum::<u64>());
 
     // First lower an excessive coefficient sum without changing the
     // represented integer: `2·2^i -> 1·2^(i+1)`.
@@ -163,13 +185,13 @@ fn scalar_decomposition_encoded(
         log2_bits += 1;
     }
     for _ in 0..log2_bits {
-        let mut done = sum == target;
+        let mut done = *sum == target;
         for index in 0..(scalar_bits - 1) {
             let act = !done && decomposition[index] > 1;
             if act {
                 decomposition[index] -= 2;
                 decomposition[index + 1] += 1;
-                sum -= 1;
+                *sum -= 1;
                 done = true;
             }
         }
@@ -178,18 +200,18 @@ fn scalar_decomposition_encoded(
     // Then raise a deficient coefficient sum by replacing the highest
     // nonzero `2^i` with two `2^(i-1)` terms.
     for _ in 0..scalar_bits {
-        let mut done = sum == target;
+        let mut done = *sum == target;
         for index in (1..scalar_bits).rev() {
             let act = !done && decomposition[index] != 0;
             if act {
                 decomposition[index] -= 1;
                 decomposition[index - 1] += 2;
-                sum += 1;
+                *sum += 1;
                 done = true;
             }
         }
     }
-    if sum != target {
+    if *sum != target {
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
     Ok(decomposition)
@@ -607,7 +629,7 @@ pub(super) fn scalar_mul_divisor<F: ProofScalar, P: DivisorPoint<F>>(
     curve_b: F,
     generator: P,
     decomposition: &[u64],
-    result: P,
+    result: &P,
 ) -> Result<NormalizedDivisor<F>, FcmpNativeErrorV1> {
     if decomposition.len() < 3
         || generator.is_identity()
@@ -652,7 +674,7 @@ mod tests {
             Scalar::from(0xdead_beef_u64),
             -Scalar::ONE,
         ] {
-            let decomposition = ed25519_scalar_decomposition(scalar).expect("decomposition");
+            let decomposition = ed25519_scalar_decomposition(&scalar).expect("decomposition");
             assert_eq!(decomposition.len(), 253);
             assert_eq!(decomposition.iter().sum::<u64>(), 253);
         }
@@ -664,19 +686,19 @@ mod tests {
             HelioseleneField::from_u64(0x1234_5678),
             -HelioseleneField::ONE,
         ] {
-            let decomposition = scalar_decomposition(scalar, 255).expect("decomposition");
+            let decomposition = scalar_decomposition(&scalar, 255).expect("decomposition");
             assert_eq!(decomposition.len(), 255);
             assert_eq!(decomposition.iter().sum::<u64>(), 255);
         }
-        assert!(ed25519_scalar_decomposition(Scalar::ZERO).is_err());
-        assert!(scalar_decomposition(HelioseleneField::ZERO, 255).is_err());
+        assert!(ed25519_scalar_decomposition(&Scalar::ZERO).is_err());
+        assert!(scalar_decomposition(&HelioseleneField::ZERO, 255).is_err());
     }
 
     #[test]
     fn native_sparse_divisor_vanishes_at_scalar_mul_endpoints() {
         // A real 253-point FCMP divisor over Wei25519.
         let scalar = Scalar::from(17_u64);
-        let decomposition = ed25519_scalar_decomposition(scalar).expect("decomposition");
+        let decomposition = ed25519_scalar_decomposition(&scalar).expect("decomposition");
         let result = ED25519_BASEPOINT_POINT * scalar;
         let curve_a = Field25519::new(&p256::elliptic_curve::bigint::U256::from_be_hex(
             "2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa984914a144",
@@ -689,7 +711,7 @@ mod tests {
             curve_b,
             ED25519_BASEPOINT_POINT,
             &decomposition,
-            result,
+            &result,
         )
         .expect("divisor");
         assert_eq!(divisor.x.first().copied(), Some(Field25519::ONE));
@@ -712,7 +734,7 @@ mod tests {
         // Keep the cycle-curve implementation and point abstraction covered.
         let cycle_scalar = HelioseleneField::from_u64(9);
         let cycle_decomposition =
-            scalar_decomposition(cycle_scalar, 255).expect("cycle decomposition");
+            scalar_decomposition(&cycle_scalar, 255).expect("cycle decomposition");
         let cycle_generator = helios_hash_initializer();
         let cycle_result = cycle_generator.scale(cycle_scalar);
         let cycle_b = Field25519::new(&p256::elliptic_curve::bigint::U256::from_be_hex(
@@ -723,7 +745,7 @@ mod tests {
             cycle_b,
             cycle_generator,
             &cycle_decomposition,
-            cycle_result,
+            &cycle_result,
         )
         .expect("cycle divisor");
         assert_eq!(cycle_divisor.x.first().copied(), Some(Field25519::ONE));

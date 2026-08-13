@@ -1,16 +1,20 @@
 //! Verified height authority for lifecycle scheduler episodes and rollover.
 
-use std::{collections::BTreeSet, path::PathBuf};
+use std::collections::BTreeSet;
+
+#[cfg(test)]
+use std::path::PathBuf;
 
 use iroha_config::parameters::actual::SumeragiV2Config;
 use iroha_crypto::Hash;
 use norito::codec::Encode;
 
 use super::schema;
+#[cfg(test)]
+use crate::sumeragi::v2_certified_serve_payload_store::DurableCertifiedServeNegativeReceipt;
 use crate::sumeragi::{
-    v2::VerifiedHeightContext,
-    v2_certified_serve_payload_store::DurableCertifiedServeNegativeReceipt,
-    v2_core::MAX_EFFECTS_PER_STEP, v2_worker::certified_serve_family_capacity,
+    v2::VerifiedHeightContext, v2_core::MAX_EFFECTS_PER_STEP,
+    v2_worker::certified_serve_family_capacity,
 };
 use schema::{
     CapacityClass, CapacityGeometry, LifecycleContext, LifecycleDigest, LifecycleKey,
@@ -219,7 +223,24 @@ pub(super) fn recovered_wal_test_authority(
     AuthenticatedEpisodeAuthority::from_verified_height_context(verified, geometry)
 }
 
+/// Build exact bounded capacity for focused consuming storage-owner tests.
+#[cfg(test)]
+pub(super) fn lifecycle_storage_owner_test_authority(
+    verified: &VerifiedHeightContext,
+    effect_capacity: usize,
+    serve_capacity: usize,
+) -> Option<AuthenticatedEpisodeAuthority> {
+    let geometry = CapacityGeometry::new([
+        (CapacityClass::Consensus, 1),
+        (CapacityClass::Effect, effect_capacity.max(1)),
+        (CapacityClass::Serve, serve_capacity.max(1)),
+        (CapacityClass::Producer, serve_capacity.max(1)),
+    ]);
+    AuthenticatedEpisodeAuthority::from_verified_height_context(verified, geometry)
+}
+
 /// Typed height rollover snapshot carrying an opaque verified successor authority.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RolloverSnapshot {
     pub(super) retired_context: LifecycleContext,
@@ -231,53 +252,6 @@ pub(crate) struct RolloverSnapshot {
     pub(super) retained_high_water: u128,
     pub(super) retire_ordinals: BTreeSet<u128>,
     pub(super) retire_admission_keys: BTreeSet<LifecycleKey>,
-}
-
-impl RolloverSnapshot {
-    /// Build rollover state from the already verified immediate-successor context.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn verified_successor(
-        retired_context: LifecycleContext,
-        successor: &VerifiedHeightContext,
-        successor_config: &SumeragiV2Config,
-        successor_reply_route_source_capacity: usize,
-        successor_ledger_root: PathBuf,
-        serve_cancellations: Vec<DurableCertifiedServeNegativeReceipt>,
-        retained_high_water: u128,
-        retire_ordinals: BTreeSet<u128>,
-        retire_admission_keys: BTreeSet<LifecycleKey>,
-    ) -> Option<Self> {
-        let verified_predecessor = successor.verified_predecessor_context()?;
-        let predecessor_hash = verified_predecessor.id().0;
-        let mut predecessor_id = [0_u8; 32];
-        predecessor_id.copy_from_slice(predecessor_hash.as_ref());
-        let successor_predecessor = LifecycleDigest::new(predecessor_id);
-        if verified_predecessor.height != retired_context.height
-            || successor_predecessor != retired_context.id
-        {
-            return None;
-        }
-        let successor_capacity_geometry = production_capacity_geometry(
-            successor,
-            successor_config,
-            successor_reply_route_source_capacity,
-        )?;
-        let successor_authority = AuthenticatedEpisodeAuthority::from_verified_height_context(
-            successor,
-            successor_capacity_geometry,
-        )?;
-        Some(Self {
-            retired_context,
-            successor_context: successor_authority.context(),
-            successor_predecessor,
-            successor_authority,
-            successor_ledger_root: Some(successor_ledger_root),
-            serve_cancellations,
-            retained_high_water,
-            retire_ordinals,
-            retire_admission_keys,
-        })
-    }
 }
 
 #[cfg(test)]

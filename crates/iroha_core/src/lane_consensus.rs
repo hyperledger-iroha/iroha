@@ -5762,7 +5762,8 @@ mod tests {
             .expect("valid drain certificate");
         let mut forged_bodies = Vec::new();
         let mut forged = certificate.clone();
-        forged.body.intent.network_id = crate::sumeragi::synthetic_network_id("foreign");
+        forged.body.intent.network_id =
+            crate::sumeragi::synthetic_network_id("foreign-drain-genesis");
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.lane_id = LaneId::new(8);

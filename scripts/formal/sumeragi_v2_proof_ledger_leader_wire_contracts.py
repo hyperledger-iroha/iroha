@@ -637,6 +637,149 @@ assert!(
 
     return errors
 
+
+def _postmerge_exact_output_strengthening_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind the merge-added recovered Apply and lifecycle-owned output seams."""
+
+    base = repo_root / "crates" / "iroha_core" / "src"
+    paths = {
+        "worker": base / "sumeragi" / "v2_worker.rs",
+        "effects": base / "sumeragi" / "v2_effects.rs",
+        "lane": base / "sumeragi" / "v2_lane_work.rs",
+        "merge": base / "merge_sidecar.rs",
+    }
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for name, path in paths.items():
+        _path, sources[name] = _read_reviewed_rust_source(
+            repo_root, path.relative_to(repo_root).as_posix(), errors,
+            f"post-merge exact-output {name} provider")
+
+    reviewed_attributes = {
+        "ProductionV2Services::start": ("#[allow(clippy::too_many_arguments)]",),
+        "ProductionV2Services::start_with_apply_service": ("#[allow(clippy::too_many_arguments)]",),
+        "ProductionV2Services::start_inner": ("#[allow(clippy::too_many_arguments)]",),
+        "ProductionV2Services::activate_effect_completion_observer": ("#[allow(dead_code)]",),
+        "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": ("#[allow(clippy::too_many_arguments)]",),
+        "MergeSidecarTransport::defer_block_with_priority": ("#[allow(clippy::too_many_arguments)]",),
+    }
+
+    def method(provider: str, owner: str, name: str) -> RustItem | None:
+        return _require_qualified_rust_item(
+            paths[provider], sources[provider], owner, name, errors,
+            f"post-merge exact-output {owner}::{name}",
+            expected_attributes=reviewed_attributes.get(f"{owner}::{name}", ()))
+
+    start = method("worker", "ProductionV2Services", "start")
+    start_with = method("worker", "ProductionV2Services", "start_with_apply_service")
+    start_inner = method("worker", "ProductionV2Services", "start_inner")
+    observer = method("worker", "ProductionV2Services", "activate_effect_completion_observer")
+    _require_rust_token_sequence(
+        paths["worker"], start_with,
+        """if !state.matches_kura_instance(&kura)
+|| !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)
+{ return Err("Sumeragi v2 recovered Apply service changed lifecycle identity".to_owned(),); }
+Self::start_inner(""",
+        "recovered startup must authenticate State, Kura, context, and proof roster before sharing the constructor",
+        errors)
+    for item, description in (
+        (start, "ordinary startup"), (start_with, "recovered startup"),
+        (start_inner, "shared startup"),
+    ):
+        _require_rust_token_sequence(
+            paths["worker"], item, "activate_effect_completion_observer",
+            f"{description} must not activate the completion observer before its move-only permit", errors,
+            count=0)
+    _require_rust_token_sequence(
+        paths["worker"], observer,
+        """_permit: ProductionV2CompletionObserverActivationPermitV1,
+) -> Result<(), String> { let activation_guard = Arc::clone(&self.output_guard);
+let activation = activation_guard.begin_fail_stop_operation()""",
+        "completion observer activation must require its opaque permit and arm fail-stop first",
+        errors)
+
+    complete_apply = _require_rust_item(
+        paths["effects"], sources["effects"], "complete_application", errors)
+    _require_rust_item_context(
+        paths["effects"], complete_apply,
+        (("impl", "<", "R", ":", "EffectRuntime", ">", "V2EffectExecutor", "<", "R", ">"),),
+        "post-merge exact-output V2EffectExecutor::complete_application", errors)
+    _require_rust_token_sequence(
+        paths["effects"], complete_apply,
+        """let pending = self.pending_applications.get(&completion.work_id)
+.expect("the pending Apply was checked above");
+self.preflight_pending_application_owner(completion.work_id, pending)""",
+        "runtime Apply completion must preflight its exact separately retained owner before mutation",
+        errors)
+    _require_rust_token_sequence(
+        paths["worker"], observer,
+        """super::status::set_v2_effect_completion_observer(
+self.context.id(), self.context.height, &io.admission, );
+activation.complete(); Ok(())""",
+        "completion observer activation must publish the live worker owner before completing its permit transaction",
+        errors)
+
+    lane_ctor = method("lane", "V2LaneWorkAdapter", "new_with_output_guard_and_transport_inner")
+    lane_defer = method("lane", "V2LaneWorkAdapter", "defer_missing_recovered_decision_apply_sidecar")
+    lane_accept = method("lane", "V2LaneWorkAdapter", "accept_certified_merge_sidecar_chunk")
+    _require_rust_token_sequence(
+        paths["lane"], lane_ctor,
+        """recovered_apply_sidecar_waits: BTreeSet::new(),
+rejected_recovered_apply_sidecars: BTreeMap::new(),""",
+        "lane construction must initialize distinct recovered Apply wait and rejection owners", errors)
+    _require_rust_token_sequence(
+        paths["lane"], lane_defer,
+        """MergeSidecarDeferralDisposition::Fetching
+| MergeSidecarDeferralDisposition::RetryLater => { self.recovered_apply_sidecar_waits.insert(entry_hash); }
+MergeSidecarDeferralDisposition::Available
+| MergeSidecarDeferralDisposition::Rejected(_) => { self.recovered_apply_sidecar_waits.remove(&entry_hash); }""",
+        "recovered Apply sidecar deferral must retain only live wait ownership", errors)
+    _require_rust_token_sequence(
+        paths["lane"], lane_accept,
+        """if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
+self.rejected_recovered_apply_sidecars.entry(entry_hash).or_insert(error); }""",
+        "invalid recovered Apply sidecars must move their wait into the dedicated rejection owner",
+        errors, count=1)
+    _require_rust_token_sequence(
+        paths["lane"], lane_accept,
+        """if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
+self.rejected_recovered_apply_sidecars.entry(entry_hash).or_insert(reason); }""",
+        "globally invalid recovered Apply sidecars must move their wait into the dedicated rejection owner",
+        errors, count=1)
+
+    ordinary = method("merge", "MergeSidecarTransport", "defer_decided_block")
+    lifecycle = method("merge", "MergeSidecarTransport", "defer_lifecycle_decided_block")
+    register = method("merge", "MergeSidecarTransport", "defer_block_with_priority")
+    retain = method("merge", "MergeSidecarTransport", "retain_pending_blocks")
+    _require_rust_token_sequence(
+        paths["merge"], ordinary,
+        """InboundPriority::Decided, false,""",
+        "ordinary decided sidecars must remain executor-census owned", errors)
+    _require_rust_token_sequence(
+        paths["merge"], lifecycle,
+        """InboundPriority::Decided, true,""",
+        "recovered Apply sidecars must enter the lifecycle-owned corridor", errors)
+    _require_rust_token_sequence(
+        paths["merge"], register,
+        """.entry(block_hash).and_modify(|carrier| {
+if lifecycle_owned { carrier.lifecycle_owned = true; }
+}).or_insert(DeferredCarrier { hash: block_hash, height, view, lifecycle_owned, });""",
+        "repeated exact registration must monotonically promote lifecycle ownership", errors)
+    _require_rust_token_sequence(
+        paths["merge"], retain,
+        """carrier.height <= committed_height
+|| (!carrier.lifecycle_owned && !pending_blocks.contains(&carrier.hash))""",
+        "cleanup preflight must preserve live lifecycle-owned carriers while recognizing committed height",
+        errors)
+    _require_rust_token_sequence(
+        paths["merge"], retain,
+        """carrier.height > committed_height
+&& (carrier.lifecycle_owned || pending_blocks.contains(hash))""",
+        "cleanup must retain lifecycle-owned carriers only until their height commits", errors)
+    return errors
+
 def _exact_serve_runtime_episode_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -795,10 +938,11 @@ struct V2IoCompletionOwnership {
     service_debt: u64,
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
+    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
 }
 """,
-        "completion ownership must retain time/debt, runtime-capacity class, and "
-        "the exact optional shared lifecycle ordinal in one copy-only carrier",
+        "completion ownership must retain time/debt, runtime-capacity class, "
+        "the exact shared lifecycle ordinal, and any recovered-Apply dispatch key",
         errors,
     )
     _require_rust_token_sequence(
@@ -823,6 +967,16 @@ struct V2IoCertifiedServeIngressReservation {
         errors,
     )
     queue_state = struct_items.get("V2IoCommandQueueState")
+    _require_rust_token_sequence(
+        worker_path,
+        queue_state,
+        """
+recovered_decision_applies:
+    BTreeMap<RecoveredDecisionApplyDispatchKeyV1, V2IoTrackedRecoveredDecisionApplyV1>,
+""",
+        "the command queue must retain recovered Decision Apply under its exact opaque dispatch key",
+        errors,
+    )
     _require_rust_token_sequence(
         worker_path,
         queue_state,
@@ -1310,9 +1464,14 @@ const fn runtime_lifecycle_ordinal(&self) -> Option<u128> {
         Self::Store(task) => Some(task.lifecycle_ordinal()),
         Self::Validate(task) => Some(task.lifecycle_ordinal()),
         Self::Apply(task) => Some(task.lifecycle_ordinal()),
-        Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
-            None
-        }
+        Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+        #[cfg(test)]
+        Self::RecoveredDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
+        Self::PersistCertifiedFetchBody(_)
+        | Self::Serve { .. }
+        | Self::LoadCandidate { .. }
+        | Self::Retire(_)
+        | Self::Shutdown => None,
     }
 }
 """,
@@ -1327,6 +1486,7 @@ fn retain_completion(
     retained_at: Instant,
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
+    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
 ) {
     let mut state = self
         .completion_state
@@ -1341,6 +1501,7 @@ fn retain_completion(
         service_debt: 0,
         requires_runtime_capacity,
         runtime_lifecycle_ordinal,
+        recovered_decision_apply,
     });
 }
 """,
@@ -1428,10 +1589,12 @@ fn send_tracked_completion_with_lifecycle_ordinal(
     completion: V2IoCompletion,
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
+    let recovered_decision_apply = completion.recovered_decision_apply_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
+        recovered_decision_apply,
     );
     sender.send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -1449,10 +1612,12 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
     completion: V2IoCompletion,
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
+    let recovered_decision_apply = completion.recovered_decision_apply_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
+        recovered_decision_apply,
     );
     sender.try_send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -1476,12 +1641,23 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
         completion_spawn,
         """
 let work_id = command.work_id();
+let recovered_decision_apply_key = command.recovered_decision_apply_key();
 let serve_lifecycle_id = command.serve_lifecycle_id();
 let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
 match command {
 """,
         "the I/O worker must capture exact completion provenance before moving "
         "the command into execution",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_spawn,
+        """
+V2IoCompletion::RecoveredDecisionApply(guarded) => {
+    recovered_decision_apply_key.map_or_else(
+""",
+        "the I/O worker must use the key captured before execution to seal recovered Decision Apply completion",
         errors,
     )
     _require_rust_token_sequence(
@@ -1534,6 +1710,13 @@ send_completion_with_lifecycle_ordinal(
     _require_rust_token_sequence(
         worker_path,
         channel_builder,
+        "recovered_decision_applies: BTreeMap::new(),",
+        "the command channel initializer must start with no fabricated recovered Decision Apply owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        channel_builder,
         """
 producer_episode_due: false,
 producer_episode_active: false,
@@ -1554,6 +1737,16 @@ self.rollback_serve_barrier(&mut state)
 """,
         "receiver teardown must clear producer-episode due before active and "
         "Serve rollback",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        close_receiver,
+        """
+state.recovered_decision_applies
+    .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+""",
+        "receiver teardown must retain only completion-pending recovered Decision Apply ownership",
         errors,
     )
 
@@ -1837,6 +2030,19 @@ if barrier.request_hash != lifecycle_id.request_hash || barrier.lifecycle_id != 
         worker_path,
         enqueue,
         """
+if let Some(key) = command.recovered_decision_apply_key() {
+    return Err(V2IoTrySendError::UnreservedRecoveredDecisionApply { key, command });
+}
+let descriptor = command.work_descriptor();
+let mut state = self.lock();
+""",
+        "generic I/O admission must reject recovered Decision Apply before locking or reserving shared capacity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        enqueue,
+        """
 if command_ordinal >= reservation.id.0 {
     return None;
 }
@@ -2080,6 +2286,20 @@ self.drain_completions_inner(
         "each exact-Serve predecessor turn may admit at most one completed owner",
         errors,
     )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_drain,
+        """
+let outcome = self.drain_completions_inner(
+    executor,
+    1,
+    CompletionDrainPolicy::ExactServePredecessor { serve_lifecycle_ordinal, },
+)?;
+self.require_no_unowned_lifecycle_completion(executor, outcome)
+""",
+        "exact-Serve completion drain must reject any lifecycle completion without its coordinator owner",
+        errors,
+    )
     completion_inner = worker_items.get(
         "ProductionV2Services::drain_completions_inner"
     )
@@ -2088,6 +2308,58 @@ self.drain_completions_inner(
         completion_inner,
         "while attempts < limit {",
         "every completion policy must retain its caller-supplied finite bound",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_inner,
+        """
+completion: V2IoCompletion::CertifiedFetchBodyPersisted(completion),
+..
+} => {
+    let prepared = self.io.as_ref().map_or_else(
+""",
+        "persisted certified-Fetch completion must prepare its exact work acknowledgement before service",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_inner,
+        """
+completion: V2IoCompletion::RecoveredDecisionApply(_),
+..
+} => {
+    return Err(executor.external_service_failed(
+        "recovered Decision Apply completion crossed the generic executor drain",
+        self,
+    ));
+}
+""",
+        "generic completion drain must reject recovered Decision Apply instead of consuming its owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_inner,
+        """
+count = count.saturating_add(1);
+if certified_fetch_body.is_some() {
+    break;
+}
+""",
+        "one bounded drain must return at most one prepared certified-Fetch lifecycle completion",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_inner,
+        """
+Ok(V2CompletionDrainOutcome {
+    serviced: count,
+    certified_fetch_body,
+})
+""",
+        "completion drain must return its count and move-only certified-Fetch owner together",
         errors,
     )
     _require_rust_token_sequence(

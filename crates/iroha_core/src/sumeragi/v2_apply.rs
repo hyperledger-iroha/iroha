@@ -67,6 +67,9 @@ use super::{
         check_production_in_flight_first_release_transition,
     },
     v2_effects::{ApplyTask, DurableApplyCompletion, EffectWorkId},
+    v2_lifecycle_coordinator::{
+        RecoveredDecisionApplyDispatchIdentityV1, RecoveredDecisionApplyDispatchKeyV1,
+    },
     v2_lifecycle_recovery::{
         AutonomousLifecycleDeferredTerminalRecoveryHandoff, RecoveredAutonomousLifecycleStartup,
         complete_deferred_autonomous_lifecycle_terminal_outcomes_after_queue_actions,
@@ -3271,6 +3274,245 @@ pub(crate) struct V2ApplyService {
     test_failures: tests::FailureInjection,
 }
 
+/// Exact recovered Decision Apply material admitted by the lifecycle registry.
+///
+/// This move-only task is deliberately unrelated to reducer [`ApplyTask`]
+/// ownership. Its opaque dispatch identity is minted only by the closed
+/// recovered carrier and remains attached through worker execution and owner
+/// settlement.
+#[must_use = "a recovered Decision Apply task must enter its dedicated worker command"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyTaskV1 {
+    dispatch_identity: RecoveredDecisionApplyDispatchIdentityV1,
+    subject: wire::BlockSubject,
+    certificate: wire::QuorumCertificate,
+    validated_receipt: ValidatedBodyReceipt,
+}
+
+impl RecoveredDecisionApplyTaskV1 {
+    /// Bind the sole registry-minted dispatch identity to its closed carrier material.
+    pub(in crate::sumeragi) fn from_registry_projection(
+        dispatch_identity: RecoveredDecisionApplyDispatchIdentityV1,
+        subject: wire::BlockSubject,
+        certificate: wire::QuorumCertificate,
+        validated_receipt: ValidatedBodyReceipt,
+    ) -> Self {
+        Self {
+            dispatch_identity,
+            subject,
+            certificate,
+            validated_receipt,
+        }
+    }
+
+    /// Return the closed queue key without exposing dispatch authority.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+        self.dispatch_identity.key()
+    }
+
+    /// Return the exact decided subject.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Return the complete CommitQC authorizing application.
+    pub(in crate::sumeragi) const fn certificate(&self) -> &wire::QuorumCertificate {
+        &self.certificate
+    }
+
+    /// Return the exact durable validation receipt selected by the carrier.
+    pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
+        &self.validated_receipt
+    }
+}
+
+/// Durable recovered Decision Apply result routed only to the lifecycle owner.
+#[must_use = "a recovered Decision Apply completion must be settled by its lifecycle owner"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionV1 {
+    dispatch_identity: RecoveredDecisionApplyDispatchIdentityV1,
+    subject: wire::BlockSubject,
+    certificate: wire::QuorumCertificate,
+    validated_receipt: ValidatedBodyReceipt,
+    receipt: KuraV2CommitReceipt,
+    artifact: wire::finality::V2FinalityArtifact,
+}
+
+impl RecoveredDecisionApplyCompletionV1 {
+    /// Return the immutable queue key retained from dispatch.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+        self.dispatch_identity.key()
+    }
+
+    /// Return the exact decided subject retained from the registry carrier.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Return the complete CommitQC retained from the registry carrier.
+    pub(in crate::sumeragi) const fn certificate(&self) -> &wire::QuorumCertificate {
+        &self.certificate
+    }
+
+    /// Return the exact durable validated body selected by the registry carrier.
+    pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
+        &self.validated_receipt
+    }
+
+    /// Return Kura's exact durable finality receipt.
+    pub(in crate::sumeragi) const fn receipt(&self) -> &KuraV2CommitReceipt {
+        &self.receipt
+    }
+
+    /// Return the complete canonical finality artifact.
+    pub(in crate::sumeragi) const fn artifact(&self) -> &wire::finality::V2FinalityArtifact {
+        &self.artifact
+    }
+}
+
+/// Dedicated worker result for one recovered Decision Apply dispatch.
+///
+/// A missing merge sidecar remains a typed owner retry. Neither branch enters
+/// the reducer's generic Apply completion or deferral machinery.
+#[must_use = "a recovered Decision Apply worker result must return to its lifecycle owner"]
+pub(in crate::sumeragi) enum RecoveredDecisionApplyWorkerResultV1 {
+    /// The exact decided block and finality artifact crossed every durable boundary.
+    Applied(RecoveredDecisionApplyCompletionV1),
+    /// The exact task remains owned while its authenticated merge sidecar is unavailable.
+    Deferred {
+        /// Unchanged move-only task to be retained by the lifecycle owner.
+        task: RecoveredDecisionApplyTaskV1,
+        /// Exact missing merge-ledger reference.
+        reference: CertifiedMergeLedgerReference,
+    },
+}
+
+impl RecoveredDecisionApplyWorkerResultV1 {
+    /// Return the immutable queue key common to both terminal and retry outcomes.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+        match self {
+            Self::Applied(completion) => completion.dispatch_key(),
+            Self::Deferred { task, .. } => task.dispatch_key(),
+        }
+    }
+
+    /// Return the exact decided subject retained by either result branch.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        match self {
+            Self::Applied(completion) => completion.subject(),
+            Self::Deferred { task, .. } => task.subject(),
+        }
+    }
+
+    /// Return the complete CommitQC retained by either result branch.
+    pub(in crate::sumeragi) const fn certificate(&self) -> &wire::QuorumCertificate {
+        match self {
+            Self::Applied(completion) => completion.certificate(),
+            Self::Deferred { task, .. } => task.certificate(),
+        }
+    }
+
+    /// Return the exact durable validated body retained by either result branch.
+    pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
+        match self {
+            Self::Applied(completion) => completion.validated_receipt(),
+            Self::Deferred { task, .. } => task.validated_receipt(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ExactApplyTaskRef<'task> {
+    Ordinary(&'task ApplyTask),
+    Recovered(&'task RecoveredDecisionApplyTaskV1),
+}
+
+impl<'task> ExactApplyTaskRef<'task> {
+    const fn subject(self) -> wire::BlockSubject {
+        match self {
+            Self::Ordinary(task) => task.subject(),
+            Self::Recovered(task) => task.subject(),
+        }
+    }
+
+    const fn certificate(self) -> &'task wire::QuorumCertificate {
+        match self {
+            Self::Ordinary(task) => task.certificate(),
+            Self::Recovered(task) => task.certificate(),
+        }
+    }
+
+    const fn validated_receipt(self) -> &'task ValidatedBodyReceipt {
+        match self {
+            Self::Ordinary(task) => task.validated_receipt(),
+            Self::Recovered(task) => task.validated_receipt(),
+        }
+    }
+}
+
+struct ExactApplyExecutionMaterial {
+    context: wire::HeightContext,
+    commit_qc: wire::QuorumCertificate,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+    validated_receipt: ValidatedBodyReceipt,
+    validated_manifest_hash: HashOf<wire::PayloadManifest>,
+    validated_body_frame_hash: Hash,
+    proposal_block_hash: HashOf<BlockHeader>,
+    canonical_proposal_wire_hash: Hash,
+    committed_block_hash: HashOf<BlockHeader>,
+    executed_block_wire_hash: Hash,
+    kura_receipt: KuraV2CommitReceipt,
+    artifact: wire::finality::V2FinalityArtifact,
+    artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
+    state_height_after: usize,
+    ordinary_projection: Option<ProductionApplicationTraceProjection>,
+}
+
+impl ExactApplyExecutionMaterial {
+    fn exactly_matches_recovered_task(&self, task: &RecoveredDecisionApplyTaskV1) -> bool {
+        let certificate = task.certificate();
+        let durable = task.validated_receipt().durable();
+        let artifact = &self.artifact;
+        let Ok(context_height) = usize::try_from(self.context.height) else {
+            return false;
+        };
+        self.ordinary_projection.is_none()
+            && task.dispatch_identity.matches_height_context(&self.context)
+            && task.dispatch_key().lifecycle_ordinal() != 0
+            && certificate.phase == wire::GlobalPhase::Commit
+            && certificate.round.context_id == self.context.id()
+            && certificate.round.height == self.context.height
+            && certificate.subject == task.subject()
+            && certificate.execution_commitment == task.validated_receipt().execution_commitment()
+            && durable.context_id() == self.context.id()
+            && durable.round() == certificate.proposal_round
+            && durable.subject() == task.subject()
+            && durable.manifest_hash() == self.validated_manifest_hash
+            && durable.frame_hash() == self.validated_body_frame_hash
+            && self.commit_qc == *certificate
+            && self.subject == task.subject()
+            && self.execution_commitment == certificate.execution_commitment
+            && self.validated_receipt == *task.validated_receipt()
+            && self.proposal_block_hash == task.subject().block_hash
+            && self.canonical_proposal_wire_hash == task.subject().payload_hash
+            && self.committed_block_hash == task.subject().block_hash
+            && self.executed_block_wire_hash
+                == certificate.execution_commitment.executed_block_wire_hash
+            && self.kura_receipt.height() == self.context.height
+            && self.kura_receipt.context_id() == self.context.id()
+            && self.kura_receipt.subject() == task.subject()
+            && self.kura_receipt.block_hash() == self.committed_block_hash
+            && self.kura_receipt.certificate() == certificate.as_ref()
+            && self.kura_receipt.artifact_hash() == self.artifact_hash
+            && artifact.height_context == self.context
+            && artifact.height == self.context.height
+            && artifact.subject == task.subject()
+            && artifact.block_hash == self.committed_block_hash
+            && artifact.commit_qc == *certificate
+            && HashOf::new(artifact) == self.artifact_hash
+            && self.state_height_after == context_height
+    }
+}
+
 /// Opaque proof that Kura authenticated the sole finalized subject for recovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerifiedRecoveredFinalitySubject {
@@ -3557,6 +3799,25 @@ impl V2ApplyService {
         }
     }
 
+    /// Compare this exact immutable service owner with one lifecycle launch.
+    ///
+    /// This fixed oracle exposes none of the retained execution dependencies.
+    /// It is used before a recovered service is transferred into the I/O
+    /// worker so a caller cannot substitute State, Kura, network, or validator
+    /// proof authority after semantic marker replay.
+    pub(in crate::sumeragi) fn matches_lifecycle_launch(
+        &self,
+        state: &Arc<State>,
+        kura: &Arc<Kura>,
+        context: &wire::HeightContext,
+        validator_set_pops: &[Vec<u8>],
+    ) -> bool {
+        Arc::ptr_eq(&self.state, state)
+            && Arc::ptr_eq(&self.kura, kura)
+            && self.network_id == context.network_id
+            && self.validator_set_pops == validator_set_pops
+    }
+
     /// Apply one exact CommitQC task or complete its interrupted sidecar write.
     pub(crate) fn execute(
         &self,
@@ -3564,6 +3825,86 @@ impl V2ApplyService {
         body_store: &mut V2BodyStore,
         task: &ApplyTask,
     ) -> Result<DurableApplyCompletion, V2ApplyError> {
+        let material =
+            self.execute_exact_apply(context, body_store, ExactApplyTaskRef::Ordinary(task))?;
+        let prospective_application = material
+            .ordinary_projection
+            .ok_or(V2ApplyError::TaskMismatch)?;
+        let evidence = DurableApplicationEvidence {
+            task_tag: task.tag(),
+            owner_tag: task.authorized_owner_tag(),
+            task_generation: task.tag().generation().get(),
+            task_work_id: task.id(),
+            context: material.context,
+            commit_qc: material.commit_qc,
+            subject: material.subject,
+            execution_commitment: material.execution_commitment,
+            validated_receipt: material.validated_receipt,
+            validated_manifest_hash: material.validated_manifest_hash,
+            validated_body_frame_hash: material.validated_body_frame_hash,
+            proposal_block_hash: material.proposal_block_hash,
+            canonical_proposal_wire_hash: material.canonical_proposal_wire_hash,
+            committed_block_hash: material.committed_block_hash,
+            executed_block_wire_hash: material.executed_block_wire_hash,
+            kura_receipt: material.kura_receipt,
+            artifact: material.artifact,
+            artifact_hash: material.artifact_hash,
+            completion_work_id: task.id(),
+            state_height_after: material.state_height_after,
+        };
+        self.finish_durable_apply_completion_against(evidence, prospective_application)
+    }
+
+    /// Execute one registry-owned recovered Decision Apply task.
+    ///
+    /// The task and its dispatch identity are consumed together. A retryable
+    /// merge-sidecar miss returns the unchanged task to the lifecycle owner;
+    /// every successful result retains the same opaque dispatch identity.
+    pub(in crate::sumeragi) fn execute_recovered_decision_apply(
+        &self,
+        context: &wire::HeightContext,
+        body_store: &mut V2BodyStore,
+        task: RecoveredDecisionApplyTaskV1,
+    ) -> Result<RecoveredDecisionApplyWorkerResultV1, V2ApplyError> {
+        if !task.dispatch_identity.matches_height_context(context) {
+            return Err(V2ApplyError::TaskMismatch);
+        }
+        let material = match self.execute_exact_apply(
+            context,
+            body_store,
+            ExactApplyTaskRef::Recovered(&task),
+        ) {
+            Ok(material) => material,
+            Err(V2ApplyError::MissingCertifiedMergeSidecar { reference }) => {
+                return Ok(RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference });
+            }
+            Err(error) => return Err(error),
+        };
+        debug_assert!(material.ordinary_projection.is_none());
+        if !material.exactly_matches_recovered_task(&task) {
+            return Err(V2ApplyError::committed_recovery_required(
+                "recovered Decision Apply evidence",
+                &"native recovered application identity changed after durable application",
+            ));
+        }
+        Ok(RecoveredDecisionApplyWorkerResultV1::Applied(
+            RecoveredDecisionApplyCompletionV1 {
+                dispatch_identity: task.dispatch_identity,
+                subject: task.subject,
+                certificate: task.certificate,
+                validated_receipt: task.validated_receipt,
+                receipt: material.kura_receipt,
+                artifact: material.artifact,
+            },
+        ))
+    }
+
+    fn execute_exact_apply(
+        &self,
+        context: &wire::HeightContext,
+        body_store: &mut V2BodyStore,
+        task: ExactApplyTaskRef<'_>,
+    ) -> Result<ExactApplyExecutionMaterial, V2ApplyError> {
         context.validate()?;
         if task.subject() != task.certificate().subject
             || task.certificate().phase != wire::GlobalPhase::Commit
@@ -3606,26 +3947,34 @@ impl V2ApplyService {
         artifact
             .verify()
             .map_err(V2ApplyError::FinalityCryptography)?;
-        let prospective_application = prospective_application_refinement_projection(
-            context,
-            task,
-            proposal_block_hash,
-            canonical_proposal_wire_hash,
-            &artifact,
-        )
-        .ok_or_else(|| {
-            V2ApplyError::Validation(
-                "prospective application identity cannot be represented losslessly".to_owned(),
-            )
-        })?;
-        let checked_application = check_production_application_transition(prospective_application)
-            .ok_or_else(|| {
-                V2ApplyError::Validation(
-                    "prospective durable application does not refine its Decision completion"
-                        .to_owned(),
+        let ordinary_projection = match task {
+            ExactApplyTaskRef::Ordinary(task) => {
+                let prospective_application = prospective_application_refinement_projection(
+                    context,
+                    task,
+                    proposal_block_hash,
+                    canonical_proposal_wire_hash,
+                    &artifact,
                 )
-            })?;
-        let prospective_application = checked_application.into_projection();
+                .ok_or_else(|| {
+                    V2ApplyError::Validation(
+                        "prospective application identity cannot be represented losslessly"
+                            .to_owned(),
+                    )
+                })?;
+                let checked_application = check_production_application_transition(
+                    prospective_application,
+                )
+                .ok_or_else(|| {
+                    V2ApplyError::Validation(
+                        "prospective durable application does not refine its Decision completion"
+                            .to_owned(),
+                    )
+                })?;
+                Some(checked_application.into_projection())
+            }
+            ExactApplyTaskRef::Recovered(_) => None,
+        };
 
         let height = usize::try_from(context.height).map_err(|_| V2ApplyError::HeightOverflow)?;
         let height = NonZeroUsize::new(height).ok_or(V2ApplyError::HeightOverflow)?;
@@ -3678,10 +4027,8 @@ impl V2ApplyService {
             let entry = self
                 .kura
                 .merge_entry_by_hash(reference.entry_hash)?
-                .ok_or_else(|| {
-                    V2ApplyError::Validation(
-                        "finality-authenticated autonomous merge sidecar is unavailable".to_owned(),
-                    )
+                .ok_or_else(|| V2ApplyError::MissingCertifiedMergeSidecar {
+                    reference: reference.clone(),
                 })?;
             let applications = authenticated_autonomous_carrier_application_projections(
                 reference,
@@ -3767,7 +4114,7 @@ impl V2ApplyService {
         // that join first on every fresh or recovery attempt, then repair or
         // confirm the exact manifests, receipts, and latest indexes while the
         // prune guard keeps their canonical carrier stable.
-        self.persist_post_apply_metadata(context, task, &artifact)
+        self.persist_post_apply_metadata(context, task.subject(), &artifact)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("post-apply metadata", &error)
             })?;
@@ -3830,11 +4177,7 @@ impl V2ApplyService {
             );
         }
         let artifact_hash = HashOf::new(&artifact);
-        let evidence = DurableApplicationEvidence {
-            task_tag: task.tag(),
-            owner_tag: task.authorized_owner_tag(),
-            task_generation: task.tag().generation().get(),
-            task_work_id: task.id(),
+        Ok(ExactApplyExecutionMaterial {
             context: context.clone(),
             commit_qc: task.certificate().clone(),
             subject: task.subject(),
@@ -3849,10 +4192,9 @@ impl V2ApplyService {
             kura_receipt: receipt,
             artifact,
             artifact_hash,
-            completion_work_id: task.id(),
             state_height_after: self.state.committed_height(),
-        };
-        self.finish_durable_apply_completion_against(evidence, prospective_application)
+            ordinary_projection,
+        })
     }
 
     fn finish_durable_apply_completion_against(
@@ -4497,10 +4839,10 @@ impl V2ApplyService {
     fn persist_post_apply_metadata(
         &self,
         context: &wire::HeightContext,
-        task: &ApplyTask,
+        subject: wire::BlockSubject,
         artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
-        let block_hash = task.subject().block_hash;
+        let block_hash = subject.block_hash;
         let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref());
         self.kura
             .store_wsv_checkpoint(context.height, block_hash, checkpoint)?;

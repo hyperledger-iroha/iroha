@@ -175,7 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "ee6735723a4cd1aa6f4a061a7d15dc857b5cc90dec095c6d6a081e7564e53922"
+    "cdb9c8d7a6a8e5896d43a5d080a496a5d3465d7ff461e433a5b0560638565ab4"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500

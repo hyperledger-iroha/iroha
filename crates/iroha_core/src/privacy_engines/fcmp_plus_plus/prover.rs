@@ -25,8 +25,9 @@ use super::{
     },
     field::{
         Field25519, HeliosPoint, HelioseleneField, SelenePoint, decode_edwards_point,
-        decode_field25519_scalar, decode_helioselene_scalar, edwards_to_wei25519, hash_helios,
-        hash_selene, validate_edwards_scalar,
+        decode_secret_field25519_scalar_v1, decode_secret_helioselene_scalar_v1,
+        edwards_to_wei25519, hash_helios, hash_selene, secret_edwards_to_wei25519_v1,
+        validate_edwards_scalar,
     },
     membership::{
         TranscriptedInput, constrain_input, ed25519_curve, helios_curve, membership_context,
@@ -34,7 +35,8 @@ use super::{
     },
     proof_math::{
         FcmpProofRandomSource, HeliosSuite, ProofPoint, ProofScalar, ProofSuite, ProverTranscript,
-        SeleneSuite, helios_bp_generators, random_scalar_from_fcmp_rng, selene_bp_generators,
+        SecretMultiexpBuilder, SeleneSuite, helios_bp_generators, random_scalar_from_fcmp_rng,
+        selene_bp_generators,
     },
     range::prove_fcmp_range_with_checked_rng_v1,
     sal::{generator_t, generator_u, generator_v, prove_fcmp_sal_with_checked_rng_v1},
@@ -43,6 +45,134 @@ use super::{
 
 const MAX_PROVER_SCALAR_ATTEMPTS_V1: usize = 128;
 const MAX_MEMBERSHIP_PROVER_RESTARTS_V1: usize = 128;
+
+struct ProverSecretCopyValueV1<T: Copy + Zeroize>(T);
+
+struct BorrowedProverCopySlotV1<'a, T: Copy + Zeroize>(&'a mut T);
+
+impl<T: Copy + Zeroize> BorrowedProverCopySlotV1<'_, T> {
+    fn expose_copy(&self) -> T {
+        *self.0
+    }
+}
+
+impl<T: Copy + Zeroize> Drop for BorrowedProverCopySlotV1<'_, T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl<T: Copy + Zeroize> ProverSecretCopyValueV1<T> {
+    fn new(mut value: T) -> Self {
+        Self::take(&mut value)
+    }
+
+    fn take(value: &mut T) -> Self {
+        let incoming = BorrowedProverCopySlotV1(value);
+        let owned = Self(incoming.expose_copy());
+        drop(incoming);
+        owned
+    }
+
+    fn expose_copy(&self) -> T {
+        self.0
+    }
+
+    fn expose_ref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T: Copy + Zeroize> Drop for ProverSecretCopyValueV1<T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.0);
+    }
+}
+
+/// Clears one prover-owned scalar on success, error, and unwind.
+struct ProverSecretScalarV1<F: ProofScalar>(F);
+
+struct BorrowedProverScalarSlotV1<'a, F: ProofScalar>(&'a mut F);
+
+impl<F: ProofScalar> BorrowedProverScalarSlotV1<'_, F> {
+    fn expose_copy(&self) -> F {
+        *self.0
+    }
+}
+
+impl<F: ProofScalar> Drop for BorrowedProverScalarSlotV1<'_, F> {
+    fn drop(&mut self) {
+        self.0.clear_secret();
+    }
+}
+
+impl<F: ProofScalar> ProverSecretScalarV1<F> {
+    fn take(value: &mut F) -> Self {
+        let incoming = BorrowedProverScalarSlotV1(value);
+        let owned = Self(incoming.expose_copy());
+        drop(incoming);
+        owned
+    }
+
+    fn expose_copy(&self) -> F {
+        self.0
+    }
+
+    fn expose_ref(&self) -> &F {
+        &self.0
+    }
+
+    fn add_product_assign(&mut self, left: &F, right: &F) {
+        self.0 += *left * *right;
+    }
+}
+
+impl<F: ProofScalar> Drop for ProverSecretScalarV1<F> {
+    fn drop(&mut self) {
+        self.0.clear_secret();
+    }
+}
+
+struct ProverSecretPointV1<P: ProofPoint>(P);
+
+struct BorrowedProverPointSlotV1<'a, P: ProofPoint>(&'a mut P);
+
+impl<P: ProofPoint> BorrowedProverPointSlotV1<'_, P> {
+    fn expose_copy(&self) -> P {
+        *self.0
+    }
+}
+
+impl<P: ProofPoint> Drop for BorrowedProverPointSlotV1<'_, P> {
+    fn drop(&mut self) {
+        self.0.clear_secret();
+    }
+}
+
+impl<P: ProofPoint> ProverSecretPointV1<P> {
+    fn take(value: &mut P) -> Self {
+        let incoming = BorrowedProverPointSlotV1(value);
+        let owned = Self(incoming.expose_copy());
+        drop(incoming);
+        owned
+    }
+
+    fn expose_copy(&self) -> P {
+        self.0
+    }
+
+    fn expose_ref(&self) -> &P {
+        &self.0
+    }
+}
+
+impl<P: ProofPoint> Drop for ProverSecretPointV1<P> {
+    fn drop(&mut self) {
+        self.0.clear_secret();
+    }
+}
 
 fn zeroizing_digest_buffer(
     exact_capacity: usize,
@@ -55,6 +185,17 @@ fn zeroizing_digest_buffer(
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
     Ok(Zeroizing::new(values))
+}
+
+fn push_secret_scalar_v1<F: ProofScalar>(
+    values: &mut Zeroizing<Vec<F>>,
+    mut value: F,
+) -> Result<(), FcmpNativeErrorV1> {
+    let value = ProverSecretScalarV1::take(&mut value);
+    require_preallocated_push(values.len(), values.capacity())?;
+    values.push(value.expose_copy());
+    drop(value);
+    Ok(())
 }
 
 fn ct_slice_contains_by<T, U>(
@@ -244,26 +385,31 @@ pub struct FcmpInputRerandomizationV1 {
 impl FcmpInputRerandomizationV1 {
     /// Decode four canonical non-zero Ed25519 scalars.
     pub fn new(
-        output: [u8; 32],
-        linking: [u8; 32],
-        rerandomization_blind: [u8; 32],
-        commitment: [u8; 32],
+        mut output: [u8; 32],
+        mut linking: [u8; 32],
+        mut rerandomization_blind: [u8; 32],
+        mut commitment: [u8; 32],
     ) -> Result<Self, FcmpNativeErrorV1> {
-        let output = Zeroizing::new(output);
-        let linking = Zeroizing::new(linking);
-        let rerandomization_blind = Zeroizing::new(rerandomization_blind);
-        let commitment = Zeroizing::new(commitment);
+        let output = ProverSecretCopyValueV1::take(&mut output);
+        let linking = ProverSecretCopyValueV1::take(&mut linking);
+        let rerandomization_blind = ProverSecretCopyValueV1::take(&mut rerandomization_blind);
+        let commitment = ProverSecretCopyValueV1::take(&mut commitment);
         let decode = |bytes: &[u8; 32]| {
             validate_edwards_scalar(*bytes)?;
             Option::<Scalar>::from(Scalar::from_canonical_bytes(*bytes))
                 .filter(|scalar| *scalar != Scalar::ZERO)
                 .ok_or(FcmpNativeErrorV1::ScalarEncoding)
         };
+        let output_scalar = ProverSecretCopyValueV1::new(decode(output.expose_ref())?);
+        let linking_scalar = ProverSecretCopyValueV1::new(decode(linking.expose_ref())?);
+        let rerandomization_blind_scalar =
+            ProverSecretCopyValueV1::new(decode(rerandomization_blind.expose_ref())?);
+        let commitment_scalar = ProverSecretCopyValueV1::new(decode(commitment.expose_ref())?);
         Ok(Self {
-            output: decode(&output)?,
-            linking: decode(&linking)?,
-            rerandomization_blind: decode(&rerandomization_blind)?,
-            commitment: decode(&commitment)?,
+            output: output_scalar.expose_copy(),
+            linking: linking_scalar.expose_copy(),
+            rerandomization_blind: rerandomization_blind_scalar.expose_copy(),
+            commitment: commitment_scalar.expose_copy(),
         })
     }
 
@@ -357,24 +503,24 @@ impl FcmpProverInputV1 {
     /// aggregate balance equation before hashing the authoritative statement.
     pub fn new(
         output: FcmpOutputTupleV1,
-        spend_x: [u8; 32],
-        output_y: [u8; 32],
+        mut spend_x: [u8; 32],
+        mut output_y: [u8; 32],
         rerandomization: FcmpInputRerandomizationV1,
         leaves: Vec<FcmpOutputTupleV1>,
         additional_branches: Vec<Vec<[u8; 32]>>,
     ) -> Result<Self, FcmpNativeErrorV1> {
-        let spend_x_bytes = Zeroizing::new(spend_x);
-        let output_y_bytes = Zeroizing::new(output_y);
+        let spend_x_bytes = ProverSecretCopyValueV1::take(&mut spend_x);
+        let output_y_bytes = ProverSecretCopyValueV1::take(&mut output_y);
         let mut leaves = Zeroizing::new(leaves);
         let additional_branches = Zeroizing::new(additional_branches);
-        validate_edwards_scalar(*spend_x_bytes)?;
-        validate_edwards_scalar(*output_y_bytes)?;
-        let spend_x = Zeroizing::new(
-            Option::<Scalar>::from(Scalar::from_canonical_bytes(*spend_x_bytes))
+        validate_edwards_scalar(*spend_x_bytes.expose_ref())?;
+        validate_edwards_scalar(*output_y_bytes.expose_ref())?;
+        let spend_x_scalar = ProverSecretCopyValueV1::new(
+            Option::<Scalar>::from(Scalar::from_canonical_bytes(*spend_x_bytes.expose_ref()))
                 .ok_or(FcmpNativeErrorV1::ScalarEncoding)?,
         );
-        let output_y = Zeroizing::new(
-            Option::<Scalar>::from(Scalar::from_canonical_bytes(*output_y_bytes))
+        let output_y_scalar = ProverSecretCopyValueV1::new(
+            Option::<Scalar>::from(Scalar::from_canonical_bytes(*output_y_bytes.expose_ref()))
                 .ok_or(FcmpNativeErrorV1::ScalarEncoding)?,
         );
         if leaves.is_empty()
@@ -390,7 +536,7 @@ impl FcmpProverInputV1 {
         let output_id = Zeroizing::new(output.output_id());
         let output_present = ct_digest_slice_contains(&leaf_ids, &output_id);
         let duplicate_leaf = ct_has_duplicate_digests(&leaf_ids);
-        let zero_spend = bool::from(spend_x.ct_eq(&Scalar::ZERO));
+        let zero_spend = bool::from(spend_x_scalar.expose_ref().ct_eq(&Scalar::ZERO));
         if zero_spend || !output_present {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
@@ -410,7 +556,11 @@ impl FcmpProverInputV1 {
             if index % 2 == 0 {
                 let mut decoded_branch = Zeroizing::new(Vec::with_capacity(branch.len()));
                 for encoded in branch {
-                    decoded_branch.push(decode_helioselene_scalar(*encoded)?);
+                    require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?;
+                    push_secret_scalar_v1(
+                        &mut decoded_branch,
+                        decode_secret_helioselene_scalar_v1(encoded)?,
+                    )?;
                 }
                 decoded.push(AdditionalBranch::ToHelios(core::mem::take(
                     &mut *decoded_branch,
@@ -418,7 +568,11 @@ impl FcmpProverInputV1 {
             } else {
                 let mut decoded_branch = Zeroizing::new(Vec::with_capacity(branch.len()));
                 for encoded in branch {
-                    decoded_branch.push(decode_field25519_scalar(*encoded)?);
+                    require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?;
+                    push_secret_scalar_v1(
+                        &mut decoded_branch,
+                        decode_secret_field25519_scalar_v1(encoded)?,
+                    )?;
                 }
                 decoded.push(AdditionalBranch::ToSelene(core::mem::take(
                     &mut *decoded_branch,
@@ -427,8 +581,8 @@ impl FcmpProverInputV1 {
         }
         Ok(Self {
             output,
-            spend_x: *spend_x,
-            output_y: *output_y,
+            spend_x: spend_x_scalar.expose_copy(),
+            output_y: output_y_scalar.expose_copy(),
             rerandomization,
             leaves: core::mem::take(&mut *leaves),
             additional_branches: decoded,
@@ -940,13 +1094,31 @@ fn random_proof_scalar<F: ProofScalar>(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<F, FcmpNativeErrorV1> {
     for _ in 0..MAX_PROVER_SCALAR_ATTEMPTS_V1 {
-        if let Some(scalar) = random_scalar_from_fcmp_rng::<F, _>(rng)?
-            && !scalar.is_zero()
-        {
-            return Ok(scalar);
+        if let Some(mut scalar) = random_scalar_from_fcmp_rng::<F, _>(rng)? {
+            let scalar = ProverSecretScalarV1::take(&mut scalar);
+            if !scalar.expose_copy().is_zero() {
+                return Ok(scalar.expose_copy());
+            }
         }
     }
     Err(FcmpNativeErrorV1::ProverRandomnessExhausted)
+}
+
+fn root_nonce_commitment_v1<S: ProofSuite>(
+    nonce: &S::Scalar,
+) -> Result<S::Point, FcmpNativeErrorV1> {
+    let mut terms = SecretMultiexpBuilder::<S>::new(1)?;
+    terms.push(nonce, &S::generators().h)?;
+    terms.evaluate().map_err(Into::into)
+}
+
+fn prepared_secret_point_v1<S: ProofSuite>(
+    scalar: &S::Scalar,
+) -> Result<ProverSecretPointV1<S::Point>, FcmpNativeErrorV1> {
+    let mut terms = SecretMultiexpBuilder::<S>::new(1)?;
+    terms.push(scalar, &S::generators().h)?;
+    let mut point = terms.evaluate()?;
+    Ok(ProverSecretPointV1::take(&mut point))
 }
 
 struct PreparedEdBlind {
@@ -965,17 +1137,20 @@ impl Drop for PreparedEdBlind {
 
 fn prepare_ed_blind(
     generator: EdwardsPoint,
-    scalar: Scalar,
+    scalar: &Scalar,
+    negate: bool,
 ) -> Result<PreparedEdBlind, FcmpNativeErrorV1> {
-    let decomposition = ed25519_scalar_decomposition(scalar)?;
-    let point = generator * scalar;
-    let coordinates = edwards_to_wei25519(point.compress().to_bytes())?;
+    let scalar = Zeroizing::new(if negate { -*scalar } else { *scalar });
+    let mut decomposition = ed25519_scalar_decomposition(&scalar)?;
+    let point = Zeroizing::new(&generator * &*scalar);
+    let encoded_point = Zeroizing::new(point.compress().to_bytes());
+    let coordinates = Zeroizing::new(secret_edwards_to_wei25519_v1(&encoded_point)?);
     let curve = ed25519_curve();
-    let divisor = scalar_mul_divisor(curve.a, curve.b, generator, &decomposition, point)?;
+    let divisor = scalar_mul_divisor(curve.a, curve.b, generator, &decomposition, &point)?;
     Ok(PreparedEdBlind {
-        decomposition,
+        decomposition: core::mem::take(&mut *decomposition),
         divisor,
-        coordinates,
+        coordinates: *coordinates,
     })
 }
 
@@ -994,17 +1169,25 @@ impl Drop for PreparedSeleneBlind {
     }
 }
 
-fn prepare_selene_blind(scalar: Field25519) -> Result<PreparedSeleneBlind, FcmpNativeErrorV1> {
-    let decomposition = scalar_decomposition(scalar, CYCLE_DLOG_PARAMETERS.scalar_bits)?;
+fn prepare_selene_blind(mut scalar: Field25519) -> Result<PreparedSeleneBlind, FcmpNativeErrorV1> {
+    let scalar = ProverSecretScalarV1::take(&mut scalar);
+    let mut decomposition =
+        scalar_decomposition(scalar.expose_ref(), CYCLE_DLOG_PARAMETERS.scalar_bits)?;
     let generator = selene_bp_generators().h;
-    let point = generator.scale(scalar);
+    let point = prepared_secret_point_v1::<SeleneSuite>(scalar.expose_ref())?;
     let curve = selene_curve();
-    let divisor = scalar_mul_divisor(curve.a, curve.b, generator, &decomposition, point)?;
+    let divisor = scalar_mul_divisor(
+        curve.a,
+        curve.b,
+        generator,
+        &decomposition,
+        point.expose_ref(),
+    )?;
     Ok(PreparedSeleneBlind {
-        scalar,
-        decomposition,
+        scalar: scalar.expose_copy(),
+        decomposition: core::mem::take(&mut *decomposition),
         divisor,
-        point,
+        point: point.expose_copy(),
     })
 }
 
@@ -1024,18 +1207,26 @@ impl Drop for PreparedHeliosBlind {
 }
 
 fn prepare_helios_blind(
-    scalar: HelioseleneField,
+    mut scalar: HelioseleneField,
 ) -> Result<PreparedHeliosBlind, FcmpNativeErrorV1> {
-    let decomposition = scalar_decomposition(scalar, CYCLE_DLOG_PARAMETERS.scalar_bits)?;
+    let scalar = ProverSecretScalarV1::take(&mut scalar);
+    let mut decomposition =
+        scalar_decomposition(scalar.expose_ref(), CYCLE_DLOG_PARAMETERS.scalar_bits)?;
     let generator = helios_bp_generators().h;
-    let point = generator.scale(scalar);
+    let point = prepared_secret_point_v1::<HeliosSuite>(scalar.expose_ref())?;
     let curve = helios_curve();
-    let divisor = scalar_mul_divisor(curve.a, curve.b, generator, &decomposition, point)?;
+    let divisor = scalar_mul_divisor(
+        curve.a,
+        curve.b,
+        generator,
+        &decomposition,
+        point.expose_ref(),
+    )?;
     Ok(PreparedHeliosBlind {
-        scalar,
-        decomposition,
+        scalar: scalar.expose_copy(),
+        decomposition: core::mem::take(&mut *decomposition),
         divisor,
-        point,
+        point: point.expose_copy(),
     })
 }
 
@@ -1142,7 +1333,7 @@ fn prove_fcmp_plus_plus_once_v1(
             require_preallocated_push(c1_branch_masks.len(), c1_branch_masks.capacity())?;
             require_preallocated_push(selene_blinds.len(), selene_blinds.capacity())?;
             let blind = prepare_selene_blind(random_proof_scalar(rng)?)?;
-            c1_branch_masks.push(-blind.scalar);
+            push_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.neg_ref())?;
             selene_blinds.push(blind);
         }
         let mut c2_non_root = Vec::with_capacity(path.c2_non_root.len());
@@ -1151,7 +1342,7 @@ fn prove_fcmp_plus_plus_once_v1(
             require_preallocated_push(c2_branch_masks.len(), c2_branch_masks.capacity())?;
             require_preallocated_push(helios_blinds.len(), helios_blinds.capacity())?;
             let blind = prepare_helios_blind(random_proof_scalar(rng)?)?;
-            c2_branch_masks.push(-blind.scalar);
+            push_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.neg_ref())?;
             helios_blinds.push(blind);
         }
         transcripted_paths.push(TranscriptedPath {
@@ -1163,13 +1354,13 @@ fn prove_fcmp_plus_plus_once_v1(
         RootValues::C1(values) => {
             let variables = c1_tape.append_branch(values)?;
             require_preallocated_push(c1_branch_masks.len(), c1_branch_masks.capacity())?;
-            c1_branch_masks.push(random_proof_scalar(rng)?);
+            push_secret_scalar_v1(&mut c1_branch_masks, random_proof_scalar(rng)?)?;
             variables
         }
         RootValues::C2(values) => {
             let variables = c2_tape.append_branch(values)?;
             require_preallocated_push(c2_branch_masks.len(), c2_branch_masks.capacity())?;
-            c2_branch_masks.push(random_proof_scalar(rng)?);
+            push_secret_scalar_v1(&mut c2_branch_masks, random_proof_scalar(rng)?)?;
             variables
         }
     };
@@ -1185,16 +1376,14 @@ fn prove_fcmp_plus_plus_once_v1(
         let (output_bytes, linking_bytes, commitment_bytes) = input.output.components();
         let public = input.public_input()?;
         generated_pseudo_outs.push(public.pseudo_out);
-        let r_o = input.rerandomization.output;
-        let r_i = input.rerandomization.linking;
-        let r_r_i = input.rerandomization.rerandomization_blind;
-        let r_c = input.rerandomization.commitment;
-
-        let output_blind = prepare_ed_blind(generator_t(), -r_o)?;
-        let input_blind_u = prepare_ed_blind(generator_u(), -r_i)?;
-        let input_blind_v = prepare_ed_blind(generator_v(), -r_i)?;
-        let input_blind_blind = prepare_ed_blind(generator_t(), r_r_i)?;
-        let commitment_blind = prepare_ed_blind(ED25519_BASEPOINT_POINT, -r_c)?;
+        let rerandomization = &input.rerandomization;
+        let output_blind = prepare_ed_blind(generator_t(), &rerandomization.output, true)?;
+        let input_blind_u = prepare_ed_blind(generator_u(), &rerandomization.linking, true)?;
+        let input_blind_v = prepare_ed_blind(generator_v(), &rerandomization.linking, true)?;
+        let input_blind_blind =
+            prepare_ed_blind(generator_t(), &rerandomization.rerandomization_blind, false)?;
+        let commitment_blind =
+            prepare_ed_blind(ED25519_BASEPOINT_POINT, &rerandomization.commitment, true)?;
         let output_coordinates = Zeroizing::new(edwards_to_wei25519(output_bytes)?);
         let linking_coordinates = Zeroizing::new(edwards_to_wei25519(linking_bytes)?);
         let commitment_coordinates = Zeroizing::new(edwards_to_wei25519(commitment_bytes)?);
@@ -1250,11 +1439,12 @@ fn prove_fcmp_plus_plus_once_v1(
             dlog: input_blind_u_claim.dlog.clone(),
             divisor: input_blind_v_divisor,
         };
+        let sal_y = Zeroizing::new(input.output_y + rerandomization.output);
         let sal_witness = FcmpSalWitnessV1::new(
             input.spend_x.to_bytes(),
-            (input.output_y + r_o).to_bytes(),
-            r_i.to_bytes(),
-            r_r_i.to_bytes(),
+            sal_y.to_bytes(),
+            rerandomization.linking.to_bytes(),
+            rerandomization.rerandomization_blind.to_bytes(),
         )?;
         let sal = prove_fcmp_sal_with_checked_rng_v1(rng, context_hash, &public, &sal_witness)?;
         prepared_inputs.push(PreparedInput {
@@ -1326,38 +1516,44 @@ fn prove_fcmp_plus_plus_once_v1(
     let c1_mask_allocation_capacity = c1_masks.capacity();
     while c1_masks.len() < c1_tape.commitment_count() {
         require_preallocated_push(c1_masks.len(), c1_masks.capacity())?;
-        c1_masks.push(random_proof_scalar(rng)?);
+        push_secret_scalar_v1(&mut c1_masks, random_proof_scalar(rng)?)?;
         debug_assert_eq!(c1_masks.capacity(), c1_mask_allocation_capacity);
     }
     let mut c2_masks = c2_branch_masks;
     let c2_mask_allocation_capacity = c2_masks.capacity();
     while c2_masks.len() < c2_tape.commitment_count() {
         require_preallocated_push(c2_masks.len(), c2_masks.capacity())?;
-        c2_masks.push(random_proof_scalar(rng)?);
+        push_secret_scalar_v1(&mut c2_masks, random_proof_scalar(rng)?)?;
         debug_assert_eq!(c2_masks.capacity(), c2_mask_allocation_capacity);
     }
     let root_mask_c1 =
-        (root.curve() == FcmpTreeCurveV1::Selene).then(|| c1_masks[root_commitment_index]);
+        (root.curve() == FcmpTreeCurveV1::Selene).then(|| &c1_masks[root_commitment_index]);
     let root_mask_c2 =
-        (root.curve() == FcmpTreeCurveV1::Helios).then(|| c2_masks[root_commitment_index]);
+        (root.curve() == FcmpTreeCurveV1::Helios).then(|| &c2_masks[root_commitment_index]);
     let (c1_commitments, c1_openings) =
         c1_tape.commitments_and_openings::<SeleneSuite>(c1_generators, c1_masks.as_slice())?;
     let (c2_commitments, c2_openings) =
         c2_tape.commitments_and_openings::<HeliosSuite>(c2_generators, c2_masks.as_slice())?;
 
-    let (root_blind_commitment, root_nonce_c1, root_nonce_c2) = match root.curve() {
+    let (root_blind_commitment, mut root_nonce_c1, mut root_nonce_c2): (
+        [u8; 32],
+        Option<ProverSecretScalarV1<Field25519>>,
+        Option<ProverSecretScalarV1<HelioseleneField>>,
+    ) = match root.curve() {
         FcmpTreeCurveV1::Selene => {
-            let nonce = random_proof_scalar::<Field25519>(rng)?;
+            let mut nonce = random_proof_scalar::<Field25519>(rng)?;
+            let nonce = ProverSecretScalarV1::take(&mut nonce);
             (
-                selene_bp_generators().h.scale(nonce).encode(),
+                root_nonce_commitment_v1::<SeleneSuite>(nonce.expose_ref())?.encode(),
                 Some(nonce),
                 None,
             )
         }
         FcmpTreeCurveV1::Helios => {
-            let nonce = random_proof_scalar::<HelioseleneField>(rng)?;
+            let mut nonce = random_proof_scalar::<HelioseleneField>(rng)?;
+            let nonce = ProverSecretScalarV1::take(&mut nonce);
             (
-                helios_bp_generators().h.scale(nonce).encode(),
+                root_nonce_commitment_v1::<HeliosSuite>(nonce.expose_ref())?.encode(),
                 None,
                 Some(nonce),
             )
@@ -1388,15 +1584,21 @@ fn prove_fcmp_plus_plus_once_v1(
     let root_blind_response = match root.curve() {
         FcmpTreeCurveV1::Selene => {
             let challenge = transcript.challenge::<SeleneSuite>()?;
-            (root_nonce_c1.ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?
-                + (challenge * root_mask_c1.ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?))
-            .encode()
+            let nonce = root_nonce_c1
+                .as_mut()
+                .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+            let mask = root_mask_c1.ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+            nonce.add_product_assign(&challenge, mask);
+            nonce.expose_copy().encode()
         }
         FcmpTreeCurveV1::Helios => {
             let challenge = transcript.challenge::<HeliosSuite>()?;
-            (root_nonce_c2.ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?
-                + (challenge * root_mask_c2.ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?))
-            .encode()
+            let nonce = root_nonce_c2
+                .as_mut()
+                .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+            let mask = root_mask_c2.ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
+            nonce.add_product_assign(&challenge, mask);
+            nonce.expose_copy().encode()
         }
     };
 
@@ -1407,13 +1609,13 @@ fn prove_fcmp_plus_plus_once_v1(
     let mut c1_commitment_openings = c1_commitments
         .iter()
         .copied()
-        .zip(c1_masks.iter().copied())
+        .zip(c1_masks.iter())
         .zip(c2_blind_claims)
         .map(|((commitment, mask), blind)| (commitment, Some(mask), blind));
     let mut c2_commitment_openings = c2_commitments
         .iter()
         .copied()
-        .zip(c2_masks.iter().copied())
+        .zip(c2_masks.iter())
         .zip(c1_blind_claims)
         .map(|((commitment, mask), blind)| (commitment, Some(mask), blind));
     for ((path, prepared), public) in transcripted_paths
@@ -1659,6 +1861,8 @@ pub fn prove_fcmp_plus_plus_v1(
 
 #[cfg(test)]
 mod tests {
+    use core::cell::Cell;
+
     use rand_08::{SeedableRng as _, rngs::StdRng};
     use sha2::{Digest as _, Sha256};
 
@@ -1672,6 +1876,464 @@ mod tests {
     };
 
     const TEST_AMOUNT: u64 = 5;
+
+    thread_local! {
+        static PROVER_COPY_CLEARS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[derive(Clone, Copy)]
+    struct TrackingCopy(u64);
+
+    impl Zeroize for TrackingCopy {
+        fn zeroize(&mut self) {
+            self.0 = 0;
+            PROVER_COPY_CLEARS.with(|calls| calls.set(calls.get() + 1));
+        }
+    }
+
+    #[test]
+    fn prover_copy_owner_clears_transfer_success_and_unwind_slots() {
+        PROVER_COPY_CLEARS.with(|calls| calls.set(0));
+        let mut source = TrackingCopy(7);
+        let owner = ProverSecretCopyValueV1::take(&mut source);
+        assert_eq!(source.0, 0);
+        assert_eq!(owner.expose_ref().0, 7);
+        assert_eq!(PROVER_COPY_CLEARS.with(Cell::get), 1);
+        drop(owner);
+        assert_eq!(PROVER_COPY_CLEARS.with(Cell::get), 2);
+
+        PROVER_COPY_CLEARS.with(|calls| calls.set(0));
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _owner = ProverSecretCopyValueV1::new(TrackingCopy(11));
+                panic!("tracking unwind");
+            })
+            .is_err()
+        );
+        assert_eq!(PROVER_COPY_CLEARS.with(Cell::get), 2);
+    }
+
+    #[test]
+    fn rerandomization_constructor_takes_all_bytes_before_decoding() {
+        let source = include_str!("prover.rs");
+        let constructor = source
+            .split_once("impl FcmpInputRerandomizationV1 {")
+            .expect("rerandomization impl")
+            .1
+            .split_once("#[cfg(test)]\n    fn duplicate_for_test")
+            .expect("constructor boundary")
+            .0;
+        assert_eq!(
+            constructor
+                .matches("ProverSecretCopyValueV1::take(&mut")
+                .count(),
+            4
+        );
+        let last_take = constructor
+            .rfind("ProverSecretCopyValueV1::take(&mut")
+            .expect("last input take");
+        let decode = constructor.find("let decode =").expect("decoder");
+        assert!(last_take < decode);
+        assert_eq!(
+            constructor
+                .matches("ProverSecretCopyValueV1::new(decode(")
+                .count(),
+            4
+        );
+        let last_scalar = constructor
+            .rfind("ProverSecretCopyValueV1::new(decode(")
+            .expect("last decoded owner");
+        let publish = constructor.find("Ok(Self {").expect("final publication");
+        assert!(decode < last_scalar && last_scalar < publish);
+        assert!(!constructor.contains("Zeroizing::new(output)"));
+        assert!(!constructor.contains("output: decode("));
+    }
+
+    #[test]
+    fn prover_input_constructor_takes_secret_bytes_before_validation() {
+        let source = include_str!("prover.rs");
+        let constructor = source
+            .split_once("impl FcmpProverInputV1 {")
+            .expect("prover input impl")
+            .1
+            .split_once("#[cfg(test)]\n    fn duplicate_for_test")
+            .expect("constructor boundary")
+            .0;
+        assert_eq!(
+            constructor
+                .matches("ProverSecretCopyValueV1::take(&mut")
+                .count(),
+            2
+        );
+        let last_take = constructor
+            .rfind("ProverSecretCopyValueV1::take(&mut")
+            .expect("last input take");
+        let first_validation = constructor
+            .find("validate_edwards_scalar(")
+            .expect("first scalar validation");
+        assert!(last_take < first_validation);
+        assert_eq!(
+            constructor.matches("ProverSecretCopyValueV1::new(").count(),
+            2
+        );
+        let last_scalar = constructor
+            .rfind("ProverSecretCopyValueV1::new(")
+            .expect("last decoded owner");
+        let publish = constructor.find("Ok(Self {").expect("final publication");
+        assert!(first_validation < last_scalar && last_scalar < publish);
+        assert!(!constructor.contains("Zeroizing::new(spend_x)"));
+        assert!(!constructor.contains("Zeroizing::new(output_y)"));
+        assert!(constructor.contains("spend_x: spend_x_scalar.expose_copy()"));
+        assert!(constructor.contains("output_y: output_y_scalar.expose_copy()"));
+        assert_eq!(
+            constructor
+                .matches("decode_secret_helioselene_scalar_v1(encoded)?")
+                .count(),
+            1
+        );
+        assert_eq!(
+            constructor
+                .matches("decode_secret_field25519_scalar_v1(encoded)?")
+                .count(),
+            1
+        );
+        assert_eq!(
+            constructor
+                .matches(
+                    "require_preallocated_push(decoded_branch.len(), decoded_branch.capacity())?"
+                )
+                .count(),
+            2
+        );
+        assert_eq!(
+            constructor
+                .matches("push_secret_scalar_v1(\n                        &mut decoded_branch,")
+                .count(),
+            2
+        );
+        assert!(!constructor.contains("decoded_branch.push(decode_"));
+        assert!(!constructor.contains("decode_helioselene_scalar(*encoded)"));
+        assert!(!constructor.contains("decode_field25519_scalar(*encoded)"));
+    }
+
+    #[test]
+    fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
+        fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+            let start = source.find(start).expect("source start");
+            let tail = &source[start..];
+            let end = tail.find(end).expect("source end");
+            &tail[..end]
+        }
+
+        let prover = include_str!("prover.rs");
+        assert!(!prover.contains("c1_masks.iter().copied()"));
+        assert!(!prover.contains("c2_masks.iter().copied()"));
+        assert!(prover.contains(".zip(c1_masks.iter())"));
+        assert!(prover.contains(".zip(c2_masks.iter())"));
+        assert!(!prover.contains("then(|| c1_masks[root_commitment_index])"));
+        assert!(!prover.contains("then(|| c2_masks[root_commitment_index])"));
+        assert!(prover.contains("then(|| &c1_masks[root_commitment_index])"));
+        assert!(prover.contains("then(|| &c2_masks[root_commitment_index])"));
+        let secret_push = between(
+            prover,
+            "fn push_secret_scalar_v1<F: ProofScalar>",
+            "fn ct_slice_contains_by",
+        );
+        let take = secret_push
+            .find("ProverSecretScalarV1::take(&mut value)")
+            .expect("incoming scalar take");
+        let capacity = secret_push
+            .find("require_preallocated_push")
+            .expect("capacity check");
+        let push = secret_push
+            .find("values.push(value.expose_copy())")
+            .expect("retained copy");
+        let drop = secret_push.find("drop(value)").expect("owner drop");
+        assert!(take < capacity && capacity < push && push < drop);
+        assert!(!prover.contains("c1_branch_masks.push("));
+        assert!(!prover.contains("c2_branch_masks.push("));
+        assert!(!prover.contains("c1_masks.push("));
+        assert!(!prover.contains("c2_masks.push("));
+        assert_eq!(prover.matches("push_secret_scalar_v1(&mut").count(), 6);
+        assert!(!prover.contains("-blind.scalar"));
+        assert_eq!(prover.matches("blind.scalar.neg_ref()").count(), 2);
+        let root_nonce = between(
+            prover,
+            "let (root_blind_commitment, root_nonce_c1, root_nonce_c2)",
+            "let public_inputs =",
+        );
+        assert_eq!(
+            root_nonce
+                .matches("let mut nonce = random_proof_scalar")
+                .count(),
+            2
+        );
+        assert_eq!(
+            root_nonce
+                .matches("ProverSecretScalarV1::take(&mut nonce)")
+                .count(),
+            2
+        );
+        assert!(root_nonce.contains("root_nonce_commitment_v1::<SeleneSuite>(nonce.expose_ref())"));
+        assert!(root_nonce.contains("root_nonce_commitment_v1::<HeliosSuite>(nonce.expose_ref())"));
+        assert_eq!(root_nonce.matches("Some(nonce)").count(), 2);
+        assert!(!root_nonce.contains("let nonce = random_proof_scalar"));
+        assert!(!root_nonce.contains(".h.scale(nonce)"));
+        let root_commitment = between(
+            prover,
+            "fn root_nonce_commitment_v1<S: ProofSuite>",
+            "struct PreparedEdBlind",
+        );
+        assert!(root_commitment.contains("SecretMultiexpBuilder::<S>::new(1)"));
+        assert!(root_commitment.contains("terms.push(nonce, &S::generators().h)"));
+        assert!(root_commitment.contains("terms.evaluate().map_err(Into::into)"));
+        let prepared_point = between(
+            prover,
+            "fn prepared_secret_point_v1<S: ProofSuite>",
+            "struct PreparedEdBlind",
+        );
+        assert!(prepared_point.contains("SecretMultiexpBuilder::<S>::new(1)"));
+        assert!(prepared_point.contains("terms.push(scalar, &S::generators().h)"));
+        assert!(prepared_point.contains("let mut point = terms.evaluate()?"));
+        assert!(prepared_point.contains("ProverSecretPointV1::take(&mut point)"));
+        for (start, end) in [
+            ("fn prepare_selene_blind(", "struct PreparedHeliosBlind"),
+            ("fn prepare_helios_blind(", "fn commitment_index"),
+        ] {
+            let blind = between(prover, start, end);
+            let transfer = blind
+                .find("ProverSecretScalarV1::take(&mut scalar)")
+                .expect("scalar transfer");
+            let decomposition = blind
+                .find("scalar_decomposition(scalar.expose_ref()")
+                .expect("borrowed decomposition");
+            let point = blind
+                .find("prepared_secret_point_v1::<")
+                .expect("owned point");
+            let divisor = blind
+                .find("point.expose_ref()")
+                .expect("borrowed divisor point");
+            assert!(transfer < decomposition && decomposition < point && point < divisor);
+            assert!(!blind.contains(".scale(scalar)"));
+            assert!(!blind.contains("let point = generator.scale"));
+            assert!(blind.contains("scalar: scalar.expose_copy()"));
+            assert!(blind.contains("point: point.expose_copy()"));
+            assert!(blind.contains("decomposition: core::mem::take(&mut *decomposition)"));
+        }
+        let divisor_source = include_str!("divisor.rs");
+        let cycle_decomposition = between(
+            divisor_source,
+            "pub(super) fn scalar_decomposition<F: ProofScalar>",
+            "pub(super) fn ed25519_scalar_decomposition",
+        );
+        assert!(cycle_decomposition.contains("Result<Zeroizing<Vec<u64>>"));
+        assert!(cycle_decomposition.contains("let scalar_bytes = Zeroizing::new"));
+        assert!(cycle_decomposition.contains("scalar_decomposition_encoded(&scalar_bytes"));
+        assert!(cycle_decomposition.contains("SecretDecompositionScalarV1(F::ZERO)"));
+        assert!(cycle_decomposition.contains("for coefficient in decomposition.iter()"));
+        let ed_decomposition = between(
+            divisor_source,
+            "pub(super) fn ed25519_scalar_decomposition",
+            "fn scalar_decomposition_encoded(",
+        );
+        assert!(ed_decomposition.contains("for coefficient in decomposition.iter()"));
+        let encoded_decomposition = between(
+            divisor_source,
+            "fn scalar_decomposition_encoded(",
+            "pub(super) trait DivisorPoint",
+        );
+        assert!(encoded_decomposition.contains("scalar: &[u8; 32]"));
+        assert!(encoded_decomposition.contains("let mut decomposition = Zeroizing::new("));
+        assert!(encoded_decomposition.contains("let mut low_bytes = Zeroizing::new([0_u8; 8])"));
+        assert!(encoded_decomposition.contains("let mut sum = Zeroizing::new("));
+        let ed_blind = between(prover, "fn prepare_ed_blind(", "struct PreparedSeleneBlind");
+        let scalar_owner = ed_blind
+            .find("let scalar = Zeroizing::new(if negate")
+            .expect("signed scalar owner");
+        let decomposition = ed_blind
+            .find("ed25519_scalar_decomposition(&scalar)")
+            .expect("borrowed Ed decomposition");
+        let point_owner = ed_blind
+            .find("let point = Zeroizing::new(&generator * &*scalar)")
+            .expect("borrowed Ed multiplication");
+        let encoded_owner = ed_blind
+            .find("let encoded_point = Zeroizing::new")
+            .expect("encoded point owner");
+        let coordinate_owner = ed_blind
+            .find("let coordinates = Zeroizing::new")
+            .expect("coordinate owner");
+        let divisor = ed_blind
+            .find("scalar_mul_divisor")
+            .expect("borrowed divisor");
+        assert!(
+            scalar_owner < decomposition
+                && decomposition < point_owner
+                && point_owner < encoded_owner
+                && encoded_owner < coordinate_owner
+                && coordinate_owner < divisor
+        );
+        assert!(ed_blind.contains("scalar: &Scalar"));
+        assert!(ed_blind.contains("decomposition: core::mem::take(&mut *decomposition)"));
+        assert!(ed_blind.contains("coordinates: *coordinates"));
+        assert!(!ed_blind.contains("generator * scalar"));
+        assert!(ed_blind.contains("secret_edwards_to_wei25519_v1(&encoded_point)"));
+        assert!(!ed_blind.contains("edwards_to_wei25519(*encoded_point)"));
+        let secret_coordinates = between(
+            field,
+            "pub(super) fn secret_edwards_to_wei25519_v1",
+            "pub(super) fn monero_varint",
+        );
+        assert!(secret_coordinates.contains("bytes: &[u8; 32]"));
+        assert!(secret_coordinates.contains("SecretCopyValueV1::new(CompressedEdwardsY(*bytes))"));
+        assert!(secret_coordinates.contains("let point = SecretCopyValueV1::new("));
+        assert!(secret_coordinates.contains("let mut y_bytes = SecretCopyValueV1::new(*bytes)"));
+        assert!(secret_coordinates.contains("secret_decode_field25519_v1(y_bytes.as_ref())"));
+        assert!(secret_coordinates.contains("secret_invert_field25519_v1"));
+        assert!(secret_coordinates.contains("secret_sqrt_field25519_v1"));
+        assert!(secret_coordinates.contains("Ok((wei_x.expose_copy(), wei_y.expose_copy()))"));
+        assert_eq!(secret_coordinates.matches("expose_copy()").count(), 2);
+        assert!(!secret_coordinates.contains("field25519_is_odd(x.expose_copy())"));
+        assert!(!secret_coordinates.contains("y_squared.expose_copy()"));
+        assert!(!secret_coordinates.contains("y_plus_one.expose_copy()"));
+        assert!(!secret_coordinates.contains("one_minus_y.expose_copy()"));
+        let secret_sqrt = between(
+            field,
+            "fn secret_sqrt_field25519_v1",
+            "pub(super) fn secret_edwards_to_wei25519_v1",
+        );
+        assert!(!secret_sqrt.contains("expose_copy()"));
+        assert!(secret_sqrt.contains("first.as_ref().square().eq_ref(value)"));
+        assert!(secret_sqrt.contains("first.as_ref()"));
+        assert!(secret_sqrt.contains(".mul_ref(&Field25519::new"));
+        let secret_invert = between(
+            field,
+            "fn secret_invert_field25519_v1",
+            "fn secret_sqrt_field25519_v1",
+        );
+        let invert = secret_invert
+            .find("value.invert()")
+            .expect("field inversion");
+        let take = secret_invert
+            .find("SecretCopyValueV1::take(&mut inverse)")
+            .expect("inverse take");
+        let branch = secret_invert
+            .find("then_some(inverse)")
+            .expect("option branch");
+        assert!(invert < take && take < branch);
+        let input_blinds = between(
+            prover,
+            "let mut prepared_inputs = Vec::with_capacity(inputs.len())",
+            "let sal = prove_fcmp_sal_with_checked_rng_v1",
+        );
+        assert!(input_blinds.contains("let rerandomization = &input.rerandomization"));
+        for raw in ["let r_o =", "let r_i =", "let r_r_i =", "let r_c ="] {
+            assert!(!input_blinds.contains(raw));
+        }
+        assert_eq!(input_blinds.matches("prepare_ed_blind(").count(), 5);
+        assert!(input_blinds.contains("let sal_y = Zeroizing::new("));
+        assert!(input_blinds.contains("sal_y.to_bytes()"));
+        assert!(input_blinds.contains("rerandomization.linking.to_bytes()"));
+        assert!(input_blinds.contains("rerandomization.rerandomization_blind.to_bytes()"));
+        let owner = between(
+            prover,
+            "impl<F: ProofScalar> ProverSecretScalarV1<F>",
+            "impl<F: ProofScalar> Drop for ProverSecretScalarV1<F>",
+        );
+        assert!(owner.contains("fn add_product_assign(&mut self, left: &F, right: &F)"));
+        assert!(owner.contains("self.0 += *left * *right;"));
+        let response = between(
+            prover,
+            "let root_blind_response = match root.curve()",
+            "let mut c1_circuit =",
+        );
+        assert_eq!(response.matches(".as_mut()").count(), 2);
+        assert_eq!(
+            response
+                .matches("nonce.add_product_assign(&challenge, mask)")
+                .count(),
+            2
+        );
+        assert_eq!(response.matches("nonce.expose_copy().encode()").count(), 2);
+        assert!(!response.contains(".as_ref()"));
+        assert!(!response.contains("challenge * *root_mask"));
+
+        let field = include_str!("field.rs");
+        let mul_ref = between(
+            field,
+            "pub(super) fn mul_ref(&self, rhs: &Self)",
+            "pub(super) const fn pow",
+        );
+        assert!(mul_ref.contains("Self(self.0 * rhs.0)"));
+        assert!(field.contains("pub(super) fn add_ref(&self, rhs: &Self)"));
+        assert!(field.contains("pub(super) fn sub_ref(&self, rhs: &Self)"));
+        assert!(field.contains("pub(super) fn neg_ref(&self)"));
+        assert!(field.contains("pub(super) fn is_odd_ref(&self)"));
+        assert!(field.contains("pub(super) fn eq_ref(&self, rhs: &Self)"));
+        let coordinates = between(
+            field,
+            "pub(super) fn secret_coordinates_v1(mut self)",
+            "pub(super) fn x(self)",
+        );
+        let point_guard = coordinates
+            .find("BorrowedZeroizingCopySlot(&mut self)")
+            .unwrap();
+        let invert = coordinates.find("point.as_ref().z.invert()").unwrap();
+        let inverse_guard = coordinates
+            .find("BorrowedZeroizingCopySlot(&mut inverse)")
+            .unwrap();
+        let branch = coordinates.find("if !bool::from(is_some)").unwrap();
+        assert!(point_guard < invert && invert < inverse_guard && inverse_guard < branch);
+        assert!(coordinates.contains("point.as_ref().x.mul_ref(inverse.as_ref())"));
+        assert!(coordinates.contains("point.as_ref().y.mul_ref(inverse.as_ref())"));
+        assert!(coordinates.contains("drop(inverse);\n                drop(point);"));
+
+        let membership = include_str!("membership.rs");
+        assert!(membership.contains("Option<&'c1 Field25519>"));
+        assert!(membership.contains("Option<&'c2 HelioseleneField>"));
+        assert!(membership.contains("None::<&Field25519>"));
+        assert!(membership.contains("None::<&HelioseleneField>"));
+        assert!(!membership.contains(".h.scale(*mask)"));
+        assert!(!membership.contains("prior_commitment - borrowed_secret_scale_v1"));
+        assert!(membership.contains("secret_unblind_helios_coordinates_v1"));
+        assert!(membership.contains("secret_unblind_selene_coordinates_v1"));
+        assert!(membership.contains(".secret_coordinates_v1()"));
+        assert!(!membership.contains("let hash_witness ="));
+        assert!(membership.contains("let (hash_x, hash_y, _) = match prior_mask"));
+
+        let helios = between(
+            membership,
+            "fn secret_unblind_helios_coordinates_v1",
+            "fn secret_unblind_selene_coordinates_v1",
+        );
+        assert!(helios.contains("SecretMultiexpBuilder::<HeliosSuite>::new(2)"));
+        assert!(helios.contains("terms.push(&HelioseleneField::ONE, prior_commitment)?"));
+        assert!(helios.contains("terms.push(mask, &negative_h)?"));
+        assert!(helios.contains(".evaluate()?\n        .secret_coordinates_v1()"));
+        let selene = between(
+            membership,
+            "fn secret_unblind_selene_coordinates_v1",
+            "const ED25519_WEI_A",
+        );
+        assert!(selene.contains("SecretMultiexpBuilder::<SeleneSuite>::new(2)"));
+        assert!(selene.contains("terms.push(&Field25519::ONE, prior_commitment)?"));
+        assert!(selene.contains("terms.push(mask, &negative_h)?"));
+        assert!(selene.contains(".evaluate()?\n        .secret_coordinates_v1()"));
+
+        let c1_branch = between(
+            membership,
+            "for branch in these_c1_branches",
+            "for branch in these_c2_branches",
+        );
+        assert!(c1_branch.contains("Some(secret_unblind_helios_coordinates_v1("));
+        assert!(c1_branch.contains(")?),\n            )?"));
+        let c2_branch = between(
+            membership,
+            "for branch in these_c2_branches",
+            "fn verify_membership",
+        );
+        assert!(c2_branch.contains("Some(secret_unblind_selene_coordinates_v1("));
+        assert!(c2_branch.contains(")?),\n            )?"));
+    }
 
     #[derive(Default)]
     struct ZeroRng {
@@ -1699,6 +2361,37 @@ mod tests {
     }
 
     impl CryptoRng for ZeroRng {}
+
+    #[derive(Default)]
+    struct ZeroThenOneRng {
+        calls: usize,
+    }
+
+    impl RngCore for ZeroThenOneRng {
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            self.try_fill_bytes(destination)
+                .expect("infallible fixture");
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+            self.calls += 1;
+            destination.fill(0);
+            if self.calls == 2 {
+                destination[0] = 1;
+            }
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for ZeroThenOneRng {}
 
     struct PeriodicRng {
         period: usize,
@@ -2085,6 +2778,39 @@ mod tests {
         ));
         assert_eq!(rng.calls, MAX_PROVER_SCALAR_ATTEMPTS_V1);
         assert_eq!(MAX_PROVER_SCALAR_ATTEMPTS_V1, 128);
+    }
+
+    #[test]
+    fn sampled_scalar_slots_are_owned_before_rejection_or_return() {
+        let mut rng = ZeroThenOneRng::default();
+        assert_eq!(
+            random_proof_scalar::<Field25519>(&mut rng).expect("second candidate is one"),
+            Field25519::ONE
+        );
+        assert_eq!(rng.calls, 2);
+
+        let source = include_str!("prover.rs");
+        let random = source
+            .split_once("fn random_proof_scalar<F: ProofScalar>")
+            .expect("random scalar function")
+            .1
+            .split_once("struct PreparedEdBlind")
+            .expect("random scalar boundary")
+            .0;
+        let candidate = random
+            .find("if let Some(mut scalar)")
+            .expect("mutable candidate");
+        let transfer = random
+            .find("ProverSecretScalarV1::take(&mut scalar)")
+            .expect("candidate transfer");
+        let zero_check = random
+            .find("if !scalar.expose_copy().is_zero()")
+            .expect("owned zero check");
+        let returned = random
+            .find("return Ok(scalar.expose_copy())")
+            .expect("intentional output copy");
+        assert!(candidate < transfer && transfer < zero_check && zero_check < returned);
+        assert!(!random.contains("return Ok(scalar);"));
     }
 
     #[test]

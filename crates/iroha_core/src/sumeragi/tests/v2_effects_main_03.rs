@@ -89,6 +89,20 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
     assert!(executor.pending_applications.contains_key(&work_id));
     assert!(executor.deferred_merge_work.is_empty());
     assert_eq!(services.deferred_merge_sidecars.len(), deferred_callbacks);
+
+    let pending = executor
+        .pending_applications
+        .get_mut(&work_id)
+        .expect("retained Apply remains available for ordinal corruption");
+    pending.task.certificate = task.certificate.clone();
+    pending.task.lifecycle_ordinal = pending.task.lifecycle_ordinal.saturating_add(1);
+    assert!(matches!(
+        executor.defer_application_for_merge_sidecar(work_id, &reference, &mut services,),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("exact decided-body owner")
+    ));
+    assert!(executor.deferred_merge_work.is_empty());
+    assert_eq!(services.deferred_merge_sidecars.len(), deferred_callbacks);
 }
 
 #[test]

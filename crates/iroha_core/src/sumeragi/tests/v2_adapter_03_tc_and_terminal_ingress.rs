@@ -169,9 +169,11 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
         })
         .expect("durable lock acknowledgement authorizes the local Commit signature");
     assert_eq!(adapter.current_tag().generation(), generation);
-    assert!(adapter.authenticated_ingress_is_progress(
-        &AuthenticatedConsensusMessage::for_test(remote_commit.clone(),)
-    ));
+    assert!(
+        adapter.authenticated_ingress_is_progress(&AuthenticatedConsensusMessage::for_test(
+            remote_commit.clone(),
+        ))
+    );
 
     let readmitted = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(
@@ -669,18 +671,10 @@ fn terminal_ignored_ingress_is_recorded_before_duplicate_coalescing() {
 fn deferred_zero_ordinal_is_exact_single_use_and_never_reminted() {
     let source = DeferredAdmissionOrdinalSource::new(0);
     let tag = reducer::EventTag::new(1, 0, reducer::Generation::new(1));
-    let first = DeferredServiceEvidence::completion_for_test(
-        &source,
-        tag,
-        1,
-        DeferredPriority::Completion,
-    );
-    let second = DeferredServiceEvidence::completion_for_test(
-        &source,
-        tag,
-        1,
-        DeferredPriority::Completion,
-    );
+    let first =
+        DeferredServiceEvidence::completion_for_test(&source, tag, 1, DeferredPriority::Completion);
+    let second =
+        DeferredServiceEvidence::completion_for_test(&source, tag, 1, DeferredPriority::Completion);
 
     assert_eq!(first.admission_ordinal, 0);
     assert_eq!(second.admission_ordinal, 1);
@@ -1023,10 +1017,8 @@ fn deferred_authenticated_retry_retains_exact_original_and_effective_tags() {
         unreachable!("proposal fixture")
     };
     let authenticated_wire_identity = Arc::<[u8]>::from(
-        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
-            proposal.clone(),
-        ))
-        .encode(),
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal.clone()))
+            .encode(),
     );
     let proposal = adapter
         .registry
@@ -1897,11 +1889,8 @@ fn deferred_progress_capacity_matches_partition_geometry() {
     for roster_len in [0, 1, 4, wire::MAX_VALIDATORS_PER_HEIGHT] {
         assert_eq!(
             serviced_candidate_capacity(roster_len),
-            candidate_lifecycle_capacity(
-                roster_len,
-                DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY,
-            )
-            .saturating_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE),
+            candidate_lifecycle_capacity(roster_len, DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY,)
+                .saturating_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE),
             "the bound is the complete reviewed lifecycle geometry times the exact stage \
              carrier for roster size {roster_len}"
         );
@@ -1948,9 +1937,8 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
             signer,
             signature: vec![marker],
         };
-        let vote_wire_identity = authenticated_wire_identity(
-            wire::ConsensusMessageV2Payload::Vote(wire_vote.clone()),
-        );
+        let vote_wire_identity =
+            authenticated_wire_identity(wire::ConsensusMessageV2Payload::Vote(wire_vote.clone()));
         let vote = adapter
             .registry
             .vote_to_core(&wire_vote, &adapter.wire_context)
@@ -1961,11 +1949,7 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
                 phase: wire::GlobalPhase::Commit,
                 signer,
             },
-            fingerprint: IngressFingerprint::Vote(
-                wire_round,
-                locked_subject,
-                locked_commitment,
-            ),
+            fingerprint: IngressFingerprint::Vote(wire_round, locked_subject, locked_commitment),
             generation: tag.generation(),
             inserted_equivocation: false,
             locked_commit_progress: true,

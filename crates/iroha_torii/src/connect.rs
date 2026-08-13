@@ -1099,7 +1099,16 @@ impl Bus {
                             return;
                         };
                         let account = match AccountId::parse_encoded(&account_id) {
-                            Ok(parsed) => parsed.into_account_id(),
+                            Ok(parsed) if parsed.canonical() == account_id => {
+                                parsed.into_account_id()
+                            }
+                            Ok(_) => {
+                                drop(approved);
+                                warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval with noncanonical account id");
+                                self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                                    .await;
+                                return;
+                            }
                             Err(error) => {
                                 drop(approved);
                                 warn!(sid = ?hex::encode(frame.sid), ?error, "connect: rejecting approval with malformed account id");
@@ -3409,6 +3418,87 @@ mod tests {
         let closed = timeout(Duration::from_millis(50), app_inbox.recv())
             .await
             .expect("app receives invalid-approval close")
+            .expect("close frame");
+        assert!(matches!(
+            closed.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Close { ref reason, .. })
+                if reason == CLOSE_REASON_APPROVAL_INVALID
+        ));
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+    }
+
+    #[tokio::test]
+    async fn noncanonical_wallet_account_id_is_rejected_before_app_delivery() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0xA2);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register noncanonical-account fixture session");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let constraints = proto::Constraints {
+            network_id: test_network_id(),
+        };
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
+                app_pk,
+                app_meta: None,
+                constraints: constraints.clone(),
+                permissions: None,
+            }),
+        })
+        .await;
+        wallet_inbox.recv().await.expect("wallet receives Open");
+
+        let key_pair = KeyPair::try_from_seed(vec![0xA3; 32], Algorithm::Ed25519)
+            .expect("noncanonical-account fixture keypair");
+        let wallet_pk = [0xA4; 32];
+        let canonical = AccountId::new(key_pair.public_key().clone()).to_string();
+        let account_id = format!(" {canonical}\t");
+        let relay_auth = connect_sdk::relay_auth_hash(&sid, "relay-token");
+        let preimage = connect_sdk::build_approve_preimage(
+            &constraints,
+            &sid,
+            &app_pk,
+            &wallet_pk,
+            &account_id,
+            None,
+            None,
+            &relay_auth,
+        );
+        let sig_wallet = proto::WalletSignatureV1::new(
+            Algorithm::Ed25519,
+            Signature::try_new(key_pair.private_key(), &preimage)
+                .expect("sign noncanonical account spelling exactly"),
+        );
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Approve {
+                wallet_pk,
+                account_id,
+                permissions: None,
+                proof: None,
+                sig_wallet,
+            }),
+        })
+        .await;
+
+        let closed = timeout(Duration::from_millis(50), app_inbox.recv())
+            .await
+            .expect("app receives noncanonical-account rejection close")
             .expect("close frame");
         assert!(matches!(
             closed.kind,

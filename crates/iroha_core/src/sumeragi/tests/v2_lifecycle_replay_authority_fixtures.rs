@@ -10,6 +10,7 @@
     use iroha_data_model::peer::PeerId;
     use tempfile::TempDir;
 
+    use super::super::schema::DurableContinuationEdge;
     use super::*;
     use crate::sumeragi::{
         v2::AdapterEquivocationEvidence,
@@ -73,9 +74,9 @@
             let subject_marker = seed.wrapping_add(0x31);
             let subject = self::subject(subject_marker);
             let conflicting_subject = self::subject(subject_marker.wrapping_add(1));
-            let proposal_manifest = manifest(round, subject, subject_marker);
+            let proposal_manifest = self::manifest(round, subject, subject_marker);
             let conflicting_manifest =
-                manifest(round, conflicting_subject, subject_marker.wrapping_add(1));
+                self::manifest(round, conflicting_subject, subject_marker.wrapping_add(1));
             let proposal = wire::Proposal {
                 round,
                 proposer: 0,
@@ -270,7 +271,9 @@
                         tag: self.tag,
                         origin: BodyPipelineOriginV1::Certified {
                             certificate: self.prepare_qc.clone(),
-                            manifest: Some(self.proposal.manifest.clone()),
+                            manifest: self.proposal.manifest.clone(),
+                            fetch_manifest_present: true,
+                            certified_sources: Vec::new(),
                         },
                     }),
                     LifecycleStageKind::FetchBody,
@@ -281,7 +284,9 @@
                         tag: self.tag,
                         origin: BodyPipelineOriginV1::Certified {
                             certificate: self.prepare_qc.clone(),
-                            manifest: Some(self.proposal.manifest.clone()),
+                            manifest: self.proposal.manifest.clone(),
+                            fetch_manifest_present: true,
+                            certified_sources: Vec::new(),
                         },
                     }),
                     LifecycleStageKind::StoreBody,
@@ -292,7 +297,9 @@
                         tag: self.tag,
                         origin: BodyPipelineOriginV1::Certified {
                             certificate: self.prepare_qc.clone(),
-                            manifest: Some(self.proposal.manifest.clone()),
+                            manifest: self.proposal.manifest.clone(),
+                            fetch_manifest_present: true,
+                            certified_sources: Vec::new(),
                         },
                     }),
                     LifecycleStageKind::ValidateBody,
@@ -430,6 +437,22 @@
             .expect("the canonical V1 fixture covers every lifecycle stage")
     }
 
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_replay_authority_for_payload_fixture(
+        context: LifecycleContext,
+        stage: LifecycleStageKind,
+        seed: u8,
+        payload: DurablePayloadReference,
+    ) -> LifecycleReplayAuthorityV1 {
+        let case = exact_record_fixture(context, stage, seed);
+        canonical_replay_authority(
+            context,
+            case.authority.source.clone(),
+            stage,
+            ReplayPayloadBindingV1::from_payload(payload),
+        )
+        .unwrap_or(case.authority)
+    }
+
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_body_record_fixture(
         context: LifecycleContext,
         stage: LifecycleStageKind,
@@ -445,23 +468,143 @@
         (case, receipt)
     }
 
-    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_certified_fetch_record_fixture(
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_recovered_decision_terminal_family_fixture(
+        context: LifecycleContext,
+        certified_sources: Vec<PeerId>,
+        seed: u8,
+    ) -> (
+        [ReplayCase; 4],
+        wire::BlockSubject,
+        wire::QuorumCertificate,
+    ) {
+        let fixture = Fixture::for_record(context, seed);
+        let locator = RecoveredWalFrameIdentity::for_test(
+            80_u64 + u64::from(seed),
+            81_u64 + u64::from(seed),
+            [seed.wrapping_add(0x51); 32],
+        )
+        .persisted_locator();
+        let fetch = replay_case(
+            context,
+            LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+                locator,
+                role: ReplayWalRoleV1::DECISION,
+                tag: fixture.tag,
+                action: WalReplayActionV1::FetchDecision {
+                    certificate: fixture.commit_qc.clone(),
+                    certified_sources,
+                },
+            }),
+            LifecycleStageKind::FetchBody,
+            DurablePayloadReference::None,
+        );
+        let body_source = LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+            tag: fixture.tag,
+            origin: BodyPipelineOriginV1::RecoveredDecision {
+                locator,
+                certificate: fixture.commit_qc.clone(),
+                manifest: fixture.proposal.manifest.clone(),
+            },
+        });
+        let store = replay_case(
+            context,
+            body_source.clone(),
+            LifecycleStageKind::StoreBody,
+            fixture.body_payload,
+        );
+        let validate = replay_case(
+            context,
+            body_source,
+            LifecycleStageKind::ValidateBody,
+            fixture.body_payload,
+        );
+        let certificate = fixture.commit_qc;
+        let subject = certificate.subject;
+        let apply = replay_case(
+            context,
+            LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+                locator,
+                role: ReplayWalRoleV1::DECISION,
+                tag: fixture.tag,
+                action: WalReplayActionV1::ApplyDecision(certificate.clone()),
+            }),
+            LifecycleStageKind::ApplyDecision,
+            fixture.body_payload,
+        );
+        ([fetch, store, validate, apply], subject, certificate)
+    }
+
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn durable_certified_fetch_projection_fixture(
+        context: LifecycleContext,
+        causal_root: CausalRoot,
+        seed: u8,
+    ) -> DurableCertifiedFetchReplayProjectionV1 {
+        let fixture = Fixture::for_record(context, seed);
+        let coordinates = CertifiedBodyPipelineCoordinatesV1 {
+            tag: fixture.tag,
+            certificate: fixture.prepare_qc,
+            manifest: fixture.proposal.manifest,
+            fetch_manifest_present: true,
+            certified_sources: Vec::new(),
+        };
+        let family = exact_certified_body_pipeline_family(&coordinates, &fixture.body_receipt)
+            .expect("canonical fixture binds one body-fsynced Certified Fetch family");
+        let effect = exact_certified_fetch_effect(&family)
+            .expect("canonical fixture reconstructs one exact Fetch effect");
+        let payload = DurablePayloadReference::BodyFrame(
+            durable_body_frame_reference(context, &fixture.body_receipt)
+                .expect("canonical fixture body belongs to its lifecycle context"),
+        );
+        let authority = canonical_replay_authority(
+            context,
+            LifecycleReplaySourceV1::BodyPipeline(family.source),
+            LifecycleStageKind::FetchBody,
+            ReplayPayloadBindingV1::from_payload(payload),
+        )
+        .expect("canonical fixture projects one frame-bound Fetch authority");
+        let causal_key = Hash::prehashed(*causal_root.digest().as_bytes());
+        let effect_identity =
+            crate::sumeragi::v2_runtime::adapter_effect_identity_for_test(&effect);
+        let completion_digest = canonical_durable_certified_fetch_completion_digest(
+            causal_key,
+            effect_identity,
+            &authority,
+        );
+        DurableCertifiedFetchReplayProjectionV1 {
+            payload,
+            authority,
+            causal_key,
+            effect_identity,
+            completion_digest,
+            expected_manifest_hash: fixture.body_receipt.manifest_hash(),
+        }
+    }
+
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_durable_certified_fetch_record_fixture(
         context: LifecycleContext,
         tag: EventTag,
         certificate: wire::QuorumCertificate,
         manifest: wire::PayloadManifest,
+        certified_sources: Vec<PeerId>,
+        receipt: &DurableBodyReceipt,
     ) -> ReplayCase {
+        let payload = DurablePayloadReference::BodyFrame(
+            durable_body_frame_reference(context, receipt)
+                .expect("durable Certified Fetch fixture body belongs to its context"),
+        );
         replay_case(
             context,
             LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
                 tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
                 origin: BodyPipelineOriginV1::Certified {
                     certificate,
-                    manifest: Some(manifest),
+                    manifest,
+                    fetch_manifest_present: true,
+                    certified_sources,
                 },
             }),
             LifecycleStageKind::FetchBody,
-            DurablePayloadReference::None,
+            payload,
         )
     }
 
@@ -551,14 +694,7 @@
                 roster,
                 nexus_amx_context_hash: Hash::new(b"Certified-Serve replay AMX context"),
                 execution_policy_hash: Hash::new(b"Certified-Serve replay execution policy"),
-                da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 8,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 16,
-                    max_chunk_count: 4,
-                },
+                da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
                 leader_seed: [0xA7; 32],
             };
             context
@@ -680,14 +816,7 @@
                 roster,
                 nexus_amx_context_hash: Hash::new(b"recovered Serve replay AMX context"),
                 execution_policy_hash: Hash::new(b"recovered Serve replay execution policy"),
-                da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1_048_576,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 1_048_576,
-                    max_chunk_count: 2,
-                },
+                da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
                 leader_seed: [0xB7; 32],
             };
             let verified = VerifiedHeightContext::genesis(context, proofs)

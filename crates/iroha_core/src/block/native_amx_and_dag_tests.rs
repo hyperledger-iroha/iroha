@@ -22,7 +22,14 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     );
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        world,
+        kura,
+        query_handle,
+        chain_id.clone(),
+        native_amx_test_network_id(),
+    )
+    .expect("native AMX test state accepts its explicit network id");
     {
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;

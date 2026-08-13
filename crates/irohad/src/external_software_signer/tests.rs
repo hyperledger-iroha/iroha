@@ -1,9 +1,10 @@
 use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 
-use iroha_crypto::Signature;
+use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
+    block::BlockHeader,
     isi::{
         InstructionBox,
         sorafs::{MatchSorafsOrderbook, SubmitSorafsRepairTask},
@@ -27,6 +28,12 @@ use super::{
 };
 
 const WRAPPING_KEY: [u8; 32] = [0xA5; 32];
+
+fn test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0x53; Hash::LENGTH]),
+    ))
+}
 
 fn wrapping_key() -> SoftwareSignerWrappingKeyV1 {
     SoftwareSignerWrappingKeyV1::try_from_bytes(WRAPPING_KEY).expect("valid wrapping key")
@@ -232,7 +239,7 @@ fn assert_typed_signs(
 fn native_payload(service: &SoftwareSignerServiceV1) -> (Vec<u8>, [u8; 32]) {
     let binding = service.public_binding().expect("fixture binding");
     let builder = TransactionBuilder::new(
-        ChainId::from("sorafs-production"),
+        test_network_id(),
         AccountId::new(binding.public_key),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -568,7 +575,7 @@ fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
     );
     let authority = AccountId::new(service.public_binding().expect("binding").public_key);
     let wrong_role = TransactionBuilder::new(
-        ChainId::from("sorafs-production"),
+        test_network_id(),
         authority.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -585,7 +592,7 @@ fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
     );
 
     let empty = TransactionBuilder::new(
-        ChainId::from("sorafs-production"),
+        test_network_id(),
         authority,
         FeePaymentIntent::authority(Vec::new(), None),
     )

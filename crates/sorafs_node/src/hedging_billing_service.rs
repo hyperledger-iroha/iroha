@@ -6981,11 +6981,13 @@ fn event_replay_digest(
     network_id: NetworkId,
     event: &HedgingBillingFinalizedEventV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
-    let preimage = BillingEventReplayPreimageV1 {
-        network_id,
-        event: event.clone(),
-    };
-    hash_canonical(EVENT_REPLAY_RECEIPT_DOMAIN_V1, &preimage)
+    hash_canonical(
+        EVENT_REPLAY_RECEIPT_DOMAIN_V1,
+        &BillingEventReplayPreimageV1 {
+            network_id,
+            event: event.clone(),
+        },
+    )
 }
 fn signed_statement_digest(
     signed: &SignedGovernedBillingStatementV1,
@@ -9816,6 +9818,29 @@ mod tests {
             Err(HedgingBillingServiceError::FinalizedEventEquivocation)
         ));
     }
+    #[test]
+    fn event_replay_digest_binds_network_and_exact_event() {
+        let first_network = test_network_id(b"billing-network-a");
+        let second_network = test_network_id(b"billing-network-b");
+        let first_event = event(1, "storage:event:1", "10");
+        let mut changed_event = first_event.clone();
+        changed_event.quantity_units = 2;
+
+        let first_digest = event_replay_digest(first_network, &first_event).expect("digest");
+        eprintln!(
+            "billing replay compatibility digest: {}",
+            hex::encode(first_digest)
+        );
+        assert_ne!(
+            first_digest,
+            event_replay_digest(second_network, &first_event).expect("network-bound digest")
+        );
+        assert_ne!(
+            first_digest,
+            event_replay_digest(first_network, &changed_event).expect("event-bound digest")
+        );
+    }
+
     #[test]
     fn invalid_hsm_output_is_not_persisted_or_published() {
         let root = tempfile::tempdir().expect("state root");

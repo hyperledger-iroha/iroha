@@ -2259,7 +2259,7 @@ fn io_queue_validation_identity_is_only_work_id_and_durable_receipt() {
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
     assert!(matches!(
         command_tx.try_send(V2IoCommand::Validate(conflicting)),
-        Err(V2IoTrySendError::ConflictingWorkId { work_id })
+        Err(V2IoTrySendError::ConflictingWorkId { work_id, .. })
             if work_id == EffectWorkId::for_test(8)
     ));
 
@@ -2329,7 +2329,7 @@ fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
     assert!(matches!(
         command_tx.try_send(V2IoCommand::Apply(conflicting)),
-        Err(V2IoTrySendError::ConflictingWorkId { work_id })
+        Err(V2IoTrySendError::ConflictingWorkId { work_id, .. })
             if work_id == EffectWorkId::for_test(7)
     ));
 

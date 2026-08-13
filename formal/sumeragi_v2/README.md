@@ -13,6 +13,16 @@ The production protocol admits only unit-vote committees with exact
 validators with quorum `q = 2f + 1`. Stake may affect election or eligibility;
 it never weights a consensus or timeout vote.
 
+The production source guard also binds the durable adapter seam to one opened
+post-open safety-WAL directory owner. WAL append and the serviced-candidate and
+leader-wire sibling snapshots use descriptor-relative, bounded operations;
+the two sibling authorities are distinct and one-shot, and raw-path store
+constructors remain test-only. This is a source-refinement contract, not a
+formal filesystem proof. It does not yet authenticate pre-open ancestry back
+to an opened Kura root, which remains a runner-cutover obligation. Non-Unix
+basic WAL I/O keeps its legacy path implementation, while adjacent-store
+authority minting fails closed until a handle-relative implementation exists.
+
 Revision 4 deterministically rotates a height-seeded roster permutation. Set A
 contains the first `q` members, with the leader first and proxy tail last; Set B
 contains the remaining `f`. The leader sends the proposal manifest
@@ -1540,7 +1550,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa`.
+`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal

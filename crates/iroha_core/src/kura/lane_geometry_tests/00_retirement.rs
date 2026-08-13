@@ -1725,7 +1725,9 @@ fn install_merge_applied_retirement_work(
                 proof_of_possession: proof_of_possession.clone(),
             })
             .collect(),
-        autonomous_network_id: test_network_id(b"geometry-durability-merge-genesis"),
+        autonomous_network_id: crate::sumeragi::synthetic_network_id(
+            "geometry-durability-merge-genesis",
+        ),
         autonomous_epoch: 1,
         autonomous_payload_hash: Hash::new(b"geometry-durability-merge-payload"),
         entrypoint_hashes: vec![Hash::from(entrypoint_hash)],
