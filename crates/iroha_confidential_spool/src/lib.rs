@@ -50,12 +50,12 @@
 //! slot. The context digest must bind the protocol/version/role and complete
 //! canonical slot-to-application-coordinate mapping; reusing it after a
 //! mapping, order, or interpretation change is a caller error.
-#[cfg(unix)]
-use std::fs::{self, Metadata};
-use std::{fs::File, io, path::Path};
 use aead::{AeadInOut as _, KeyInit as _};
 use chacha20poly1305::XChaCha20Poly1305;
 use rand_core::{OsRng, TryRngCore as _};
+#[cfg(unix)]
+use std::fs::{self, Metadata};
+use std::{fs::File, io, path::Path};
 use zeroize::{Zeroize as _, Zeroizing};
 const AAD_DOMAIN_V1: &[u8] = b"iroha.confidential-spool.aad.v1\0";
 const LAYOUT_DOMAIN_V1: &[u8] = b"iroha.confidential-spool.fixed-layout.v1\0";
@@ -73,11 +73,20 @@ const CONTEXT_DIGEST_BYTES_V1: usize = 32;
 pub const CONFIDENTIAL_SPOOL_MAX_SLOTS_V1: u64 = 466_560;
 /// Maximum supported plaintext bytes in one V1 record (16 KiB).
 pub const CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1: u64 = 16_384;
-/// Maximum supported detached-file bytes in one V1 spool.
+/// Maximum supported detached-file bytes in one general-purpose V1 spool.
 ///
 /// This is the audited 466,560-record Phase23 arena at 8,192 plaintext bytes
 /// plus one 16-byte tag per record.
 pub const CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1: u64 = 3_829_524_480;
+/// Exact slot count in the purpose-specific global-lookup plane-opening spool.
+pub const CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1: u64 = 306_603;
+/// Exact plaintext bytes in each global-lookup plane-opening spool record.
+pub const CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1: u64 = 16_384;
+/// Exact authenticated file bytes in the global-lookup plane-opening spool.
+///
+/// This one audited geometry exceeds the general-purpose file ceiling. It is
+/// available only through its exact purpose-specific layout constructor.
+pub const CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1: u64 = 5_028_289_200;
 /// Width of the semantic coordinate bound to every confidential spool slot.
 pub const CONFIDENTIAL_SPOOL_COORDINATE_BYTES_V1: usize = 32;
 /// Canonical plaintext-record count in the Phase23 RNS-Link secret source.
@@ -131,6 +140,19 @@ const _: () = {
     assert!(
         CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_FILE_BYTES_V1
             <= CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1
+    );
+    assert!(CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
+    assert!(
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1
+            <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1
+            == CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1
+                * (CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1 + TAG_BYTES_V1)
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1
     );
 };
 /// Errors returned by the V1 confidential spool.
@@ -270,6 +292,19 @@ impl ConfidentialSpoolLayoutV1 {
         plaintext_len: u64,
         context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
     ) -> Result<Self, ConfidentialSpoolErrorV1> {
+        Self::new_with_file_ceiling_v1(
+            slot_count,
+            plaintext_len,
+            context_digest,
+            CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1,
+        )
+    }
+    fn new_with_file_ceiling_v1(
+        slot_count: u64,
+        plaintext_len: u64,
+        context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
+        file_ceiling: u64,
+    ) -> Result<Self, ConfidentialSpoolErrorV1> {
         if slot_count == 0 {
             return Err(ConfidentialSpoolErrorV1::EmptyLayout);
         }
@@ -299,7 +334,7 @@ impl ConfidentialSpoolLayoutV1 {
         let file_len = slot_count
             .checked_mul(ciphertext_record_len)
             .ok_or(ConfidentialSpoolErrorV1::GeometryOverflow)?;
-        if file_len > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1 {
+        if file_len > file_ceiling {
             return Err(ConfidentialSpoolErrorV1::LimitExceeded("file length"));
         }
         usize::try_from(slot_count).map_err(|_| ConfidentialSpoolErrorV1::AddressSpaceExceeded)?;
@@ -325,6 +360,23 @@ impl ConfidentialSpoolLayoutV1 {
             aad_len,
             context_digest,
         })
+    }
+    /// Construct the sole approved global-lookup plane-opening layout.
+    ///
+    /// Its exact 306,603-by-16,384-byte geometry is the only V1 exception to
+    /// the general-purpose detached-file ceiling. The caller's nonzero public
+    /// digest must bind the complete plane/value/blinding/commitment mapping;
+    /// this constructor freezes geometry only and mints no replay or release
+    /// authority.
+    pub fn global_lookup_plane_openings_v1(
+        context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
+    ) -> Result<Self, ConfidentialSpoolErrorV1> {
+        Self::new_with_file_ceiling_v1(
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1,
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1,
+            context_digest,
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1,
+        )
     }
     /// Construct the sole approved Phase23 RNS-Link secret-main layout.
     ///
@@ -1201,11 +1253,11 @@ static TEST_ZEROIZED_CHUNK_DROPS_V1: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::atomic::Ordering,
     };
-    use super::*;
     struct ScriptedEntropyV1 {
         key_byte: u8,
         arena_byte: u8,
@@ -1349,6 +1401,36 @@ mod tests {
             secret_main.file_len_v1() + secret_nonce.file_len_v1(),
             CONFIDENTIAL_SPOOL_PHASE23_SECRET_TOTAL_FILE_BYTES_V1
         );
+        let plane_openings = ConfidentialSpoolLayoutV1::global_lookup_plane_openings_v1(
+            context_digest_v1(b"global-lookup-plane-openings-v1"),
+        )
+        .expect("exact purpose-specific plane-opening layout");
+        assert_eq!(
+            plane_openings.slot_count_v1(),
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1
+        );
+        assert_eq!(
+            plane_openings.plaintext_len_v1(),
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1
+        );
+        assert_eq!(plane_openings.ciphertext_record_len_v1(), 16_400);
+        assert_eq!(
+            plane_openings.file_len_v1(),
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1
+        );
+        assert!(plane_openings.file_len_v1() > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
+        assert!(matches!(
+            ConfidentialSpoolLayoutV1::new_v1(
+                CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1,
+                CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1,
+                context_digest_v1(b"general-constructor-must-stay-bounded"),
+            ),
+            Err(ConfidentialSpoolErrorV1::LimitExceeded("file length"))
+        ));
+        assert!(matches!(
+            ConfidentialSpoolLayoutV1::global_lookup_plane_openings_v1([0; 32]),
+            Err(ConfidentialSpoolErrorV1::InertContextDigest)
+        ));
     }
     #[test]
     fn geometry_and_context_rejections_precede_external_effects() {

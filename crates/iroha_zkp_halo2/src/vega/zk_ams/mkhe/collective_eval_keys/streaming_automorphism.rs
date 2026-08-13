@@ -411,6 +411,10 @@ where
     }
     Ok(())
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed streaming axes remain explicit to preserve authenticated read order"
+)]
 fn read_automorphed_constant_v1<P>(
     profile: &BgvProfile,
     exponent: usize,

@@ -1,8 +1,15 @@
 //! Integration-heavy unit cases for the Sumeragi v2 runner.
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    sync::{Mutex, atomic::AtomicUsize},
+use super::super::FairV2IngressPushError;
+use super::*;
+use crate::{
+    NetworkMessage,
+    merge_sidecar::{
+        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+        CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarMessage,
+        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
+        CertifiedMergeSidecarStreamEpochV1,
+    },
+    sumeragi::{LaneRelayMessage, v2_effects::v2_payload_is_terminal_reducer_control},
 };
 use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -19,19 +26,12 @@ use iroha_p2p::network::{
     NetworkActorAdmissionError, NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture,
     NetworkReplyRoutes,
 };
-use tempfile::TempDir;
-use super::super::FairV2IngressPushError;
-use super::*;
-use crate::{
-    NetworkMessage,
-    merge_sidecar::{
-        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
-        CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarMessage,
-        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
-        CertifiedMergeSidecarStreamEpochV1,
-    },
-    sumeragi::LaneRelayMessage,
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    sync::{Mutex, atomic::AtomicUsize},
 };
+use tempfile::TempDir;
 include!("tests/v2_runner_unsealed_00.rs");
 include!("tests/v2_runner_unsealed_01.rs");
 include!("tests/v2_runner_unsealed_02.rs");
@@ -43,6 +43,55 @@ fn recovered_lifecycle_factory_dependency_permit_retains_the_exact_local_signer(
     let expected = local_signer.public_key().clone();
     let permit = RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(local_signer);
     assert_eq!(permit.into_local_signer().public_key(), &expected);
+
+    let _guard = super::super::status::rbc_status_test_guard();
+    super::super::status::clear_v2_status();
+    let (context, _) = context();
+    let ingress_ready = Arc::new(AtomicBool::new(false));
+    let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+    ingress
+        .configure_roster(std::iter::empty())
+        .expect("configure lifecycle activation ingress");
+    let activation = ProductionLifecycleRunnerActivationV1::current_height_for_test(
+        Arc::clone(&ingress_ready),
+        Arc::clone(&ingress),
+    );
+    let activated = activation
+        .open_and_publish(&ingress, runner_status(&context))
+        .expect("current-height lifecycle activation opens and publishes exactly once");
+    assert!(ingress_ready.load(Ordering::Acquire));
+    assert_eq!(
+        super::super::status::v2_status()
+            .expect("current-height activation publishes status")
+            .height_context_id,
+        context.id()
+    );
+    drop(activated);
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+    super::super::status::clear_v2_status();
+
+    let exact_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+    exact_ingress
+        .configure_roster(std::iter::empty())
+        .expect("configure exact lifecycle activation ingress");
+    let foreign_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+    foreign_ingress
+        .configure_roster(std::iter::empty())
+        .expect("configure foreign lifecycle activation ingress");
+    let exact_ready = Arc::new(AtomicBool::new(true));
+    exact_ingress.open().expect("open the stale exact ingress");
+    let activation = ProductionLifecycleRunnerActivationV1::current_height_for_test(
+        Arc::clone(&exact_ready),
+        Arc::clone(&exact_ingress),
+    );
+    assert!(matches!(
+        activation.open_and_publish(&foreign_ingress, runner_status(&context)),
+        Err(V2RunnerError::LifecycleActivationIngressMismatch)
+    ));
+    assert!(!exact_ready.load(Ordering::Acquire));
+    assert!(!exact_ingress.state.lock().open);
+    assert!(!foreign_ingress.state.lock().open);
 }
 #[test]
 fn outer_ingress_cursor_preserves_sequence_and_attests_runner_reach() {

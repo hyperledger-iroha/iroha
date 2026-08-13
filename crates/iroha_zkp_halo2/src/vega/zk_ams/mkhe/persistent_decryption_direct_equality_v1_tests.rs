@@ -1,8 +1,8 @@
 use super::*;
-use sha2::{Digest as _, Sha256};
+use crate::vega::microsoft_mc::dependency_free_sha256_for_tests;
 const POINT_WIRE_V1: &str = "8025a4e3128f042d728e58b7e09a51b72585be4435f4e94aac8517f2e158b3eae6";
 fn sha256_hex_v1(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+    hex::encode(dependency_free_sha256_for_tests(bytes))
 }
 fn point_v1() -> Point {
     Point::from_non_identity_wire_bytes_exact(&hex::decode(POINT_WIRE_V1).expect("literal hex"))

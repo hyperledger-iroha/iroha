@@ -4,33 +4,6 @@
 //! envelope does not authenticate its consensus artifacts or make executable
 //! work. A future admission transaction must first reauthenticate the retained
 //! source against the verified height context and its owning durable store.
-use std::{mem::size_of, sync::Arc};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-use norito::codec::{Decode, DecodeAll as _, Encode};
-use crate::sumeragi::{
-    v2::{
-        AdapterEffect, ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity,
-        PersistedWalFrameLocatorV1, RecoveredDecisionApplyCandidateProjectionPermit,
-        RecoveredLifecycleNextWalVoteSealPermitV1, RecoveredWalFrameIdentity,
-        RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
-    },
-    v2_body_store::{DurableBodyReceipt, DurableCertifiedFetchBodyReceipt, ValidatedBodyReceipt},
-    v2_certified_serve_payload_store::{
-        AuthenticatedRecoveredCertifiedServePayload,
-        AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadNegativeOutcome,
-        DurableCertifiedServeAdmissionReceipt, DurableCertifiedServeCompletedReceipt,
-        DurableCertifiedServeNegativeReceipt,
-    },
-    v2_core::EventTag,
-    v2_runtime::{
-        LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
-        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
-        RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
-        RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
-    },
-    v2_transport::AuthenticatedCertifiedBodyRequest,
-};
 use super::ledger::{
     DurableCertifiedFetchLedgerCensusPermit, DurableCertifiedFetchLedgerJoinPermit,
     LifecycleLedgerRecordV1,
@@ -59,6 +32,33 @@ use super::{
         PreparedLiveValidateSignRegistryWork, SealedBodySuccessorProjectionPermit,
     },
 };
+use crate::sumeragi::{
+    v2::{
+        AdapterEffect, ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity,
+        PersistedWalFrameLocatorV1, RecoveredDecisionApplyCandidateProjectionPermit,
+        RecoveredLifecycleNextWalVoteSealPermitV1, RecoveredWalFrameIdentity,
+        RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
+    },
+    v2_body_store::{DurableBodyReceipt, DurableCertifiedFetchBodyReceipt, ValidatedBodyReceipt},
+    v2_certified_serve_payload_store::{
+        AuthenticatedRecoveredCertifiedServePayload,
+        AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadNegativeOutcome,
+        DurableCertifiedServeAdmissionReceipt, DurableCertifiedServeCompletedReceipt,
+        DurableCertifiedServeNegativeReceipt,
+    },
+    v2_core::EventTag,
+    v2_runtime::{
+        LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
+        RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
+    },
+    v2_transport::AuthenticatedCertifiedBodyRequest,
+};
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use norito::codec::{Decode, DecodeAll as _, Encode};
+use std::{mem::size_of, sync::Arc};
 const REPLAY_AUTHORITY_FORMAT_VERSION: u16 = 1;
 const MAX_REPLAY_AUTHORITY_BYTES: usize = 4 * 1024 * 1024;
 const EQUIVOCATION_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:equivocation-subject:v1";
@@ -470,6 +470,7 @@ pub(crate) struct RecoveredWalVoteReplayEvidenceV1 {
 /// until combined with the signed Broadcast parent; the live transaction and
 /// cold recovery path must retain the resulting pair as one authority.
 #[must_use = "a recovered follow-on Sign must remain sealed to its WAL and body authority"]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteSealV1 {
     wal_identity: RecoveredWalFrameIdentity,
@@ -1764,6 +1765,32 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
                 )
             && recovered_next_wal_vote_candidate_shape_is_exact(&self.candidate, context)
     }
+    /// Admit this still-opaque projection into a focused scheduler fixture.
+    ///
+    /// The helper returns only the allocated owner coordinates; the candidate,
+    /// effect, pending binding, WAL identity, and body receipt remain sealed.
+    #[cfg(test)]
+    pub(super) fn admit_into_scheduler_fixture(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &mut super::LifecycleCoordinator,
+    ) -> Option<(OwnerId, u128)> {
+        if !self.is_exact(verified)
+            || coordinator.active_context
+                != super::projection::lifecycle_context(verified.context())
+        {
+            return None;
+        }
+        match coordinator.admit(super::AdmissionRequest::Candidate(self.candidate.clone())) {
+            super::AdmissionDecision::Admitted {
+                owner,
+                ordinal,
+                producer_turn_ordinal: None,
+            } => Some((owner, ordinal)),
+            _ => None,
+        }
+    }
+
     /// Clone the exact next Sign only for the WAL module's cold-adapter seal.
     ///
     /// The move-only WAL permit prevents this comparison projection from

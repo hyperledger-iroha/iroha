@@ -52,7 +52,7 @@ execution or release receipts.
 
 ## 2026-08-13 mutable-development closure snapshot
 
-- The bound inventory contains exactly 854 production tests across 40 modules,
+- The bound inventory contains exactly 855 production tests across 40 modules,
   including 436 source-sealed ownership/regression names, plus 525 G-UNIT
   tests and 55 grouped Native negative controls. Its source-sealed pre-network
   corridor contains 88 legs. These are source counts, not claims that any suite
@@ -1706,7 +1706,7 @@ The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`2bc7845189fad1b66d33f3f2c87842a7c282e0b1d55344185d2d27f1c0d3c63f`
+`e2ee760f6e47f0f2356154d00b35e42591f46dc771e0103c0c61dac552452d83`
 and
 `d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -1832,7 +1832,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 854 tests across 40 modules, including 436
+inventory contains exactly 855 tests across 40 modules, including 436
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -1867,7 +1867,7 @@ checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
 execution of all 525 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 854 production, 525 G-UNIT,
+candidate Cargo run or full matrix execution: the 855 production, 525 G-UNIT,
 and 55-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
@@ -1990,7 +1990,7 @@ records. The current grouped JSON and wire TSV SHA-256 values are
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`2bc7845189fad1b66d33f3f2c87842a7c282e0b1d55344185d2d27f1c0d3c63f`
+`e2ee760f6e47f0f2356154d00b35e42591f46dc771e0103c0c61dac552452d83`
 and
 `d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`.
 
@@ -2080,7 +2080,7 @@ TODOs remain out of scope as recorded below.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 854-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 855-production-test,
   525-G-UNIT-test, and 55-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not

@@ -1,5 +1,3 @@
-use core::marker::PhantomData;
-use crate::vega::sponge::Keccak256;
 use super::super::super::{
     ZkAmsMkheErrorV1,
     direct_collective_eval_ceremony::{
@@ -15,6 +13,8 @@ use super::{
     OBJECT_ENTRY_BYTES_V1, RELATION_CORE_DOMAIN_V1, RELATION_LINEAGE_DOMAIN_V1,
     STATEMENT_PREFIX_BYTES_V1,
 };
+use crate::vega::sponge::Keccak256;
+use core::marker::PhantomData;
 pub(in super::super) mod object_role {
     use super::ZkAmsMkheDirectObjectKindV1;
     pub(in super::super::super) trait Sealed {

@@ -12,7 +12,6 @@
 //! frame: their release transport is the authenticated split manifest plus
 //! separately addressed polynomial and native-proof objects implemented by
 //! `decryption`.
-use std::sync::Arc;
 use super::{
     BgvProfile, MKHE_VERSION_V1, Scalar, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     checked_rns_polynomial_bytes,
@@ -24,6 +23,7 @@ use crate::vega::{
     VegaT256PointV1,
     sponge::{Keccak256, keccak256},
 };
+use std::sync::Arc;
 const ROSTER_TAG_V1: [u8; 4] = *b"ZAGR";
 pub(super) const GOVERNED_ROSTER_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.governed-roster";
 const CIPHERTEXT_TAG_V1: [u8; 4] = *b"ZACT";

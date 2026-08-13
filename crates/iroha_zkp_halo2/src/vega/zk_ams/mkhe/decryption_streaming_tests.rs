@@ -1,6 +1,7 @@
 // Test body included from the streaming child module so production source stays bounded.
 use super::super::super::super::{MaskedRelaxedRandomErrorV1, MaskedRelaxedRandomSourceV1};
 use super::super::super::{AuthenticationSecret, PlaintextModulus};
+use super::super::decryption_statement_binding_digest_from_axes_v1;
 use super::super::{
     DECRYPTION_SPLIT_MANIFEST_AUTH_DOMAIN_V1, decryption_split_manifest_digest,
     decryption_transient_zeroized_drop_count_v1, reset_decryption_transient_zeroized_drop_count_v1,
@@ -884,12 +885,12 @@ fn in_place_aggregate_matches_native_addition() {
     let original = RnsPolynomial::from_flat(&profile, left).expect("left polynomial");
     let rhs = RnsPolynomial::from_flat(&profile, right).expect("right polynomial");
     let expected = original.add(&rhs, &profile).expect("native addition");
-    let mut actual = original;
+    let mut actual = ZeroizingAggregateRnsV1(original);
     for limb in 0..profile.moduli.len() {
         add_share_limb_in_place(&mut actual, &profile, limb, rhs.limb(&profile, limb))
             .expect("in-place limb addition");
     }
-    assert_eq!(actual, expected);
+    assert_eq!(actual.as_rns(), &expected);
 }
 #[test]
 fn staged_sparse_coefficient_folds_match_native_vectors_exactly() {
@@ -1382,15 +1383,23 @@ fn streamed_rns_limb_owner_and_scratch_zeroize_on_success_error_and_unwind() {
         &mut provider,
     )
     .expect("streamed RNS reader");
-    let first = reader.read_limb(&profile, 0).expect("first streamed limb");
+    let first = reader
+        .read_limb(&profile, 0, &mut provider)
+        .expect("first streamed limb");
     assert_eq!(first.0.len(), profile.ring_degree);
     assert_eq!(first.0.capacity(), profile.ring_degree);
     assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
     drop(first);
     assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
-    drop(reader.read_limb(&profile, 1).expect("second streamed limb"));
+    drop(
+        reader
+            .read_limb(&profile, 1, &mut provider)
+            .expect("second streamed limb"),
+    );
     assert_eq!(decryption_transient_zeroized_drop_count_v1(), 4);
-    reader.finish(&profile).expect("complete streamed RNS read");
+    reader
+        .finish(&profile, &mut provider)
+        .expect("complete streamed RNS read");
     reset_decryption_transient_zeroized_drop_count_v1();
     let mut provider = TestProvider::new(ZkAmsMkheDirectObjectKindV1::CpkPartyB, payload.clone());
     provider.short_read_at = Some(2);
@@ -1403,7 +1412,7 @@ fn streamed_rns_limb_owner_and_scratch_zeroize_on_success_error_and_unwind() {
     )
     .expect("streamed RNS reader");
     assert!(matches!(
-        reader.read_limb(&profile, 0),
+        reader.read_limb(&profile, 0, &mut provider),
         Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
     ));
     assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
@@ -1419,7 +1428,9 @@ fn streamed_rns_limb_owner_and_scratch_zeroize_on_success_error_and_unwind() {
             &mut provider,
         )
         .expect("streamed RNS reader");
-        let limb = reader.read_limb(&profile, 0).expect("streamed RNS limb");
+        let limb = reader
+            .read_limb(&profile, 0, &mut provider)
+            .expect("streamed RNS limb");
         assert_eq!(limb.as_slice().len(), profile.ring_degree);
         panic!("exercise streamed RNS limb unwind erasure");
     });

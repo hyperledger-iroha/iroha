@@ -1482,7 +1482,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
     ),
     "ingress::try_recv_if_at_checked_classified": (
-        "234399223cc9b36bd4c6f3be6dd29040fd0761b67b4a1c38f4fcdd40bf79ac19"
+        "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
     ),
     "runner::run_inner": (
         "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4"
@@ -2028,13 +2028,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 854
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 855
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf"
+    "a40a9d7ef0dafcad2a6e3eb710d550a7f80f905c378117ef9a52b39a86d77b1e"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "52013220063971a7c26e12c9342958f855555b5183f3cf10e4bdae384277943a"
+    "dc24cfbd5235670fc5aa097aa367e413000ccf4a7a33dba69fe14b161a1a3151"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2150,7 +2150,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 46),
+    ("production-v2-adapter", "sumeragi::v2::tests", 47),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
@@ -3433,7 +3433,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
         "0717cee735d0b0a435bdcd502ca6e29c87a554a9f017cb7edbf1efb46ef33d20"
     ),
     "restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire": (
-        "e994c3391ce2626972c26c57a37039f71573adb9d82bbcfa64619edb70640255"
+        "442b60ff481bafafc188267682917b8ef76ff8a3b767cd8f2e4c0b2c9adb8f5c"
     ),
 }
 
@@ -3445,7 +3445,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
     ),
     "try_recv_if_at_checked_classified": (
-        "234399223cc9b36bd4c6f3be6dd29040fd0761b67b4a1c38f4fcdd40bf79ac19"
+        "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
     ),
     "fair_v2_ingress_leader_wire_selector_projection": (
         "34eebea6c6b1a3aefeb68010a2ea367970cc3f16a7d5adf592e184bcc799201e"
@@ -3519,10 +3519,10 @@ _PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256 = {
         "d23e6ab382f4c478ed392c4cdf9dafff92db47f6817fd0713075671442d2fca0"
     ),
     "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode": (
-        "0ff17b16d8a026e7547b0d21fb4180f7716ef60067b80534e1f54d7be66e5058"
+        "ec5597154b186dc7f628300314dc350f9b19aee1cf1c5ff895d2fd233dd2bb88"
     ),
     "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix": (
-        "9c456e9353ff8ef97a6ae0d329fb77fa90bdb6980dbda330984f61323c44365b"
+        "cf9ab7e2eceeea60e51c29846b7ff02f7815ab4dfaab73d26f56ff70430c2019"
     ),
     # Bound after the complete BodyAvailable -> Store -> Validate rejection ->
     # Serve -> producer handoff mutation set was rejected.
@@ -3533,7 +3533,7 @@ _PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256 = {
         "aa266e22920cc2b8b5ce8ea0095b519da73c93827d9d916e075df8002ddeca50"
     ),
     "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_recovery_prefix": (
-        "26f8db46c991874a993888431415631adee676513c41ba1671176f8e7b91bd9a"
+        "60537091f03ca5898b66d72fd9646a845099efcaea35af210638c02f71bd3200"
     ),
     "worker::SelectedServeTimeoutRecoveryFixture::service_pacemaker": (
         "38dbb93aa1cb6f4326767382a354244d21e07a97c78119472da994558d96f65c"
@@ -4276,8 +4276,8 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
     "lane::accept_lane_message_owned": (
         "4c3b13ab1d0821d97604c8f9119ecc27d1c5be5c2a635b228027d35ed3adf96c"
     ),
-    "runner::v2_ingress_head_can_drain": (
-        "d4e61362952b96d782ee41e1c6081a76132086b8e82cf430f8c0003deb8dbe70"
+    "effects::v2_ingress_head_can_drain": (
+        "482af132caf85c043275bb805966af7e5e8fae3553843b574bb07563b49a5de7"
     ),
 }
 

@@ -5,14 +5,12 @@
 //! Only compact admissions, commitment bindings, immutable object pointers,
 //! and receipts survive a transition.  The final aggregate is allocated only
 //! after every full share and relation proof has been released.
-use core::mem::size_of;
 use super::{
     Scalar, ZkAmsMkheErrorV1,
     active::{ZkAmsMkheGovernedActiveRosterV1, zk_ams_mkhe_active_rkg_linear_proof_security_v1},
     collective::{
         ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
-        ZkAmsMkheCollectivePublicKeyV1, ZkAmsMkhePreparedCollectivePublicAV1,
-        ZkAmsMkheStreamingCollectiveCiphertextV1,
+        ZkAmsMkhePreparedCollectivePublicAV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
         ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
         ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
         bind_zk_ams_mkhe_streaming_collective_eval_key_v1,
@@ -47,6 +45,7 @@ use super::{
     wire::{ZkAmsMkheAuthenticationWireV1, ZkAmsMkheGovernedRosterWireV1},
 };
 use crate::vega::VegaT256PointV1;
+use core::mem::size_of;
 /// Exact canonical bytes in one persistent-secret membership frame.
 pub const ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_WIRE_BYTES_V1: usize =
     ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1;

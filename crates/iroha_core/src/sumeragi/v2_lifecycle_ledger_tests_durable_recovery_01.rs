@@ -1192,7 +1192,9 @@ fn empty_successor_owner_for_complete_tip(
         serve_payloads,
         body_store: Some(body_store),
         body_store_identity: None,
-        kura_binding: Some(RecoveredLifecycleOwnerKuraBindingV1::for_test(kura, None)),
+        kura_binding: Some(
+            crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1::for_test(kura, None),
+        ),
         apply_service: None,
         adapter_startup: Some(ProductionLifecycleAdapterStartupV1::fixture_for_test()),
     }

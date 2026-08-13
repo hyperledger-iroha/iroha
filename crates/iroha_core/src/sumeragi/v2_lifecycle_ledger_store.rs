@@ -628,6 +628,43 @@ impl LifecycleCoordinator {
         let successor = LifecycleLedgerV1::from_coordinator(staged)?;
         store.persist_exact_successor(&current, &successor)
     }
+    /// Fsync one all-row finalized successor against this exact live owner.
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn persist_exact_finalization_successor(
+        self,
+        staged: StagedFinalizationRetirementV1,
+    ) -> Result<PublishedFinalizationRetirementV1, LifecycleLedgerError> {
+        let StagedFinalizationRetirementV1 { current, retired } = staged;
+        let store = self.ledger_store.as_ref().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "finalized lifecycle retirement requires an attached LedgerV1 store".to_owned(),
+            )
+        })?;
+        if LifecycleLedgerV1::from_coordinator(&self)? != current
+            || current.context() != retired.context()
+            || current.high_water() != retired.high_water()
+            || current.records().len() != retired.records().len()
+            || retired
+                .records()
+                .iter()
+                .any(|record| record.terminal() == Some(None))
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "finalized lifecycle successor changed its exact live owner".to_owned(),
+            ));
+        }
+        store.persist_exact_successor(&current, &retired)?;
+        if store.load()? != retired {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "published finalization successor changed before owner commit".to_owned(),
+            ));
+        }
+        Ok(PublishedFinalizationRetirementV1 {
+            coordinator: self,
+            current,
+            retired,
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn attach_empty_test_ledger(
         &mut self,

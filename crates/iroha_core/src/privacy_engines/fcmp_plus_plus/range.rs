@@ -2241,10 +2241,10 @@ mod tests {
     }
     #[test]
     fn range_witness_check_drops_every_owner_before_match_and_mismatch_return() {
-        let opening = opening(0, 7, 29);
+        let matching_opening = opening(0, 7, 29);
         let public_commitments =
-            strict_public_commitments(&[opening.output()]).expect("public commitment pair");
-        let witnesses = strict_witness_commitments(std::slice::from_ref(&opening), 2)
+            strict_public_commitments(&[matching_opening.output()]).expect("public commitment pair");
+        let witnesses = strict_witness_commitments(std::slice::from_ref(&matching_opening), 2)
             .expect("secret witness pair");
         let amount_generator = amount_generator().expect("amount generator");
         reset_range_secret_copy_owner_drops();

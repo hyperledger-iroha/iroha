@@ -1,24 +1,3 @@
-use std::{
-    num::NonZeroU64,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-};
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
-use iroha_data_model::{
-    DataSpaceId, LaneId,
-    block::{
-        BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
-        consensus::{
-            CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
-            LaneBlockVoteBodyV1,
-        },
-    },
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    merge::{
-        LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeLedgerEntry, MergeQuorumCertificate,
-    },
-};
-use mv::storage::StorageReadOnly;
-use tempfile::TempDir;
 use super::*;
 use crate::sumeragi::{
     FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressClass, FairV2IngressPushDisposition,
@@ -53,6 +32,27 @@ use crate::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+use iroha_data_model::{
+    DataSpaceId, LaneId,
+    block::{
+        BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
+        consensus::{
+            CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
+            LaneBlockVoteBodyV1,
+        },
+    },
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    merge::{
+        LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeLedgerEntry, MergeQuorumCertificate,
+    },
+};
+use mv::storage::StorageReadOnly;
+use std::{
+    num::NonZeroU64,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use tempfile::TempDir;
 #[test]
 fn orphan_chunk_budget_obeys_encoded_payload_ceiling() {
     let maximum = wire::DataAvailabilityLayout {
@@ -1155,6 +1155,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         chunk_root: PathBuf::new(),
         io: None,
         lifecycle_body_store_identity: None,
+        lifecycle_payload_store_identity: None,
         fetches: BTreeMap::new(),
         fetch_by_manifest: BTreeMap::new(),
         orphan_chunks: BTreeMap::new(),

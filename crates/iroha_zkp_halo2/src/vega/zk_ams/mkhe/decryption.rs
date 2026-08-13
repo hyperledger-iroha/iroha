@@ -21,9 +21,6 @@
 //! Reconstruction authenticates the manifest and every statement axis before
 //! hashing or decoding either large object. A private tiny-profile codec exists
 //! only for exhaustive algebra tests and is not part of the public transport.
-use core::{cmp::Ordering, mem::size_of};
-#[cfg(test)]
-use std::sync::Arc;
 use super::{
     ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
     MaskedRelaxedRandomSourceV1, PlaintextModulus, RnsPolynomial, WideUint, ZkAmsMkheErrorV1,
@@ -44,7 +41,6 @@ use super::{
     },
     zk_ams_mkhe_security_certificate_v1,
 };
-use crate::vega::sponge::{Keccak256, keccak256, shake256};
 #[cfg(test)]
 use super::{
     AuthenticationSecret, SecretPolynomial, ZkAmsMkheActivePartySecretV1,
@@ -58,6 +54,10 @@ use super::{
     collective::COLLECTIVE_CIPHERTEXT_DOMAIN_V1,
     wire::{ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheRnsPolynomialWireV1},
 };
+use crate::vega::sponge::{Keccak256, keccak256, shake256};
+use core::{cmp::Ordering, mem::size_of};
+#[cfg(test)]
+use std::sync::Arc;
 #[cfg(test)]
 const DECRYPTION_PROOF_TAG_V1: [u8; 4] = *b"ZADP";
 const DECRYPTION_SPLIT_MANIFEST_TAG_V1: [u8; 4] = *b"ZDSM";

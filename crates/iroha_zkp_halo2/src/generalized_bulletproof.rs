@@ -398,6 +398,14 @@ struct SecretMsmTerm<S: ProofSuite> {
     scalar: S::Scalar,
     point: S::Point,
 }
+impl<S: ProofSuite> SecretMsmTerm<S> {
+    fn copy_from_borrowed(scalar: &S::Scalar, point: &S::Point) -> Self {
+        Self {
+            scalar: *scalar,
+            point: *point,
+        }
+    }
+}
 impl<S: ProofSuite> Drop for SecretMsmTerm<S> {
     fn drop(&mut self) {
         self.scalar.clear_secret();
@@ -434,11 +442,11 @@ impl<S: ProofSuite> Drop for BorrowedSecretMsmTerm<'_, S> {
 /// Exact-capacity owner for prover-secret multiscalar-multiplication terms.
 ///
 /// Construction reserves all storage before a secret is accepted. `push`
-/// borrows caller-owned values and therefore never leaves a named caller-side
-/// copy behind. Its private by-value boundary clears both incoming parameter
-/// slots on success, error, or unwind. Evaluation requires exactly the
-/// declared term count and clears all retained scalar and point copies on
-/// success, error, or unwind.
+/// borrows caller-owned values and copies them directly into a retained term
+/// only after the fixed-capacity preflight succeeds. Private computed-value
+/// insertions clear both of their by-value parameter slots on success, error,
+/// or unwind. Evaluation requires exactly the declared term count and clears
+/// all retained scalar and point copies on success, error, or unwind.
 ///
 /// The fixed four-bit Straus evaluator has secret-independent control flow and
 /// memory access. It processes independent 256-point chunks in parallel when
@@ -485,16 +493,24 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
     }
     /// Copy one borrowed scalar/point pair into the fixed allocation.
     ///
-    /// Caller-owned slots remain under their existing RAII owner. The private
-    /// by-value boundary below clears its own successful incoming copies; if
-    /// the declared count is already full it clears them before returning
-    /// [`GeneralizedBulletproofErrorV1::ResourceOverflow`].
+    /// Caller-owned slots remain under their existing RAII owner. If the
+    /// declared count is already full, this returns
+    /// [`GeneralizedBulletproofErrorV1::ResourceOverflow`] before making a
+    /// copy. Otherwise both copies are created directly inside the zeroizing
+    /// retained-term owner.
     pub fn push(
         &mut self,
         scalar: &S::Scalar,
         point: &S::Point,
     ) -> Result<(), GeneralizedBulletproofErrorV1> {
-        self.push_copy(*scalar, *point)
+        if self.terms.len() >= self.exact_capacity {
+            return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);
+        }
+        debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
+        self.terms
+            .push(SecretMsmTerm::<S>::copy_from_borrowed(scalar, point));
+        debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
+        Ok(())
     }
     fn push_copy(
         &mut self,
@@ -2514,9 +2530,10 @@ mod secret_cleanup_tests {
         assert!(random.contains("SecretScalar::take(&mut scalar)"));
     }
     #[test]
-    fn scoped_guards_clear_named_scalars_and_msm_copies() {
+    fn scoped_guards_clear_named_scalar_and_direct_msm_owners() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
         CLEAR_CALLS.store(0, Ordering::SeqCst);
+        POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
         {
             let _scalar = SecretScalar::new(TrackingScalar(7));
             let mut terms =
@@ -2528,7 +2545,8 @@ mod secret_cleanup_tests {
                 .push(&TrackingScalar(13), &TrackingPoint(19))
                 .expect("second term");
         }
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
     }
     #[test]
     fn secret_builder_private_push_copy_clears_successful_parameter_slots() {
@@ -2547,19 +2565,50 @@ mod secret_cleanup_tests {
         assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
     }
     #[test]
-    fn secret_builder_source_boundary_is_borrowed_and_callee_slots_are_guarded() {
+    fn secret_builder_source_boundaries_copy_borrows_directly_and_guard_owned_values() {
         let source = include_str!("generalized_bulletproof.rs");
-        assert!(source.contains("scalar: &S::Scalar,\n        point: &S::Point,"));
-        assert!(
-            source.contains("fn push_copy(\n        &mut self,\n        mut scalar: S::Scalar,")
-        );
-        assert!(source.contains("let incoming = BorrowedSecretMsmTerm::<S>::new("));
-        assert!(source.contains("scalar: incoming.scalar_copy(),"));
-        assert!(source.contains("point: incoming.point_copy(),"));
-        assert!(source.contains("drop(incoming);"));
-        assert!(
-            !source.contains("pub fn push(\n        &mut self,\n        mut scalar: S::Scalar,")
-        );
+        let owner = source
+            .split_once("impl<S: ProofSuite> SecretMsmTerm<S> {")
+            .expect("retained MSM term owner")
+            .1
+            .split_once("impl<S: ProofSuite> Drop for SecretMsmTerm<S>")
+            .expect("retained MSM term owner boundary")
+            .0;
+        assert!(owner.contains("fn copy_from_borrowed(scalar: &S::Scalar, point: &S::Point)"));
+        assert!(owner.contains("scalar: *scalar,"));
+        assert!(owner.contains("point: *point,"));
+
+        let borrowed_push = source
+            .split_once("pub fn push(\n")
+            .expect("borrowed MSM insertion")
+            .1
+            .split_once("fn push_copy(")
+            .expect("borrowed MSM insertion boundary")
+            .0;
+        assert!(borrowed_push.contains("scalar: &S::Scalar,\n        point: &S::Point,"));
+        let capacity_preflight = borrowed_push
+            .find("if self.terms.len() >= self.exact_capacity")
+            .expect("capacity preflight");
+        let retained_copy = borrowed_push
+            .find("SecretMsmTerm::<S>::copy_from_borrowed(scalar, point)")
+            .expect("direct retained owner copy");
+        assert!(capacity_preflight < retained_copy);
+        assert!(!borrowed_push.contains("push_copy("));
+        assert!(!borrowed_push.contains("*scalar"));
+        assert!(!borrowed_push.contains("*point"));
+
+        let owned_push = source
+            .split_once("fn push_copy(")
+            .expect("computed-value MSM insertion")
+            .1
+            .split_once("/// Evaluate exactly")
+            .expect("computed-value MSM insertion boundary")
+            .0;
+        assert!(owned_push.contains("mut scalar: S::Scalar,"));
+        assert!(owned_push.contains("let incoming = BorrowedSecretMsmTerm::<S>::new("));
+        assert!(owned_push.contains("scalar: incoming.scalar_copy(),"));
+        assert!(owned_push.contains("point: incoming.point_copy(),"));
+        assert!(owned_push.contains("drop(incoming);"));
     }
     #[test]
     fn secret_builder_rejects_overflow_without_reallocation_and_wipes_terms() {
@@ -2582,11 +2631,13 @@ mod secret_cleanup_tests {
         );
         assert_eq!(terms.terms.as_ptr(), allocation);
         assert_eq!(terms.terms.capacity(), allocation_capacity);
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 0);
         drop(terms);
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 5);
-        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 5);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
         CLEAR_CALLS.store(0, Ordering::SeqCst);
+        POINT_CLEAR_CALLS.store(0, Ordering::SeqCst);
         let mut incomplete =
             SecretMultiexpBuilder::<TrackingSuite>::new(2).expect("fixed tracking capacity");
         incomplete
@@ -2596,7 +2647,8 @@ mod secret_cleanup_tests {
             incomplete.evaluate(),
             Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
         );
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 1);
     }
     #[test]
     fn secret_builder_matches_public_and_naive_msm_across_chunks() {
@@ -3014,7 +3066,7 @@ mod secret_cleanup_tests {
         }));
         PANIC_ON_POINT_ADD.store(usize::MAX, Ordering::SeqCst);
         assert!(unwind.is_err());
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         assert!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst) >= 259);
         assert!(POINT_CLEAR_CALLS.load(Ordering::SeqCst) > 40);
     }

@@ -1,4 +1,3 @@
-use core::cell::Cell;
 use super::*;
 use crate::vega::{
     MaskedRelaxedRandomErrorV1, MaskedRelaxedRandomSourceV1, derive_t256_generators_v1,
@@ -10,6 +9,7 @@ use crate::vega::{
         manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
     },
 };
+use core::cell::Cell;
 const TEST_PROOF_BYTES_V1: usize = 1_447;
 const TEST_CHUNK_WIRE_BYTES_V1: usize = 1_494;
 struct StreamRandom {

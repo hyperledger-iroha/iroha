@@ -67,12 +67,8 @@
 //! must not reinterpret an already durable decision as unfinalized.
 //! Retained files remain replay-safe and never turn a durable decision back
 //! into an unfinalized height.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
-    fmt,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+#[cfg(test)]
+use super::v2_body_store::BlockSignaturePolicy;
 use super::v2_core::{
     CanonicalIdentityProjection, CheckedProductionTransition, EFFECTIVE_LOCK_TRACE_OWNER,
     EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EventTag, ExactBodyOwnerProjection,
@@ -93,16 +89,6 @@ use super::v2_core::{
     plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
     plan_exact_body_retirement_accounting,
 };
-use iroha_crypto::{Hash, HashOf, Signature};
-use iroha_data_model::{
-    block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
-    merge::MergeLedgerEntry,
-    peer::PeerId,
-};
-#[cfg(test)]
-use norito::codec::Encode as _;
-#[cfg(test)]
-use super::v2_body_store::BlockSignaturePolicy;
 #[cfg(test)]
 use super::v2_runtime::bind_adapter_effect_batch_ownership;
 #[cfg(test)]
@@ -150,6 +136,80 @@ use super::{
     v2_worker::RecoveredDecisionFetchRequestOwnerV1,
 };
 use crate::kura::KuraV2CommitReceipt;
+use iroha_crypto::{Hash, HashOf, Signature};
+use iroha_data_model::{
+    block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
+    merge::MergeLedgerEntry,
+    peer::PeerId,
+};
+#[cfg(test)]
+use norito::codec::Encode as _;
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
+    fmt,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+/// Whether one exact fair-ingress occurrence may cross retained reducer debt.
+///
+/// This pure predicate is shared by ordinary checked dequeue and lifecycle
+/// queue selection. Current-height certified-Serve preparation remains a
+/// separate, stateful runner/service transaction after this common gate.
+pub(crate) fn v2_ingress_head_can_drain<R: EffectRuntime>(
+    inbound: &super::InboundBlockMessage,
+    executor: &V2EffectExecutor<R>,
+    terminal_subject: Option<wire::BlockSubject>,
+) -> bool {
+    let BlockMessage::V2(message) = inbound.message() else {
+        return true;
+    };
+    if message.validate_version().is_err() {
+        return true;
+    }
+    if terminal_subject.is_some() && v2_payload_is_terminal_reducer_control(&message.payload) {
+        return true;
+    }
+    if let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
+        && certified_body_request_is_superseded_after_decision(
+            request,
+            terminal_subject,
+            executor.context().height,
+        )
+    {
+        return true;
+    }
+    let Some(ingress_ownership) = inbound.ingress_ownership() else {
+        return true;
+    };
+    executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
+}
+
+/// Return whether finality makes one competing same-height body request obsolete.
+pub(crate) fn certified_body_request_is_superseded_after_decision(
+    request: &wire::CertifiedBodyRequest,
+    terminal_subject: Option<wire::BlockSubject>,
+    active_height: wire::Height,
+) -> bool {
+    terminal_subject
+        .is_some_and(|decided| request.round.height == active_height && request.subject != decided)
+}
+
+/// Return whether one payload can directly advance or close reducer finality.
+pub(crate) const fn v2_payload_is_terminal_reducer_control(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    matches!(
+        payload,
+        wire::ConsensusMessageV2Payload::Proposal(_)
+            | wire::ConsensusMessageV2Payload::Vote(_)
+            | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+            | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+    )
+}
+
 /// Return whether one authenticated envelope can retire a hung signing fence.
 ///
 /// Only a TC or a CommitQC changes the reducer incarnation strongly enough to
@@ -1975,7 +2035,7 @@ impl CertifiedResponsePriorityCandidate {
 #[must_use = "this classification does not itself authorize selector debt"]
 #[cfg_attr(not(test), allow(dead_code))]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
-pub(crate) enum CertifiedResponsePriorityProbe {
+pub(in crate::sumeragi) enum CertifiedResponsePriorityProbe {
     /// The response is provably outside claimed-response priority.
     DefinitelyNonPriority(CertifiedResponsePriorityNonPriority),
     /// Exact authentication succeeded; transactional admission is still required.
@@ -2739,6 +2799,22 @@ enum RestartEffectSource {
     DiagnosticOnly,
 }
 pub(crate) trait EffectRuntime {
+    /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
+    fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        _message: &wire::ConsensusMessageV2,
+        _ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        false
+    }
+    /// Decide whether an exact TimeoutVote carrier may close retained restart debt.
+    fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        _message: &wire::ConsensusMessageV2,
+        _ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        false
+    }
     /// Publish the first receiver-local physical ordinal not yet admitted.
     /// Synthetic runtimes have no outer ingress and may retain the default.
     fn set_ingress_physical_cut(&mut self, _physical_cut: u128) -> Result<(), String> {
@@ -3095,6 +3171,30 @@ pub(crate) trait EffectRuntime {
     fn watchdog_threshold(&self) -> Duration;
 }
 impl EffectRuntime for SerializedV2Runtime {
+    fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        SerializedV2Runtime::can_admit_network_message_with_ingress_ownership(
+            self,
+            message,
+            ingress_ownership,
+        )
+    }
+
+    fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        SerializedV2Runtime::can_admit_timeout_vote_recovery_episode(
+            self,
+            message,
+            ingress_ownership,
+        )
+    }
+
     fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
         SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
     }
@@ -4201,56 +4301,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(crate) const fn current_tag(&self) -> EventTag {
         self.runtime.round_tag()
     }
-    /// Whether the fair-ingress head can make progress without violating the
-    /// retained reducer-effect prefix.
-    ///
-    /// Reducer-producing traffic remains behind an undispatched causal suffix.
-    /// Exact-body chunks and certified responses are transport completions,
-    /// however, and may be the only events able to release the pending-work
-    /// capacity blocking that suffix. They never enter the
-    /// reducer FIFO directly, so admitting them cannot overtake reducer state.
-    /// A `CommitCertificateResponse` is reducer-producing because the runner
-    /// unwraps its authenticated CommitQC before retiring discovery ownership;
-    /// that exact terminal certificate is nevertheless an allowed escape from
-    /// retained debt because it can retire a hung signing fence.
-    pub(crate) fn can_admit_network_message_with_ingress_ownership(
-        &self,
-        message: &wire::ConsensusMessageV2,
-        ingress_ownership: &FairV2IngressOwnershipEvidence,
-    ) -> bool {
-        if self.fatal_reason.is_some() || self.output_guard.restart_required() {
-            return false;
-        }
-        let retained_dispatch_allows =
-            self.retained_dispatch_allows_network_ingress(&message.payload);
-        let timeout_vote_recovery_episode = !retained_dispatch_allows
-            && self
-                .runtime
-                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership);
-        (retained_dispatch_allows || timeout_vote_recovery_episode)
-            && self
-                .runtime
-                .can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
-    }
-    /// Whether this fair-ingress head may cross retained reducer debt solely
-    /// to close an absolute-timeout restart cycle.
-    ///
-    /// The runtime predicate accepts only the finite current-view universe of
-    /// pre-cut TimeoutVote owners and one first post-cut owner per roster
-    /// source. This wrapper deliberately skips the retained-dispatch filter but
-    /// grants neither certified capacity nor signature-fence authority; full
-    /// authentication still occurs after the checked dequeue.
-    pub(crate) fn can_admit_timeout_vote_recovery_episode(
-        &self,
-        message: &wire::ConsensusMessageV2,
-        ingress_ownership: &FairV2IngressOwnershipEvidence,
-    ) -> bool {
-        self.fatal_reason.is_none()
-            && !self.output_guard.restart_required()
-            && self
-                .runtime
-                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership)
-    }
     #[cfg(test)]
     pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
         if self.fatal_reason.is_some()
@@ -4270,23 +4320,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime
             .local_proposal_directive()
             .map_err(|error| EffectExecutorError::Runtime(error.to_string()))
-    }
-    /// Authenticate a certified-body request through the same production
-    /// certificate verifier used for reducer ingress.
-    ///
-    /// Serving code receives an opaque authenticated token, never a merely
-    /// structural request, so an attacker cannot use a forged QC to read or
-    /// amplify retained consensus bodies.
-    pub(crate) fn authenticate_certified_body_request(
-        &self,
-        request: wire::CertifiedBodyRequest,
-        authenticated_requester: &PeerId,
-    ) -> Result<AuthenticatedCertifiedBodyRequest, V2TransportError> {
-        self.runtime.authenticate_certified_body_request(
-            &self.context,
-            request,
-            authenticated_requester,
-        )
     }
     /// Whether application completion has drained through the reducer and the
     /// height is ready for the explicit rollover transaction.
@@ -4326,6 +4359,68 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         &self.context
     }
+    /// Authenticate a certified-body request through the same production
+    /// certificate verifier used for reducer ingress.
+    ///
+    /// Serving code receives an opaque authenticated token, never a merely
+    /// structural request, so an attacker cannot use a forged QC to read or
+    /// amplify retained consensus bodies.
+    pub(crate) fn authenticate_certified_body_request(
+        &self,
+        request: wire::CertifiedBodyRequest,
+        authenticated_requester: &PeerId,
+    ) -> Result<AuthenticatedCertifiedBodyRequest, V2TransportError> {
+        self.runtime.authenticate_certified_body_request(
+            &self.context,
+            request,
+            authenticated_requester,
+        )
+    }
+    /// Return the runtime's durable terminal subject used by fair ingress.
+    pub(crate) fn lifecycle_terminal_subject(
+        &self,
+    ) -> Result<Option<wire::BlockSubject>, EffectExecutorError> {
+        self.runtime
+            .decided_body()
+            .map(|decision| decision.map(|(_, _, subject, _)| subject))
+            .map_err(EffectExecutorError::Runtime)
+    }
+    /// Whether the fair-ingress head can make progress without violating the
+    /// retained reducer-effect prefix.
+    pub(crate) fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        if self.fatal_reason.is_some() || self.output_guard.restart_required() {
+            return false;
+        }
+        let retained_dispatch_allows =
+            self.retained_dispatch_allows_network_ingress(&message.payload);
+        let timeout_vote_recovery_episode = !retained_dispatch_allows
+            && self
+                .runtime
+                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership);
+        (retained_dispatch_allows || timeout_vote_recovery_episode)
+            && self
+                .runtime
+                .can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
+    }
+
+    /// Whether this fair-ingress head may cross retained reducer debt solely
+    /// to close an absolute-timeout restart cycle.
+    pub(crate) fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        self.fatal_reason.is_none()
+            && !self.output_guard.restart_required()
+            && self
+                .runtime
+                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership)
+    }
+
     /// Rejoin one launched service to this executor's exact body-store owner.
     ///
     /// Context/root equality is insufficient: a reopened store at the same
@@ -8386,7 +8481,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     // TODO: Consume this probe only inside the one-cut composite lifecycle
     // snapshot transaction once that factory owns runtime/service reservation.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn probe_certified_response_priority(
+    pub(in crate::sumeragi) fn probe_certified_response_priority(
         &self,
         response: &wire::CertifiedBodyResponse,
         authenticated_responder: &PeerId,

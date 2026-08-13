@@ -28,7 +28,28 @@
 //! release-parameter KAT all exist.
 
 #![allow(dead_code)]
-use core::fmt;
+#[cfg(test)]
+use super::collective::{
+    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
+    ZkAmsMkheCollectivePublicKeyV1, validate_compact_for_key,
+};
+#[cfg(test)]
+use super::packing::ZkAmsT256PackingLayoutV1;
+use super::{
+    ZkAmsMkheErrorV1,
+    manifest::{ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1},
+    packing::{
+        ZkAmsT256PackedPlaintextV1, decode_zk_ams_t256_packed_plaintext_v1,
+        packed_plaintext_rns_binding_digest_v1, zk_ams_t256_packing_layout_v1,
+    },
+    phase23_encrypted::{
+        ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
+        ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
+        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23PackedAccumulatorSetV1,
+        zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
+    },
+    wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
+};
 use crate::generalized_bulletproof::SecretMultiexpBuilder;
 use crate::vega::{
     VegaT256PointV1, VegaT256ScalarV1 as Scalar, VegaTranscriptV1,
@@ -42,27 +63,7 @@ use crate::vega::{
     sponge::{keccak256, shake256},
     sumcheck::{CompressedUnivariate, SumcheckProof},
 };
-#[cfg(test)]
-use super::collective::{
-    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
-    ZkAmsMkheCollectivePublicKeyV1, validate_compact_for_key,
-};
-use super::{
-    ZkAmsMkheErrorV1,
-    manifest::{ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1},
-    packing::{
-        ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
-        decode_zk_ams_t256_packed_plaintext_v1, packed_plaintext_rns_binding_digest_v1,
-        zk_ams_t256_packing_layout_v1,
-    },
-    phase23_encrypted::{
-        ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
-        ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
-        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23PackedAccumulatorSetV1,
-        zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
-    },
-    wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
-};
+use core::fmt;
 const RNS_LINK_VERSION_V1: u8 = 1;
 const RNS_LINK_EVALUATIONS_PER_LIMB_V1: usize = 5;
 pub(super) const ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1: usize = 38;
@@ -1231,31 +1232,21 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());
 #[allow(
     dead_code,
-    reason = "the q-native PCS is a private Stage-A prototype and cannot authorize release until its hiding, FRI theorem, external-store residency, relation-adapter, and release KAT blockers are closed"
-)]
-#[path = "phase23_rns_link_q_pcs.rs"]
-mod q_pcs;
-#[allow(
-    dead_code,
     reason = "cross-field prerequisite remains production-uninhabited until source/range/mask/qPCS seals and the global ZK lookup theorem are wired"
 )]
 #[path = "phase23_rns_link_cross_field_v2.rs"]
 mod cross_field_v2;
+#[allow(
+    dead_code,
+    reason = "the q-native PCS is a private Stage-A prototype and cannot authorize release until its hiding, FRI theorem, external-store residency, relation-adapter, and release KAT blockers are closed"
+)]
+#[path = "phase23_rns_link_q_pcs.rs"]
+mod q_pcs;
 #[cfg(test)]
 #[path = "phase23_rns_link_q_relation_adapter.rs"]
 mod q_relation_adapter;
 #[cfg(test)]
 pub(super) use q_relation_adapter::ZkAmsPhase23QNativeRelationAdapterSinkV1;
-#[path = "phase23_rns_link_external_source.rs"]
-mod external_source;
-#[allow(
-    unused_imports,
-    reason = "private concrete confidential-source seam; its collective producer and relation consumer are not wired yet"
-)]
-pub(super) use external_source::{
-    ZkAmsPhase23RnsLinkExternalSourceAssemblyV1, ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
-    ZkAmsPhase23RnsLinkSecretChunkV1, ZkAmsPhase23RnsLinkSourcePublicationReceiptV1,
-};
 #[cfg(test)]
 #[path = "phase23_rns_link_state_owned.rs"]
 mod state_owned;
@@ -1493,7 +1484,7 @@ where
     F: FnMut(u16) -> u64,
 {
     if !(3..(1_u64 << 62)).contains(&modulus)
-        || modulus % 2 == 0
+        || modulus.is_multiple_of(2)
         || prior_values
             .iter()
             .any(|value| *value == 0 || *value >= modulus)
@@ -1568,8 +1559,7 @@ struct ZkAmsPhase23RnsLinkIpaKeyV1 {
 }
 impl ZkAmsPhase23RnsLinkIpaKeyV1 {
     fn derive(vector_len: usize) -> Result<Self, ZkAmsMkheErrorV1> {
-        if vector_len < 2
-            || vector_len > RNS_LINK_IPA_MAX_VECTOR_LEN_V1
+        if !(2..=RNS_LINK_IPA_MAX_VECTOR_LEN_V1).contains(&vector_len)
             || !vector_len.is_power_of_two()
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -1913,8 +1903,7 @@ fn rns_link_bitness_codec_shape_v1(
     if !is_nonzero_digest(statement.relation_context_digest)
         || !is_nonzero_digest(statement.key_digest)
         || statement.commitment.is_identity()
-        || value_count < 2
-        || value_count > RNS_LINK_BITNESS_MAX_VALUES_V1
+        || !(2..=RNS_LINK_BITNESS_MAX_VALUES_V1).contains(&value_count)
         || !value_count.is_power_of_two()
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -2710,12 +2699,12 @@ fn verify_rns_link_bitness_wire_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use super::*;
     use crate::vega::{
         bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1, derive_t256_generators_v1,
         sponge::keccak256,
     };
-    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     const TINY_N: usize = 8;
     const TINY_Q: u64 = 97;
     const TINY_P: u64 = 17;

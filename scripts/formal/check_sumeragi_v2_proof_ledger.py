@@ -85,6 +85,7 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_shared_tlc_result_contracts.py",
     "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py",
     "sumeragi_v2_proof_ledger_runtime_ingress_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_production_recovery_contracts.py",
     "sumeragi_v2_proof_ledger_successor_production_contracts.py",
     "sumeragi_v2_proof_ledger_successor_recovery_contracts.py",
     "sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py",
@@ -60729,20 +60730,20 @@ fn validate_shared_ownership_geometry(
         ),
     )
     ingress_head = _require_rust_item(
-        runner_path,
-        runner_source,
+        effects_path,
+        effects_source,
         "v2_ingress_head_can_drain",
         errors,
     )
     _require_rust_item_context(
-        runner_path,
+        effects_path,
         ingress_head,
         (),
-        "ingress-owned runner head preflight",
+        "ingress-owned effect-executor head preflight",
         errors,
     )
-    ingress_seam_items["runner::v2_ingress_head_can_drain"] = (
-        runner_path,
+    ingress_seam_items["effects::v2_ingress_head_can_drain"] = (
+        effects_path,
         ingress_head,
     )
     for qualified_name, expected_sha256 in (
@@ -61434,17 +61435,15 @@ if ingress_ownership.as_ref().is_some_and(|ownership| {
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        ingress_seam_items["runner::v2_ingress_head_can_drain"][1],
+        effects_path,
+        ingress_seam_items["effects::v2_ingress_head_can_drain"][1],
         """
 let Some(ingress_ownership) = inbound.ingress_ownership() else {
     return true;
 };
-if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership) {
-    return false;
-}
+executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
 """,
-        "runner preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
+        "effect-executor preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
         errors,
     )
 
@@ -72930,9 +72929,7 @@ let (adapter, startup_effects) = SumeragiV2Adapter::open(
             """
 let round_timeout = match mode {
     SelectedServeTimeoutRecoveryMode::TimeoutRecovery => Duration::from_millis(1),
-    SelectedServeTimeoutRecoveryMode::LatePassiveFetch => {
-        Duration::from_secs(24 * 60 * 60)
-    }
+    SelectedServeTimeoutRecoveryMode::LatePassiveFetch => Duration::from_secs(24 * 60 * 60),
 };
 """,
             "selected-Serve fixture must keep only timeout recovery due while the late-Fetch pipeline owns one long non-due clock",
@@ -73078,7 +73075,7 @@ services,
         late_mode_positions = _token_sequence_positions(
             new_tokens,
             rust_code_tokens(
-                "SelectedServeTimeoutRecoveryMode::LatePassiveFetch => {"
+                "SelectedServeTimeoutRecoveryMode::LatePassiveFetch =>"
             ),
         )
         serve_ingress_positions = _token_sequence_positions(
@@ -73161,7 +73158,7 @@ pub(in crate::sumeragi) fn service_exact_serve_runtime_prefix(
         .services
         .drain_exact_serve_runtime_predecessor(
             &mut self.executor,
-            barrier.scheduler_ordinal(),
+            barrier.scheduler_ordinal()
         )
         .map_err(|error| error.to_string())?;
     let completion_evidence = self
@@ -75048,6 +75045,7 @@ if confirmed_snapshot != artifact_snapshot
     return errors
 
 
+_execute_checker_component("sumeragi_v2_proof_ledger_successor_production_recovery_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_production_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py")

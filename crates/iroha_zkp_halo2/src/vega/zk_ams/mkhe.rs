@@ -111,12 +111,6 @@ mod direct_rkg_ephemeral_membership;
 )]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]
 mod exact_eight_chunk_membership;
-#[allow(
-    dead_code,
-    reason = "the bounded global-lookup statement remains a private, production-uninhabited source-budget prerequisite"
-)]
-#[path = "mkhe/global_lookup_statement_v1.rs"]
-mod global_lookup_statement_v1;
 #[path = "mkhe/manifest.rs"]
 mod manifest;
 #[path = "mkhe/noise.rs"]
@@ -182,14 +176,6 @@ pub use active::{
 };
 pub use cks::{
     ZkAmsMkheCksProofV1, ZkAmsMkheCksResourceEvidenceV1, zk_ams_mkhe_cks_resource_evidence_v1,
-};
-#[expect(
-    unused_imports,
-    reason = "opaque source-opening states are reserved for the future private common join"
-)]
-pub(in crate::vega::zk_ams::mkhe) use collective::{
-    GlobalLookupCanonicalReopenSealV1, Phase23GlobalLookupSourceReopenedV1,
-    Phase23GlobalLookupSourceReplayV1,
 };
 #[cfg(test)]
 pub use collective::{
@@ -1030,9 +1016,11 @@ impl RnsPolynomial {
         let start = index * profile.ring_degree;
         &self.coefficients[start..start + profile.ring_degree]
     }
+    #[cfg(test)]
     fn add(&self, rhs: &Self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.binary(rhs, profile, mod_add)
     }
+    #[cfg(test)]
     fn sub(&self, rhs: &Self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.binary(rhs, profile, mod_sub)
     }
@@ -1076,6 +1064,7 @@ impl RnsPolynomial {
         }
         Ok(output)
     }
+    #[cfg(test)]
     fn scale_plaintext_modulus(&self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         let mut output = self.clone();
@@ -1163,6 +1152,7 @@ impl RnsPolynomial {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn binary(
         &self,
         rhs: &Self,
@@ -1249,6 +1239,7 @@ impl SecretPolynomial {
         }
         Ok(owner)
     }
+    #[cfg(test)]
     fn as_rns(&self, profile: &BgvProfile) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
         RnsPolynomial::from_signed(profile, &self.coefficients)
     }

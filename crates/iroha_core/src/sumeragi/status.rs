@@ -1186,7 +1186,7 @@ fn activate_recovered_complete_tip_v2_height_at(
 /// its clocks and authenticated ingress is open. The token reopens and compares
 /// its retained successor ledger before the existing checked recovered-status
 /// transition can publish anything.
-pub(crate) fn activate_recovered_complete_tip_v2_height(
+pub(in crate::sumeragi) fn activate_recovered_complete_tip_v2_height(
     authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
     successor: SumeragiV2Status,
 ) -> Result<(), V2SuccessorActivationError> {

@@ -504,7 +504,7 @@ mod tests {
     }
 
     fn stage_bytes_v2(bytes: &[u8]) -> AtomicProofQuarantineReadyV2 {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::testing::TestDirectory::new("atomic-proof-quarantine");
         let sink =
             AtomicProofQuarantineSinkV2::create_in_v2(directory.path(), [0x31; 32], bytes.len())
                 .unwrap();

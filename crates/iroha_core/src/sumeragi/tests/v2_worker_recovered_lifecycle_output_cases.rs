@@ -77,6 +77,12 @@ fn armed_recovered_proposal_output_reservation_fails_stop_on_drop() {
     let identity = V2BodyStore::open(directory.path(), service.context.clone())
         .expect("open armed Proposal output store")
         .instance_identity();
+    let wal_append = RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+        dispatch_key,
+        body_store_identity: identity.clone(),
+        output_guard: Arc::clone(&service.output_guard),
+        attempted: false,
+    };
     let authority = super::super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::for_test(
         &service.context,
         dispatch_key,
@@ -99,6 +105,7 @@ fn armed_recovered_proposal_output_reservation_fails_stop_on_drop() {
         pending: Some(pending),
         batch: None,
         authority: Some(authority),
+        wal_append,
     });
     assert!(
         service.output_guard.restart_required(),
@@ -120,10 +127,10 @@ fn durable_recovered_broadcast_capture_owns_and_retries_one_exact_fanout() {
         &service.context,
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
     );
-    let capture = service
+    let RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(output) = service
         .capture_recovered_lifecycle_signed_broadcast_refanout(authority)
-        .expect("exact durable Broadcast authority enters the service cut");
-    let RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(output) = capture else {
+        .expect("exact durable Broadcast authority enters the service cut")
+    else {
         panic!("an empty exact-output corridor must reserve the durable Broadcast")
     };
     output.commit_after_publication();
@@ -811,10 +818,10 @@ fn cold_durable_proposal_refanout_atomically_owns_control_and_chunks() {
         )),
         cold_output,
     );
-    let capture = service
+    let RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(output) = service
         .capture_recovered_lifecycle_signed_broadcast_refanout(authority)
-        .expect("cold Proposal re-enters its exact body-store service");
-    let RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(output) = capture else {
+        .expect("cold Proposal re-enters its exact body-store service")
+    else {
         panic!("empty aggregate corridor must reserve Proposal control and chunks")
     };
     output.commit_after_publication();

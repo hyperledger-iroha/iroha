@@ -187,6 +187,67 @@ pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
     Ok((ledger, authority))
 }
 #[cfg(test)]
+fn recovered_next_vote_projection_for_scheduler_fixture(
+    verified: &VerifiedHeightContext,
+    marker: u8,
+) -> (
+    RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+    wire::Vote,
+) {
+    let context = verified.context();
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: u64::from(marker),
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 1])),
+        payload_hash: Hash::new([marker, 2]),
+    };
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        round,
+        subject,
+        HashOf::from_untyped_unchecked(Hash::new([marker, 3])),
+    );
+    let validated = ValidatedBodyReceipt::for_test(durable);
+    let vote = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject,
+        execution_commitment: validated.execution_commitment(),
+        signer: 0,
+        signature: Vec::new(),
+    };
+    let tag = EventTag::new(
+        context.height,
+        round.view,
+        crate::sumeragi::v2_core::Generation::new(u64::from(marker).saturating_add(1)),
+    );
+    let seal = super::replay_authority::RecoveredLifecycleNextWalVoteSealV1::for_test(
+        crate::sumeragi::v2::RecoveredWalFrameIdentity::for_test(
+            u64::from(marker).saturating_add(8),
+            u64::from(marker).saturating_add(9),
+            [marker; 32],
+        ),
+        tag,
+        vote.clone(),
+        validated,
+    )
+    .expect("exact scheduler fixture WAL Vote seal");
+    let projection =
+        match crate::sumeragi::v2_runtime::project_recovered_lifecycle_next_wal_vote_candidate(
+            verified, seal,
+        ) {
+            Ok(projection) => projection,
+            Err(_) => panic!("exact scheduler fixture WAL Vote projection"),
+        };
+    (projection, vote)
+}
+
+#[cfg(test)]
 impl super::concrete_admission::LifecycleWorkRegistryHolder {
     /// Count only closed recovered-WAL Sign rows after an installed cut drops.
     /// This test oracle exposes no address, effect, pending binding, or receipt.
@@ -202,6 +263,254 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             })
             .count()
     }
+    /// Install one exact recovered Broadcast pair plus an unrelated Ready Sign.
+    ///
+    /// Only logical ordinals leave this helper. Every effect, WAL identity,
+    /// pending binding, signature, and body receipt remains inside its closed
+    /// concrete carrier.
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn recovered_broadcast_pair_scheduler_fixture_for_test(
+        coordinator: &mut LifecycleCoordinator,
+        verified: &VerifiedHeightContext,
+        local_signer: &iroha_crypto::KeyPair,
+    ) -> (Self, u128, u128, u128) {
+        assert!(coordinator.records.is_empty());
+        assert_eq!(
+            coordinator.active_context,
+            super::projection::lifecycle_context(verified.context())
+        );
+        assert_eq!(
+            verified.context().roster[0].validator,
+            PeerId::new(local_signer.public_key().clone())
+        );
+
+        let (parent, parent_vote) =
+            recovered_next_vote_projection_for_scheduler_fixture(verified, 0x41);
+        let mut signed_vote = parent_vote.clone();
+        signed_vote.signature = iroha_crypto::Signature::new(
+            local_signer.private_key(),
+            &SignRequest::Vote(parent_vote).signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let broadcast =
+            RecoveredLifecycleSignedBroadcastProjectionV1::from_next_wal_vote_for_scheduler_fixture(
+                &parent,
+                verified,
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(signed_vote),
+                )),
+            )
+            .expect("signed Vote rejoins its exact scheduler fixture WAL parent");
+        let (paired_next_sign, _) =
+            recovered_next_vote_projection_for_scheduler_fixture(verified, 0x51);
+        let (unrelated_sign, _) =
+            recovered_next_vote_projection_for_scheduler_fixture(verified, 0x61);
+
+        let (parent_owner, parent_ordinal) = parent
+            .admit_into_scheduler_fixture(verified, coordinator)
+            .expect("admit exact scheduler fixture parent Sign");
+        let (broadcast_owner, broadcast_ordinal) =
+            match coordinator.admit(AdmissionRequest::Candidate(broadcast.candidate().clone())) {
+                super::AdmissionDecision::Admitted {
+                    owner,
+                    ordinal,
+                    producer_turn_ordinal: None,
+                } => (owner, ordinal),
+                decision => panic!("admit exact scheduler fixture Broadcast: {decision:?}"),
+            };
+        assert_eq!(broadcast_owner, parent_owner);
+        assert_eq!(parent_ordinal.checked_add(1), Some(broadcast_ordinal));
+        let (paired_owner, paired_ordinal) = paired_next_sign
+            .admit_into_scheduler_fixture(verified, coordinator)
+            .expect("admit exact scheduler fixture paired Sign");
+        assert_ne!(paired_owner, parent_owner);
+        assert_eq!(broadcast_ordinal.checked_add(1), Some(paired_ordinal));
+        let (unrelated_owner, unrelated_ordinal) = unrelated_sign
+            .admit_into_scheduler_fixture(verified, coordinator)
+            .expect("admit exact scheduler fixture unrelated Sign");
+        assert_ne!(unrelated_owner, parent_owner);
+        assert_ne!(unrelated_owner, paired_owner);
+
+        coordinator
+            .finish_terminal(parent_ordinal, super::TerminalOutcome::Advanced)
+            .expect("terminalize the scheduler fixture parent Sign");
+        coordinator
+            .durable_records
+            .get_mut(&parent_ordinal)
+            .expect("terminal scheduler fixture parent retains metadata")
+            .continuation = super::schema::DurableContinuation::successor(
+            super::schema::DurableContinuationEdge::SignPrepareToBroadcast,
+            broadcast_ordinal,
+        );
+
+        let address = |ordinal, class| {
+            let record = coordinator
+                .records
+                .get(&ordinal)
+                .expect("scheduler fixture ordinal retains one record");
+            let (slot, digest) = exact_single_record_slot(record, class)
+                .expect("scheduler fixture record retains one exact slot");
+            (
+                ConcreteWorkAddress::new(record.owner, ordinal, slot)
+                    .expect("scheduler fixture record retains one exact address"),
+                digest,
+            )
+        };
+        let (parent_address, parent_digest) = address(
+            parent_ordinal,
+            LifecycleWorkClass::SignVote.capacity_class(),
+        );
+        let (broadcast_address, broadcast_digest) = address(
+            broadcast_ordinal,
+            LifecycleWorkClass::Broadcast.capacity_class(),
+        );
+        let (paired_address, paired_digest) = address(
+            paired_ordinal,
+            LifecycleWorkClass::SignVote.capacity_class(),
+        );
+        let (unrelated_address, unrelated_digest) = address(
+            unrelated_ordinal,
+            LifecycleWorkClass::SignVote.capacity_class(),
+        );
+        assert_eq!(parent.digest(), parent_digest);
+        assert_eq!(broadcast.digest(), broadcast_digest);
+        assert_eq!(paired_next_sign.digest(), paired_digest);
+        assert_eq!(unrelated_sign.digest(), unrelated_digest);
+
+        let parent = DurableRecoveredLifecycleNextWalVoteSignWork {
+            projection: parent,
+            verified: verified.clone(),
+            address: parent_address,
+            dispatch_key: None,
+        };
+        let broadcast_work = ConcreteLifecycleWork {
+            digest: broadcast_digest,
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+                DurableRecoveredLifecycleSignedBroadcastWork {
+                    parent: DurableRecoveredLifecycleSignParentV1::NextWalVote(parent),
+                    broadcast,
+                    verified: verified.clone(),
+                    address: broadcast_address,
+                    paired_next_sign: Some((paired_address, paired_digest)),
+                },
+            ),
+        };
+        let paired_work = ConcreteLifecycleWork {
+            digest: paired_digest,
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(
+                DurableRecoveredLifecycleNextWalVoteSignWork {
+                    projection: paired_next_sign,
+                    verified: verified.clone(),
+                    address: paired_address,
+                    dispatch_key: None,
+                },
+            ),
+        };
+        let unrelated_work = ConcreteLifecycleWork {
+            digest: unrelated_digest,
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(
+                DurableRecoveredLifecycleNextWalVoteSignWork {
+                    projection: unrelated_sign,
+                    verified: verified.clone(),
+                    address: unrelated_address,
+                    dispatch_key: None,
+                },
+            ),
+        };
+        assert!(broadcast_work.validates_at(broadcast_address));
+        assert!(paired_work.validates_at(paired_address));
+        assert!(unrelated_work.validates_at(unrelated_address));
+
+        let mut registry = Self::empty();
+        let entries = &mut registry.registry_for_test_mut().entries;
+        assert!(entries.insert(broadcast_address, broadcast_work).is_none());
+        assert!(entries.insert(paired_address, paired_work).is_none());
+        assert!(entries.insert(unrelated_address, unrelated_work).is_none());
+        registry
+            .registry_for_test()
+            .attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
+                coordinator,
+                broadcast_ordinal,
+                paired_ordinal,
+            )
+            .expect("exact scheduler fixture pair attests");
+        registry
+            .registry_for_test()
+            .attest_ready_recovered_lifecycle_sign(coordinator, unrelated_ordinal)
+            .expect("unrelated scheduler fixture Sign attests independently");
+        (
+            registry,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        )
+    }
+
+    /// Clear only one exact retained pair link for the independent-Sign case.
+    pub(super) fn clear_recovered_broadcast_pair_link_for_test(
+        &mut self,
+        coordinator: &LifecycleCoordinator,
+        broadcast_ordinal: u128,
+    ) -> bool {
+        let Some(record) = coordinator.records.get(&broadcast_ordinal) else {
+            return false;
+        };
+        let Some((slot, _)) =
+            exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())
+        else {
+            return false;
+        };
+        let Some(address) = ConcreteWorkAddress::new(record.owner, broadcast_ordinal, slot) else {
+            return false;
+        };
+        let Some(work) = self.registry_for_test_mut().entries.get_mut(&address) else {
+            return false;
+        };
+        let ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(broadcast) =
+            &mut work.kind
+        else {
+            return false;
+        };
+        broadcast.paired_next_sign.take().is_some()
+    }
+
+    /// Corrupt only the retained pair digest while preserving both carriers.
+    pub(super) fn corrupt_recovered_broadcast_pair_link_for_test(
+        &mut self,
+        coordinator: &LifecycleCoordinator,
+        broadcast_ordinal: u128,
+    ) -> bool {
+        let Some(record) = coordinator.records.get(&broadcast_ordinal) else {
+            return false;
+        };
+        let Some((slot, _)) =
+            exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())
+        else {
+            return false;
+        };
+        let Some(address) = ConcreteWorkAddress::new(record.owner, broadcast_ordinal, slot) else {
+            return false;
+        };
+        let Some(work) = self.registry_for_test_mut().entries.get_mut(&address) else {
+            return false;
+        };
+        let ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(broadcast) =
+            &mut work.kind
+        else {
+            return false;
+        };
+        let Some((next_address, next_digest)) = broadcast.paired_next_sign else {
+            return false;
+        };
+        let mut corrupted = LifecycleDigest::new([0xD7; 32]);
+        if corrupted == next_digest {
+            corrupted = LifecycleDigest::new([0xD8; 32]);
+        }
+        broadcast.paired_next_sign = Some((next_address, corrupted));
+        true
+    }
+
     /// Assemble and install a genuine ordinary-Proposal validated completion.
     ///
     /// The retained signed Proposal enters the same authenticated fair-ingress

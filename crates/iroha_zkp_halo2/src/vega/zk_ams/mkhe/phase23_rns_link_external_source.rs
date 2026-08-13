@@ -20,9 +20,6 @@
 //! remains closed.
 //! The adapter also inherits the leaf's explicit exclusions for secure
 //! deletion, swap/core/page-cache control, panic-abort erasure, and measured RSS.
-use std::path::Path;
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
-use crate::vega::sponge::Keccak256;
 use super::super::ZkAmsMkheErrorV1;
 use super::{
     RNS_LINK_FAMILY_ORDER_V1, RNS_LINK_RELEASE_COMMITMENTS_V1, RNS_LINK_VERSION_V1,
@@ -30,6 +27,9 @@ use super::{
     ZkAmsPhase23RnsLinkFamilyV1, ZkAmsPhase23RnsLinkReleaseGeometryV1,
     derive_zk_ams_phase23_rns_link_release_geometry_v1,
 };
+use crate::vega::sponge::Keccak256;
+use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use std::path::Path;
 #[path = "phase23_rns_link_external_spool.rs"]
 mod confidential_spool;
 use confidential_spool::{RnsLinkSecretSpoolSnapshotsV1, RnsLinkSecretSpoolWriterV1};

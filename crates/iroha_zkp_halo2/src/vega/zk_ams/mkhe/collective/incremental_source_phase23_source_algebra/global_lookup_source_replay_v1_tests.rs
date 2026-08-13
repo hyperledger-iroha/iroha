@@ -91,7 +91,7 @@ fn replay_receipt_kat_binds_plaintext_authenticated_and_total_io_separately() {
         "7bdc5d30dc1c4ec734942ffb50305ebe6b5ef106a8e24891edb0973ef3d44e10"
     );
     validate_replay_record_v1(&record).unwrap();
-    let mutations: [fn(&mut GlobalLookupSourceReplayRecordV1); 3] = [
+    let mutations: [fn(&mut GlobalLookupSourceReplayRecordV1); 5] = [
         |record: &mut GlobalLookupSourceReplayRecordV1| {
             record.source_plaintext_read_bytes += 1;
         },
@@ -100,6 +100,12 @@ fn replay_receipt_kat_binds_plaintext_authenticated_and_total_io_separately() {
         },
         |record: &mut GlobalLookupSourceReplayRecordV1| {
             record.total_replay_io_bytes += 1;
+        },
+        |record: &mut GlobalLookupSourceReplayRecordV1| {
+            record.authenticated_source_replay_complete = false;
+        },
+        |record: &mut GlobalLookupSourceReplayRecordV1| {
+            record.global_lookup_proof_verified = true;
         },
     ];
     for mutate in mutations {
@@ -237,6 +243,12 @@ fn canonical_scalar_blocks_reject_modulus_and_trailing_width() {
 fn privacy_poison_auth_sink_and_unwind_guards_are_structural() {
     for required in [
         "prerequisite: Phase23SourceAlgebraPrerequisiteV2<K, P>",
+        "struct Phase23GlobalLookupSourceReplayEvidenceV1<K, P>",
+        "replay: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>",
+        "materialization: Option<RadixWitnessMaterializationSealV2>",
+        "radix_hyrax_proof: Option<RadixHyraxProofSealV2>",
+        "_radix_witness_materialization: RadixWitnessMaterializationSealV2",
+        "_radix_hyrax_proof: RadixHyraxProofSealV2",
         "snapshot: ConfidentialSpoolSnapshotV1",
         "confidential_spool_directory: Infallible",
         "read_canonical_plaintext_block_v1",
@@ -256,6 +268,7 @@ fn privacy_poison_auth_sink_and_unwind_guards_are_structural() {
         "source_authenticated_read_bytes: SOURCE_AUTHENTICATED_READ_BYTES_V1",
         "total_replay_io_bytes: TOTAL_REPLAY_IO_BYTES_V1",
         "panic_after_take_for_test_v1",
+        "panic_after_authority_take_for_test_v2",
     ] {
         assert!(
             PRODUCTION_SOURCE_V1.contains(required),
@@ -270,12 +283,16 @@ fn privacy_poison_auth_sink_and_unwind_guards_are_structural() {
         "pub trait",
         "pub use",
         "derive(Clone",
+        "impl Clone for Phase23GlobalLookupSourceReplayEvidenceV1",
         "impl Clone for Phase23GlobalLookupSourceReplayV1",
         "impl core::fmt::Debug",
         "fn into_parts",
         "fn as_bytes",
         "fn path",
         "fn key",
+        "fn snapshot",
+        "fn prerequisite",
+        "fn record",
         "dyn Fn",
         "Serialize",
         "Deserialize",
@@ -299,4 +316,60 @@ fn privacy_poison_auth_sink_and_unwind_guards_are_structural() {
             .contains("let mut resources = self\n            .resources\n            .take()")
     );
     assert!(LEAF_SOURCE_V1.contains("ConfidentialSpoolErrorV1::Authentication"));
+}
+#[test]
+fn authority_dag_is_replay_then_materialization_then_radix_hyrax_and_poisoned_before_validation() {
+    let replay_entry = PRODUCTION_SOURCE_V1
+        .split("fn replay_global_lookup_source_v1")
+        .nth(1)
+        .unwrap();
+    let replay_signature = replay_entry.split('{').next().unwrap();
+    assert!(replay_signature.contains("Phase23GlobalLookupSourceReplayEvidenceV1"));
+    assert!(!replay_signature.contains("RadixHyraxProofSealV2"));
+    let evidence = PRODUCTION_SOURCE_V1
+        .split("struct Phase23GlobalLookupSourceReplayEvidenceV1")
+        .nth(1)
+        .unwrap()
+        .split("struct ReplayRadixHyraxBindingV2")
+        .next()
+        .unwrap();
+    assert!(!evidence.contains("RadixHyraxProofSealV2"));
+    assert!(!evidence.contains("RadixWitnessMaterializationSealV2"));
+    let binding = PRODUCTION_SOURCE_V1
+        .split("fn finish_radix_hyrax_binding_v2")
+        .nth(1)
+        .unwrap()
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap();
+    let replay_take = binding.find(".replay\n            .take()").unwrap();
+    let materialization_take = binding
+        .find(".materialization\n            .take()")
+        .unwrap();
+    let proof_take = binding
+        .find(".radix_hyrax_proof\n            .take()")
+        .unwrap();
+    let validate = binding
+        .find("validate_replay_evidence_v1(&replay)")
+        .unwrap();
+    let materialization_validate = binding
+        .find("materialization.validate_for_replay_v2")
+        .unwrap();
+    assert!(
+        replay_take < materialization_take
+            && materialization_take < proof_take
+            && proof_take < validate
+            && validate < materialization_validate
+    );
+    assert!(binding.contains("Result<Phase23GlobalLookupSourceReplayV1<K, P>"));
+    assert!(!binding.contains("Ok(("));
+    assert_eq!(
+        PRODUCTION_SOURCE_V1
+            .matches("Ok(Phase23GlobalLookupSourceReplayV1 {")
+            .count(),
+        1
+    );
+    assert!(PRODUCTION_SOURCE_V1.contains("authenticated_source_replay_complete"));
+    assert!(PRODUCTION_SOURCE_V1.contains("bind_radix_hyrax_replay_after_materialization_v2"));
+    assert!(!PRODUCTION_SOURCE_V1.contains("into_radix_hyrax_bound_replay_v2"));
 }

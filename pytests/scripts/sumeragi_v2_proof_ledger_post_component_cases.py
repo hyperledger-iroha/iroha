@@ -4681,6 +4681,16 @@ def test_selected_serve_liveness_items_survive_individual_digest_refresh(
     items = selected_items(source)
     assert len(items) == 1
     item = items[0]
+    if source_kind == "worker" and item.source.count(old) == 0:
+        # The reviewed worker fixture moved from a nested inline module into
+        # one include provider, removing exactly one four-space indent level.
+        def extracted_provider_text(value: str) -> str:
+            return "".join(
+                line[4:] if line.startswith("    ") else line
+                for line in value.splitlines(keepends=True)
+            )
+
+        old, new = extracted_provider_text(old), extracted_provider_text(new)
     assert item.source.count(old) == 1, (seal_key, old)
     mutated_item = item.source.replace(old, new, 1)
     assert source.count(item.source) == 1, seal_key

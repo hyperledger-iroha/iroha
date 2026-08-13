@@ -273,8 +273,9 @@ fn group_major_beta_unit_and_q_boundaries_are_exact() {
 }
 
 #[test]
-fn one_snapshot_geometry_exposes_the_current_honest_blocker() {
+fn one_snapshot_geometry_uses_only_the_exact_purpose_specific_cap_exception() {
     assert_eq!(PLANE_COUNT_V1, 9_291);
+    assert_eq!(COMMITMENT_MASKS_V1, 9_291);
     assert_eq!(SNAPSHOT_SLOTS_PER_PLANE_V1, 33);
     assert_eq!(SNAPSHOT_SLOT_COUNT_V1, 306_603);
     assert_eq!(RETAINED_VALUE_BYTES_V1, 4_871_159_808);
@@ -285,12 +286,41 @@ fn one_snapshot_geometry_exposes_the_current_honest_blocker() {
     assert_eq!(SNAPSHOT_PADDED_PLAINTEXT_BYTES_V1, 5_023_383_552);
     assert_eq!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1, 4_905_648);
     assert_eq!(SNAPSHOT_FILE_BYTES_V1, 5_028_289_200);
+    assert_eq!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1, 1_198_764_720);
     assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
     assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
+    assert_eq!(
+        SNAPSHOT_SLOT_COUNT_V1,
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1
+    );
+    assert_eq!(
+        SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1,
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1
+    );
+    assert_eq!(
+        SNAPSHOT_FILE_BYTES_V1,
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1
+    );
+    let context = plane_context_digest_v1(source_axes_v1()).unwrap();
+    let layout = approved_snapshot_layout_v1(context).unwrap();
+    assert_eq!(layout.slot_count_v1(), SNAPSHOT_SLOT_COUNT_V1);
+    assert_eq!(layout.plaintext_len_v1(), SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1);
+    assert_eq!(layout.file_len_v1(), SNAPSHOT_FILE_BYTES_V1);
+    assert_eq!(
+        approved_snapshot_layout_v1([0; 32]),
+        Err(PlaneOpeningErrorV1::Resource)
+    );
     assert!(
         SNAPSHOT_LAYOUT_LANGUAGE_V1
             .windows(b"one-authenticated-confidential-snapshot".len())
             .any(|window| window == b"one-authenticated-confidential-snapshot")
+    );
+    assert!(
+        COMMITMENT_LANGUAGE_V1
+            .windows(b"commitment-mask[plane]=blinding[plane];mask-order=plane-order".len())
+            .any(|window| {
+                window == b"commitment-mask[plane]=blinding[plane];mask-order=plane-order"
+            })
     );
     assert!(
         SNAPSHOT_LAYOUT_LANGUAGE_V1
@@ -302,7 +332,7 @@ fn one_snapshot_geometry_exposes_the_current_honest_blocker() {
             .windows(b"shard".len())
             .any(|window| window == b"shard")
     );
-    assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && !CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
 }
 
 #[test]
@@ -513,7 +543,6 @@ fn production_source_and_release_guards_are_static() {
     assert!(!KAT_ORDINALS_CHANGED_V1);
     for gate in [
         CURRENT_UPSTREAM_COMPLETE_V1,
-        CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1,
         PLANE_OPENING_MATERIALIZED_V1,
         VECTOR_ARITHMETIC_PROOFS_WIRED_V1,
         VECTOR_ARITHMETIC_PROOFS_VERIFIED_V1,
@@ -525,4 +554,5 @@ fn production_source_and_release_guards_are_static() {
     ] {
         assert!(!gate);
     }
+    assert!(CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
 }

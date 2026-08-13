@@ -6,32 +6,13 @@
 //! sidecar. Restart may observe Kura/WSV already at the decided height while
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    block::{
-        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
-        consensus::{
-            LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1,
-            SumeragiLanePayloadOwnership,
-        },
-        consensus_v2 as wire,
-    },
-    events::EventBox,
-    merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
-    transaction::SignedTransaction,
-};
-use iroha_primitives::time::TimeSource;
-use norito::codec::Encode;
-use thiserror::Error;
+#![cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "recovered-apply witnesses remain test-sealed until cutover"
+    )
+)]
 use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
@@ -98,6 +79,32 @@ use crate::{
         MergeLedgerCommitError, MergeLedgerPublicationMode, State, StateBlockCommitAuthorization,
     },
 };
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    block::{
+        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
+        consensus::{
+            LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1,
+            SumeragiLanePayloadOwnership,
+        },
+        consensus_v2 as wire,
+    },
+    events::EventBox,
+    merge::MergeLedgerEntry,
+    nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
+    transaction::SignedTransaction,
+};
+use iroha_primitives::time::TimeSource;
+use norito::codec::Encode;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use thiserror::Error;
 /// Fail-closed error while consuming or recovering durable lane reservations.
 #[derive(Debug, Error)]
 pub(crate) enum V2ReservationLifecycleError {

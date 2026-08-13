@@ -1,10 +1,3 @@
-use std::{collections::BTreeSet, num::NonZeroU64};
-use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature, SignatureOf};
-use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock},
-    peer::PeerId,
-};
-use tempfile::TempDir;
 use super::super::{
     AdmissionDecision, AdmissionRejection, AuthenticatedLifecycleRecoveryCut, LifecycleCoordinator,
     LifecycleState, RetryAction, RolloverSnapshot, SchedulerInputs, SchedulerReadyInputs, TurnPlan,
@@ -24,6 +17,13 @@ use crate::sumeragi::{
     v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     v2_transport::authenticate_certified_body_request,
 };
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+use iroha_data_model::{
+    block::{BlockHeader, BlockSignature, SignedBlock},
+    peer::PeerId,
+};
+use std::{collections::BTreeSet, num::NonZeroU64};
+use tempfile::TempDir;
 struct Fixture {
     verified: VerifiedHeightContext,
     keys: Vec<KeyPair>,
@@ -1175,6 +1175,49 @@ fn durable_rollover_removes_the_exact_capacity_wait_payload() {
             .is_some(),
         "the sealed admission boundary retains its own rollback receipt"
     );
+    let live_cut = payload_store
+        .authenticate_current_for_lifecycle_retirement(
+            super::super::ProductionLifecycleServeRetirementAuthenticationPermitV1::for_test(),
+            &fixture.verified,
+            &fixture.keys[0],
+        )
+        .expect("authenticate admitted and wait-owned live Serve payloads");
+    let live_ledger = super::super::ledger::LifecycleLedgerV1::from_coordinator(&coordinator)
+        .expect("project the exact live finalization ledger");
+    let retained = super::super::open::authenticate_live_finalization_serve_census(
+        &fixture.verified,
+        &live_ledger,
+        &coordinator,
+        &live_cut,
+    )
+    .expect("join the exact ledger and admission-wait payload census");
+    assert_eq!(retained, BTreeSet::from([first_receipt.id()]));
+    let exact_wait_receipt = coordinator.admission_waits[&waiting_key]
+        .serve_payload_receipt
+        .expect("capacity wait owns its exact payload receipt");
+    coordinator
+        .admission_waits
+        .get_mut(&waiting_key)
+        .expect("capacity wait remains installed")
+        .serve_payload_receipt = Some(
+        exact_wait_receipt
+            .with_request_hash_for_test(HashOf::from_untyped_unchecked(Hash::new([0xE7; 32]))),
+    );
+    assert!(
+        super::super::open::authenticate_live_finalization_serve_census(
+            &fixture.verified,
+            &live_ledger,
+            &coordinator,
+            &live_cut,
+        )
+        .is_err(),
+        "a drifted wait receipt must not authenticate an unrelated pending payload"
+    );
+    coordinator
+        .admission_waits
+        .get_mut(&waiting_key)
+        .expect("capacity wait remains installed")
+        .serve_payload_receipt = Some(exact_wait_receipt);
     let cancellation = payload_store
         .persist_negative(
             first_receipt.id(),

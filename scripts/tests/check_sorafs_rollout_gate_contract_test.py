@@ -2015,28 +2015,28 @@ def test_moderation_local_snapshot_reads_have_no_empty_projection_fallback() -> 
     }
     required = {
         "handle_get_sorafs_moderation_model_registry": (
-            ("export_moderation_model_registry_snapshot", "moderation_model_registry_error_response"),
+            ("moderation_model_registry_read_view(limit)", "moderation_model_registry_error_response"),
         ),
         "handle_get_sorafs_moderation_screening_results": (
-            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+            ("moderation_screening_read_view(limit)", "moderation_screening_error_response"),
         ),
         "handle_get_sorafs_moderation_quarantine": (
-            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+            ("moderation_quarantine_read_view(limit)", "moderation_screening_error_response"),
         ),
         "handle_get_sorafs_moderation_quarantine_operator_panel": (
-            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+            ("moderation_quarantine_record(&quarantine_id)", "moderation_screening_error_response"),
             (
-                "export_moderation_quarantine_object_snapshot",
+                "moderation_quarantine_object_record(&quarantine_id)",
                 "moderation_quarantine_object_error_response",
             ),
         ),
         "handle_post_sorafs_moderation_quarantine_appeal_handoff": (
-            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+            ("moderation_quarantine_record(&quarantine_id)", "moderation_screening_error_response"),
         ),
     }
     for name, checks in required.items():
-        for export, error_mapper in checks:
-            assert export in handlers[name]
+        for source_call, error_mapper in checks:
+            assert source_call in handlers[name]
             assert f"Err(err) => return {error_mapper}(err)" in handlers[name]
 
     node = read(SORAFS_NODE_LIB_RS)
@@ -19588,7 +19588,17 @@ def test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs()
     )
     assert [phrase for phrase in required_open if phrase not in normalized] == []
     client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "repair.rs")
-    assert [marker for marker in ("mod repair;", "repair::validate_transaction_route(route, transaction)?;", "response.status() != StatusCode::OK", 'get_all("content-type")', "Some(APPLICATION_JSON)", "wrapper.len() != 2", 'Some("finalized_chain")', "RepairFinalizedStatusV1", "RepairLedgerTaskPageV1", "RepairFinalizedTaskV1", "RepairFinalizedEventPageV1", "validate_finalized_cursor", "validate_event_successor", "previous.event_index.checked_add(1)", "page.has_more != page.next_after_task_id.is_some()", "page.has_more != page.next_after.is_some()", "REPAIR_DEFAULT_PAGE_LIMIT_V1: u32 = 50", "limit.unwrap_or(REPAIR_DEFAULT_PAGE_LIMIT_V1)", "repair::validate_status_response(response, finalized)", "repair::validate_tasks_response(response, filter)", "repair::validate_task_response(response, &ticket_id.0, finalized)", "repair::validate_events_response(response, filter)", "repair_route_validation_accepts_every_exact_instruction", "repair_route_validation_rejects_mismatch_and_wrong_action_before_http", "repair_route_validation_rejects_non_native_and_non_singleton_before_http", "repair_read_response_binding_accepts_exact_typed_wrappers", "repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches", "repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_task_page_response_binding_rejects_omitted_limit_over_torii_default", "repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_event_page_response_binding_rejects_omitted_limit_over_torii_default", "repair_event_page_response_binding_rejects_noncanonical_block_index_successors", "repair_read_response_binding_preserves_every_non_ok_response", "repair_read_methods_validate_every_successful_response_after_send") if marker not in client] == []
+    shared_page_validation = read(IROHA_CLIENT_RS.parent / "client" / "reserve.rs")
+    assert [marker for marker in ("mod repair;", "repair::validate_transaction_route(route, transaction)?;", "response.status() != StatusCode::OK", 'get_all("content-type")', "Some(APPLICATION_JSON)", "wrapper.len() != 2", 'Some("finalized_chain")', "RepairFinalizedStatusV1", "RepairLedgerTaskPageV1", "RepairFinalizedTaskV1", "RepairFinalizedEventPageV1", "validate_finalized_cursor", "validate_event_successor", "previous.event_index.checked_add(1)", "super::reserve::validate_id_page(", "page.has_more != page.next_after.is_some()", "REPAIR_DEFAULT_PAGE_LIMIT_V1: u32 = 50", "limit.unwrap_or(REPAIR_DEFAULT_PAGE_LIMIT_V1)", "repair::validate_status_response(response, finalized)", "repair::validate_tasks_response(response, filter)", "repair::validate_task_response(response, &ticket_id.0, finalized)", "repair::validate_events_response(response, filter)", "repair_route_validation_accepts_every_exact_instruction", "repair_route_validation_rejects_mismatch_and_wrong_action_before_http", "repair_route_validation_rejects_non_native_and_non_singleton_before_http", "repair_read_response_binding_accepts_exact_typed_wrappers", "repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches", "repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_task_page_response_binding_rejects_omitted_limit_over_torii_default", "repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_event_page_response_binding_rejects_omitted_limit_over_torii_default", "repair_event_page_response_binding_rejects_noncanonical_block_index_successors", "repair_read_response_binding_preserves_every_non_ok_response", "repair_read_methods_validate_every_successful_response_after_send") if marker not in client] == []
+    assert [
+        marker
+        for marker in (
+            "pub(super) fn validate_id_page",
+            "if has_more != next_after.is_some()",
+            "records.last().map(&id) != Some(next)",
+        )
+        if marker not in shared_page_validation
+    ] == []
 
 
 def test_repair_docs_keep_rollout_contract_markers() -> None:
@@ -23755,7 +23765,9 @@ def test_commit_reveal_client_cli_no_show_readback_regressions_are_pinned() -> N
         "require_non_empty_path_segment(round_id, \"round_id\")",
         "no-show-plan",
         ".header(\"Accept\", APPLICATION_JSON)",
-        "sorafs_moderation_ballot_no_show_plan_targets_endpoint",
+        "sorafs_list_readbacks_target_exact_endpoints",
+        'client.get_sorafs_moderation_ballot_no_show_plan("case/401", "round 7")',
+        '"/v1/sorafs/moderation/ballots/case%2F401/round%207/no-show-plan"',
         "sorafs_moderation_ballot_no_show_plan_rejects_blank_round_id",
     )
     cli_requirements = (
@@ -24058,15 +24070,10 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
     )
     query_root = REPO_ROOT / "crates" / "iroha_data_model" / "src" / "query"
     queries = read(query_root / "mod.rs") + read(query_root / "domain_queries.rs")
-    core = read(
-        REPO_ROOT
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "smartcontracts"
-        / "isi"
-        / "sorafs_moderation.rs"
-    )
+    core_root = REPO_ROOT / "crates" / "iroha_core" / "src" / "smartcontracts" / "isi"
+    core_source = read(core_root / "sorafs_moderation.rs")
+    assert 'include!("sorafs/moderation_tail_tests.rs");' in core_source
+    core = core_source + read(core_root / "sorafs" / "moderation_tail_tests.rs")
     executor_permission = read(
         REPO_ROOT
         / "crates"
@@ -25057,12 +25064,14 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
         ),
     )
     broker_root = REPO_ROOT / "crates" / "irohad" / "src"
+    broker_source = read(broker_root / "runtime_provider_broker.rs")
+    assert 'include!("runtime_provider_broker/runtime_network_binding_tests.rs");' in broker_source
     broker = re.sub(
         r"\s+",
         "",
         "\n".join(
             (
-                read(broker_root / "runtime_provider_broker.rs"),
+                broker_source,
                 read(
                     broker_root
                     / "runtime_provider_broker"
@@ -25072,6 +25081,11 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
                     broker_root
                     / "runtime_provider_broker"
                     / "codec_signer_tests.rs"
+                ),
+                read(
+                    broker_root
+                    / "runtime_provider_broker"
+                    / "runtime_network_binding_tests.rs"
                 ),
             )
         ),

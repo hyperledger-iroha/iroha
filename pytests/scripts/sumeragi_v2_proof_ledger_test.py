@@ -23350,6 +23350,13 @@ def test_run_inner_semantics_survive_all_reviewed_alias_digest_refreshes(
     ("item_name", "old", "new", "checker_name", "expected_error"),
     (
         (
+            "try_recv_if_at_checked_classified",
+            "select_fair_v2_ingress_candidate(",
+            "select_unreviewed_v2_ingress_candidate(",
+            "leader_wire",
+            "shared strict-before-dependency fair choice",
+        ),
+        (
             "fair_v2_ingress_leader_wire_selector_projection",
             "active_carriers.first()",
             "active_carriers.last()",

@@ -2,7 +2,6 @@
 //! Integration test for the contract call endpoint.
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::too_many_lines)]
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
@@ -22,6 +21,7 @@ use iroha_data_model::{
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
 use tower::ServiceExt as _;
 fn can_modify_account_metadata(
     account: &iroha_data_model::account::AccountId,
@@ -462,6 +462,39 @@ fn contract_test_app(
             }),
         )
 }
+fn contract_test_state() -> (
+    iroha_torii::test_utils::AuthorityCreds,
+    Arc<State>,
+    Arc<Kura>,
+) {
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    (creds, state, kura)
+}
+fn contract_test_queue_and_app(
+    state: &Arc<State>,
+    kura: &Arc<Kura>,
+) -> (Arc<Queue>, iroha_data_model::ChainId, Router) {
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let queue = Arc::new(Queue::from_config(queue_cfg, events));
+    let chain_id = "chain".parse().expect("valid test chain ID");
+    #[cfg(feature = "telemetry")]
+    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
+    #[cfg(not(feature = "telemetry"))]
+    let telemetry = iroha_torii::MaybeTelemetry::disabled();
+    let app = contract_test_app(
+        Arc::clone(state),
+        Arc::clone(kura),
+        Arc::clone(&queue),
+        telemetry,
+    );
+    (queue, chain_id, app)
+}
 async fn run_contract_view(
     app: &Router,
     authority: &iroha_data_model::account::AccountId,
@@ -551,26 +584,8 @@ async fn contracts_call_enqueues_transaction() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (creds, state, kura) = contract_test_state();
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_noop_program();
     let (contract_address, code_hash_hex, abi_hash_hex) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -959,26 +974,8 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (creds, state, kura) = contract_test_state();
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let source_path = "contracts/view_trap_test.ko";
     let program = contract_view_trap_program_with_source_path(source_path);
     let (contract_address, _, _) =
@@ -1034,26 +1031,8 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (creds, state, kura) = contract_test_state();
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_view_bytes_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1142,26 +1121,8 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (creds, state, kura) = contract_test_state();
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_dispatch_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1272,26 +1233,8 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (creds, state, kura) = contract_test_state();
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_view_account_id_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1386,26 +1329,8 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (creds, state, kura) = contract_test_state();
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_configure_account_map_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1502,26 +1427,8 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (creds, state, kura) = contract_test_state();
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_declared_state_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1624,26 +1531,8 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (creds, state, kura) = contract_test_state();
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_declared_state_with_isi_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1715,12 +1604,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    let (creds, state, kura) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "minted".parse().expect("asset definition name"),
@@ -1746,20 +1630,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     .expect("register asset definition");
     seed_tx.apply();
     seed_block.commit().expect("commit seeded asset definition");
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_declared_state_with_mint_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1835,12 +1706,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    let (creds, state, kura) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "n3x_like".parse().expect("asset definition name"),
@@ -1866,20 +1732,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     .expect("register asset definition");
     seed_tx.apply();
     seed_block.commit().expect("commit seeded asset definition");
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1980,12 +1833,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         );
         return;
     }
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    let (creds, state, kura) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "n3x_burn".parse().expect("asset definition name"),
@@ -2011,20 +1859,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     .expect("register asset definition");
     seed_tx.apply();
     seed_block.commit().expect("commit seeded asset definition");
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        telemetry.clone(),
-    );
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(

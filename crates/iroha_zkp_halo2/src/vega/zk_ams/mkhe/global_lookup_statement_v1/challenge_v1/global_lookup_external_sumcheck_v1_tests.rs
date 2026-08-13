@@ -1,9 +1,9 @@
 //! Hostile-path and parity tests for the fused global-lookup suffix bridge.
-use std::path::Path;
 use super::super::super::external_sumcheck_storage_v1::{
     global_cubic_final_round_fixture_v1, global_cubic_hollow_fixture_v1,
 };
 use super::*;
+use std::path::Path;
 fn context_v1() -> GlobalLookupContextV1 {
     GlobalLookupContextV1 {
         fixed_axes_digest: [0x11; 32],
@@ -240,7 +240,7 @@ fn context_axis_and_point_splices_are_rejected_one_at_a_time() {
 }
 #[test]
 fn missing_malformed_and_fold_failure_poison_the_move_only_session() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::testing::TestDirectory::new("global-lookup-sumcheck-errors");
     let transcript = sumcheck_after_v1(HANDOFF_NEXT_SUMCHECK_V1);
     let prefix = exact_hollow_prefix_v1(&transcript, None);
     let session = GlobalLookupExternalSumcheckSessionV1::begin_v1(transcript, prefix).unwrap();
@@ -295,7 +295,7 @@ fn final_prefix_v1(
 }
 #[test]
 fn final_bridge_message_has_exact_transcript_parity_kat_and_is_terminal() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::testing::TestDirectory::new("global-lookup-sumcheck-final");
     let transcript = sumcheck_after_v1(REQUIRED_CUBIC_MESSAGES_V1 - 1);
     let prefix = final_prefix_v1(&transcript, directory.path());
     let session =
@@ -339,7 +339,7 @@ fn final_bridge_message_has_exact_transcript_parity_kat_and_is_terminal() {
 }
 #[test]
 fn real_fold_sink_failure_returns_no_message_or_reusable_owner() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::testing::TestDirectory::new("global-lookup-sumcheck-failure");
     let transcript = sumcheck_after_v1(REQUIRED_CUBIC_MESSAGES_V1 - 1);
     let prefix = final_prefix_v1(&transcript, directory.path());
     let session =

@@ -1,6 +1,6 @@
 //! Sequential final-proof replay adapter shared by B1 through B17.
-use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::CanonicalProofSectionV2;
 use super::*;
+use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::CanonicalProofSectionV2;
 pub(in super::super::super::super) struct FriLayerCanonicalProofReplayV2 {
     owner: Option<FriLayerRootedV2>,
     purpose: Option<CanonicalTreePurposeBoundV2>,

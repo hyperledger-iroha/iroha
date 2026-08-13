@@ -50,8 +50,8 @@
 //! [`ZkAmsMkheErrorV1::ReleaseUnavailable`] before inspecting attacker bytes.
 
 #![allow(dead_code)]
-use core::convert::Infallible;
 use super::{BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1, keccak256};
+use core::convert::Infallible;
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
 const SIGMA_FIXED_INDEPENDENT_COEFFICIENTS_V1: usize = RELEASE_RING_DEGREE_V1 / 2;
 const CHALLENGE_STRIDE_V1: usize = 32;

@@ -4,6 +4,12 @@
 //! authorities and manifests. The native two- and three-polynomial ciphertext
 //! owners remain `cfg(test)` reference implementations. Secret RLWE
 //! coefficients never cross the public API boundary.
+#[cfg(test)]
+use super::active_exact_binding::mint_test_state_owned_collective_secret_binding_v1;
+#[cfg(test)]
+use super::phase23_rns_link::{
+    ZkAmsPhase23NativeBgvOpeningVerifierPermitV1, ZkAmsPhase23QNativeRelationAdapterSinkV1,
+};
 use super::{
     BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, MaskedRelaxedRandomSourceV1,
     RnsPolynomial, Scalar, SecretPolynomial, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
@@ -26,12 +32,6 @@ use super::{
     packing::{ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1},
     persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
     wire::{ZkAmsMkheRnsPolynomialWireV1, governed_roster_digest},
-};
-#[cfg(test)]
-use super::active_exact_binding::mint_test_state_owned_collective_secret_binding_v1;
-#[cfg(test)]
-use super::phase23_rns_link::{
-    ZkAmsPhase23NativeBgvOpeningVerifierPermitV1, ZkAmsPhase23QNativeRelationAdapterSinkV1,
 };
 #[cfg(test)]
 use super::{
@@ -61,8 +61,7 @@ mod prepared_public_a;
     reason = "sealed sibling-only streaming capabilities share one narrow reexport seam"
 )]
 pub(super) use incremental_source::{
-    GlobalLookupCanonicalReopenSealV1, Phase23GlobalLookupSourceReopenedV1,
-    Phase23GlobalLookupSourceReplayV1, ZkAmsMkheStreamingCollectiveAutomorphismOutputV1,
+    ZkAmsMkheStreamingCollectiveAutomorphismOutputV1,
     ZkAmsMkheStreamingCollectiveCiphertextBindingV1, ZkAmsMkheStreamingCollectiveEvalAdmissionV1,
     ZkAmsMkheStreamingCollectiveEvalKeyBindingV1, ZkAmsMkheStreamingCollectiveKeyAdmissionV1,
     bind_zk_ams_mkhe_streaming_collective_eval_key_v1,
@@ -1116,6 +1115,7 @@ impl ZkAmsMkheCollectivePublicKeyV1 {
         self.profile_digest
     }
     /// Frozen estimator certificate digest.
+    #[cfg(test)]
     #[must_use]
     pub const fn security_certificate_digest(&self) -> [u8; 32] {
         self.security_certificate_digest
@@ -1154,6 +1154,7 @@ impl ZkAmsMkheCollectivePublicKeyV1 {
         self.validate(&release_profile_v1())?;
         ZkAmsMkheRnsPolynomialWireV1::new(self.collective_public_b.coefficients.clone())
     }
+    #[cfg(test)]
     pub(super) const fn parties(&self) -> &super::PartySet {
         &self.parties
     }
@@ -3478,7 +3479,6 @@ fn sample_bounded_error<R: MaskedRelaxedRandomSourceV1>(
         coefficients: core::mem::take(&mut coefficients.0),
     })
 }
-#[cfg(test)]
 fn bounded_error_polynomial(profile: &BgvProfile, error: &SecretPolynomial) -> bool {
     error.coefficients.len() == profile.ring_degree
         && error

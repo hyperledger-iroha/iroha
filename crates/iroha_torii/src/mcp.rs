@@ -11,13 +11,7 @@
 //! bodies become JSON strings, and the typed value is placed under
 //! `structuredContent`. This keeps ledger-controlled content in the data plane
 //! instead of promoting it into the MCP result's text summary.
-use std::{
-    collections::BTreeSet,
-    fmt::Write as _,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::LazyLock,
-    time::Duration,
-};
+use crate::{SharedAppState, limits, openapi};
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode, header},
@@ -31,8 +25,14 @@ use iroha_torii_shared::route_catalog::{
     HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor, RouteEffect,
 };
 use norito::json::{self, Map, Value};
+use std::{
+    collections::BTreeSet,
+    fmt::Write as _,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::LazyLock,
+    time::Duration,
+};
 use tower::ServiceExt as _;
-use crate::{SharedAppState, limits, openapi};
 mod connect_session_tools;
 mod governance_ballot_tools;
 use connect_session_tools::{build_connect_session_create_body, decode_canonical, required_string};
@@ -2878,25 +2878,220 @@ async fn dispatch_connect_session_delete(
     .await
 }
 include!("mcp/connect_status_tools.rs");
-async fn dispatch_iroha_vpn_profile(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/vpn/profile",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
+macro_rules! declare_mcp_dispatch_wrappers {
+    (
+        direct_get {
+            $( $direct_get_name:ident => $direct_get_route:literal; )*
+        }
+        object_post {
+            $( $object_post_name:ident => $object_post_route:literal; )*
+        }
+        list_query {
+            $( $list_query_name:ident => $list_query_route:literal; )*
+        }
+        query_post {
+            $( $query_post_name:ident => $query_post_route:literal; )*
+        }
+        height_get {
+            $( $height_get_name:ident => $height_get_route:literal; )*
+        }
+    ) => {
+        $(
+            async fn $direct_get_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::GET,
+                    $direct_get_route,
+                    arguments.get("headers"),
+                    Vec::new(),
+                    None,
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
+        $(
+            async fn $object_post_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                let body =
+                    build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+                let body_bytes =
+                    json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::POST,
+                    $object_post_route,
+                    arguments.get("headers"),
+                    body_bytes,
+                    Some("application/json".to_owned()),
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
+        $(
+            async fn $list_query_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                let query =
+                    collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+                let route = append_query($list_query_route.to_owned(), query.as_ref())?;
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::GET,
+                    route.as_str(),
+                    arguments.get("headers"),
+                    Vec::new(),
+                    None,
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
+        $(
+            async fn $query_post_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                let body = build_query_envelope_body(arguments)?;
+                let body_bytes =
+                    json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::POST,
+                    $query_post_route,
+                    arguments.get("headers"),
+                    body_bytes,
+                    Some("application/json".to_owned()),
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
+        $(
+            async fn $height_get_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                let height = extract_height_argument(arguments)?;
+                let mut path_args = Map::new();
+                path_args.insert("height".into(), Value::String(height));
+                let path_value = Value::Object(path_args);
+                let route = fill_path_template($height_get_route, Some(&path_value))?;
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::GET,
+                    route.as_str(),
+                    arguments.get("headers"),
+                    Vec::new(),
+                    None,
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
+    };
+}
+
+declare_mcp_dispatch_wrappers! {
+    direct_get {
+        dispatch_iroha_vpn_profile => "/v1/vpn/profile";
+        dispatch_iroha_health => "/health";
+        dispatch_iroha_status => "/status";
+        dispatch_iroha_parameters_get => "/v1/parameters";
+        dispatch_iroha_node_capabilities => "/v1/node/capabilities";
+        dispatch_iroha_node_query_projection_checkpoint => "/v1/node/query/projection/checkpoint";
+        dispatch_iroha_time_now => "/v1/time/now";
+        dispatch_iroha_sumeragi_pacemaker => "/v1/sumeragi/pacemaker";
+        dispatch_iroha_sumeragi_phases => "/v1/sumeragi/phases";
+        dispatch_iroha_da_proof_policies => "/v1/da/proof-policies";
+        dispatch_iroha_da_proof_policy_snapshot => "/v1/da/proof-policies/snapshot";
+        dispatch_iroha_runtime_abi_active => "/v1/runtime/abi/active";
+        dispatch_iroha_runtime_abi_hash => "/v1/runtime/abi/hash";
+        dispatch_iroha_runtime_metrics => "/v1/runtime/metrics";
+        dispatch_iroha_runtime_upgrades_list => "/v1/runtime/upgrades";
+        dispatch_iroha_gov_protected_namespaces_list => "/v1/gov/protected-namespaces";
+        dispatch_iroha_gov_unlocks_stats => "/v1/gov/unlocks/stats";
+        dispatch_iroha_gov_council_current => "/v1/gov/council/current";
+        dispatch_iroha_gov_citizens_count => "/v1/gov/citizens";
+        dispatch_iroha_nfts_chain_list => "/v1/nfts";
+        dispatch_iroha_rwas_chain_list => "/v1/rwas";
+    }
+    object_post {
+        dispatch_iroha_da_ingest => "/v1/da/ingest";
+        dispatch_iroha_da_commitments_list => "/v1/da/commitments";
+        dispatch_iroha_da_commitments_prove => "/v1/da/commitments/prove";
+        dispatch_iroha_da_commitments_verify => "/v1/da/commitments/verify";
+        dispatch_iroha_da_pin_intents_list => "/v1/da/pin-intents";
+        dispatch_iroha_da_pin_intents_prove => "/v1/da/pin-intents/prove";
+        dispatch_iroha_da_pin_intents_verify => "/v1/da/pin-intents/verify";
+        dispatch_iroha_runtime_upgrades_propose => "/v1/runtime/upgrades/propose";
+        dispatch_iroha_proofs_query => "/v1/proofs/query";
+        dispatch_iroha_gov_proposals_deploy_contract => "/v1/gov/proposals/deploy-contract";
+        dispatch_iroha_gov_protected_namespaces_update => "/v1/gov/protected-namespaces";
+        dispatch_iroha_aliases_resolve => "/v1/aliases/resolve";
+        dispatch_iroha_aliases_resolve_index => "/v1/aliases/resolve-index";
+        dispatch_iroha_aliases_by_account => "/v1/aliases/by-account";
+    }
+    list_query {
+        dispatch_iroha_ledger_headers => "/v1/ledger/headers";
+        dispatch_iroha_contracts_state_get => "/v1/contracts/state";
+        dispatch_iroha_accounts_list => "/v1/accounts";
+        dispatch_iroha_domains_list => "/v1/domains";
+        dispatch_iroha_subscriptions_plans_list => "/v1/subscriptions/plans";
+        dispatch_iroha_subscriptions_list => "/v1/subscriptions";
+        dispatch_iroha_asset_definitions => "/v1/assets/definitions";
+        dispatch_iroha_assets_list => "/v1/explorer/assets";
+        dispatch_iroha_nfts_list => "/v1/explorer/nfts";
+        dispatch_iroha_rwas_list => "/v1/explorer/rwas";
+        dispatch_iroha_transactions_list => "/v1/explorer/transactions";
+        dispatch_iroha_instructions_list => "/v1/explorer/instructions";
+        dispatch_iroha_blocks_list => "/v1/explorer/blocks";
+    }
+    query_post {
+        dispatch_iroha_accounts_query => "/v1/accounts/query";
+        dispatch_iroha_domains_query => "/v1/domains/query";
+        dispatch_iroha_asset_definitions_query => "/v1/assets/definitions/query";
+        dispatch_iroha_nfts_query => "/v1/nfts/query";
+        dispatch_iroha_rwas_query => "/v1/rwas/query";
+    }
+    height_get {
+        dispatch_iroha_ledger_state_root => "/v1/ledger/state/{height}";
+        dispatch_iroha_ledger_state_proof => "/v1/ledger/state-proof/{height}";
+        dispatch_iroha_bridge_finality_proof => "/v1/bridge/finality/{height}";
+        dispatch_iroha_bridge_finality_bundle => "/v1/bridge/finality/bundle/{height}";
+    }
 }
 fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
     let auth = arguments
@@ -3190,86 +3385,6 @@ async fn dispatch_iroha_vpn_receipts_list(
     )
     .await
 }
-async fn dispatch_iroha_health(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/health",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_status(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/status",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_parameters_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/parameters",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_node_capabilities(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/node/capabilities",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_node_query_projection_checkpoint_plan(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3378,148 +3493,6 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
     )
     .await
 }
-async fn dispatch_iroha_node_query_projection_checkpoint(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/node/query/projection/checkpoint",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_time_now(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/time/now",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_sumeragi_pacemaker(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/pacemaker",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_sumeragi_phases(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/phases",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_proof_policies(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/da/proof-policies",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_ingest(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/da/ingest",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_proof_policy_snapshot(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/da/proof-policies/snapshot",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_da_manifests_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3538,240 +3511,6 @@ async fn dispatch_iroha_da_manifests_get(
         arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_commitments_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/da/commitments",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_commitments_prove(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/da/commitments/prove",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_commitments_verify(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/da/commitments/verify",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_pin_intents_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/da/pin-intents",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_pin_intents_prove(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/da/pin-intents/prove",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_da_pin_intents_verify(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/da/pin-intents/verify",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_runtime_abi_active(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/runtime/abi/active",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_runtime_abi_hash(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/runtime/abi/hash",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_runtime_metrics(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/runtime/metrics",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_runtime_upgrades_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/runtime/upgrades",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_runtime_upgrades_propose(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/runtime/upgrades/propose",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -3836,78 +3575,6 @@ async fn dispatch_iroha_runtime_upgrades_action(
     )
     .await
 }
-async fn dispatch_iroha_ledger_headers(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/ledger/headers".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_ledger_state_root(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let height = extract_height_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("height".into(), Value::String(height));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/ledger/state/{height}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_ledger_state_proof(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let height = extract_height_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("height".into(), Value::String(height));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/ledger/state-proof/{height}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_ledger_block_proof(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3923,56 +3590,6 @@ async fn dispatch_iroha_ledger_block_proof(
         "/v1/ledger/block/{height}/proof/{entry_hash}",
         Some(&path_value),
     )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_bridge_finality_proof(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let height = extract_height_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("height".into(), Value::String(height));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/bridge/finality/{height}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_bridge_finality_bundle(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let height = extract_height_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("height".into(), Value::String(height));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/bridge/finality/bundle/{height}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4013,28 +3630,6 @@ async fn dispatch_iroha_proofs_get(
     )
     .await
 }
-async fn dispatch_iroha_proofs_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/proofs/query",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_gov_contract_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4053,28 +3648,6 @@ async fn dispatch_iroha_gov_contract_get(
         arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_proposals_deploy_contract(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/proposals/deploy-contract",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -4262,108 +3835,6 @@ async fn dispatch_iroha_gov_ballots_plain(
     )
     .await
 }
-async fn dispatch_iroha_gov_protected_namespaces_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/gov/protected-namespaces",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_protected_namespaces_update(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/protected-namespaces",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_unlocks_stats(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/gov/unlocks/stats",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_council_current(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/gov/council/current",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_citizens_count(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/gov/citizens",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_gov_enact(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4406,72 +3877,6 @@ async fn dispatch_iroha_gov_finalize(
         inbound_headers,
         Method::POST,
         "/v1/gov/finalize",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_aliases_resolve(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/aliases/resolve",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_aliases_resolve_index(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/aliases/resolve-index",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_aliases_by_account(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/aliases/by-account",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4570,28 +3975,6 @@ async fn dispatch_iroha_contracts_call_and_wait(
     )
     .await
 }
-async fn dispatch_iroha_contracts_state_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/contracts/state".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_contracts_post(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4608,28 +3991,6 @@ async fn dispatch_iroha_contracts_post(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_accounts_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/accounts".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -4680,28 +4041,6 @@ async fn dispatch_iroha_accounts_qr(
         arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_accounts_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/accounts/query",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -5024,28 +4363,6 @@ async fn dispatch_iroha_account_portfolio(
     )
     .await
 }
-async fn dispatch_iroha_domains_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/domains".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_domains_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5064,28 +4381,6 @@ async fn dispatch_iroha_domains_get(
         arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_domains_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/domains/query",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -5130,28 +4425,6 @@ async fn dispatch_iroha_musubi_v1(
     )
     .await
 }
-async fn dispatch_iroha_subscriptions_plans_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/subscriptions/plans".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_subscriptions_plans_create(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5167,28 +4440,6 @@ async fn dispatch_iroha_subscriptions_plans_create(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_subscriptions_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/subscriptions".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -5381,28 +4632,6 @@ async fn dispatch_iroha_subscription_action(
     )
     .await
 }
-async fn dispatch_iroha_asset_definitions(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/assets/definitions".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_asset_definitions_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5424,28 +4653,6 @@ async fn dispatch_iroha_asset_definitions_get(
         arguments.get("headers"),
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_asset_definitions_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/assets/definitions/query",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -5513,28 +4720,6 @@ async fn dispatch_iroha_asset_holders_query(
     )
     .await
 }
-async fn dispatch_iroha_assets_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/assets".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_assets_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5550,48 +4735,6 @@ async fn dispatch_iroha_assets_get(
         inbound_headers,
         Method::GET,
         route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_nfts_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/nfts".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_nfts_chain_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/nfts",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -5627,70 +4770,6 @@ async fn dispatch_iroha_nfts_get(
     )
     .await
 }
-async fn dispatch_iroha_nfts_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/nfts/query",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_rwas_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/rwas".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_rwas_chain_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/rwas",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_rwas_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5701,50 +4780,6 @@ async fn dispatch_iroha_rwas_get(
     path_args.insert("rwa_id".into(), Value::String(rwa_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/explorer/rwas/{rwa_id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_rwas_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_query_envelope_body(arguments)?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/rwas/query",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_transactions_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/transactions".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5785,28 +4820,6 @@ async fn dispatch_iroha_transactions_get(
     )
     .await
 }
-async fn dispatch_iroha_instructions_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/instructions".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_instructions_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5822,28 +4835,6 @@ async fn dispatch_iroha_instructions_get(
         "/v1/explorer/instructions/{hash}/{index}",
         Some(&path_value),
     )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_blocks_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/blocks".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,

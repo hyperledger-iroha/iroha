@@ -4,15 +4,6 @@
 //! module keeps the corresponding process-local effect values in a separate,
 //! deterministic map so planning never makes the coordinator own physical
 //! bytes or service handles.
-use std::{collections::BTreeMap, fmt, path::Path, sync::Arc};
-use iroha_config::parameters::actual::SumeragiV2Config;
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
-    peer::PeerId,
-};
-use norito::codec::Encode;
-use thiserror::Error;
 #[cfg(test)]
 use super::{AdmissionRequest, CausalRoot, LeaseId, schema::DurableBodyFrameReference};
 use super::{
@@ -54,6 +45,15 @@ use super::{
         authenticate_recovered_wal_vote_lifecycle_from_ledger_parent,
     },
 };
+use iroha_config::parameters::actual::SumeragiV2Config;
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{
+    block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
+    peer::PeerId,
+};
+use norito::codec::Encode;
+use std::{collections::BTreeMap, fmt, path::Path, sync::Arc};
+use thiserror::Error;
 /// Exact process-local carrier for one nonterminal durable Certified-Serve row.
 ///
 /// It shares the one non-decomposable authenticated payload-store replay family
@@ -213,6 +213,8 @@ impl DurableProducerTurnWork {
             && metadata.replay_authority == self.replay_authority
     }
 }
+#[cfg(test)]
+use crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership;
 use crate::sumeragi::{
     FairV2IngressDequeueDisposition, InboundBlockMessage,
     message::BlockMessage,
@@ -238,8 +240,6 @@ use crate::sumeragi::{
     },
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
-#[cfg(test)]
-use crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership;
 /// One-shot authority to split a staged recovered Decision into its cold
 /// adapter and one dedicated Apply carrier inside the exact registry install.
 pub(in crate::sumeragi) struct RecoveredDecisionApplyRegistryProjectionPermit {
@@ -1684,6 +1684,18 @@ impl fmt::Debug for DurableRecoveredLifecycleSignedBroadcastWork {
     }
 }
 impl DurableRecoveredLifecycleSignedBroadcastWork {
+    fn pairs_exact_next_sign(
+        &self,
+        next_address: ConcreteWorkAddress,
+        next_digest: LifecycleDigest,
+    ) -> bool {
+        self.paired_next_sign == Some((next_address, next_digest))
+    }
+
+    fn is_unpaired(&self) -> bool {
+        self.paired_next_sign.is_none()
+    }
+
     fn validates_at(
         &self,
         address: ConcreteWorkAddress,
@@ -1715,6 +1727,20 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
     ) -> bool {
         self.validates_at(address, installed_digest)
             && self.broadcast.matches_current_ready_record(
+                coordinator.active_context,
+                address,
+                installed_digest,
+                coordinator,
+            )
+    }
+    fn matches_current_finalization_record(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+    ) -> bool {
+        self.validates_at(address, installed_digest)
+            && self.broadcast.matches_current_finalization_record(
                 coordinator.active_context,
                 address,
                 installed_digest,

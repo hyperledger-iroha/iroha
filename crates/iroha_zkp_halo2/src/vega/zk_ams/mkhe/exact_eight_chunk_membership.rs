@@ -6,8 +6,7 @@
 //! particular, persistent-secret, RKG-ephemeral, and CPK-error evidence cannot
 //! be converted into one another and no verified membership capability alone
 //! establishes a polynomial relation.
-use core::{fmt::Debug, marker::PhantomData};
-use thiserror::Error;
+use super::ZkAmsMkhePartyIdV1;
 use crate::{
     generalized_bulletproof::ProofRandomSource,
     vega::{
@@ -22,7 +21,8 @@ use crate::{
         sponge::Keccak256,
     },
 };
-use super::ZkAmsMkhePartyIdV1;
+use core::{fmt::Debug, marker::PhantomData};
+use thiserror::Error;
 const EXACT_MEMBERSHIP_VERSION_V1: u8 = 1;
 /// Exact number of ordered proofs for one release-ring polynomial.
 pub(super) const ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1: usize = 8;
@@ -1055,7 +1055,7 @@ pub(super) fn canonical_membership_syntax_wire_fixture_for_test<
         hash.update(label);
         hash.finalize()
     };
-    let context = ExactEightChunkMembershipContextV1::new(
+    let context: ExactEightChunkMembershipContextV1<R> = ExactEightChunkMembershipContextV1::new(
         digest(b"profile"),
         digest(b"roster"),
         digest(b"key-material"),

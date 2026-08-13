@@ -1,10 +1,10 @@
 //! One-shot, purpose-bound replay capabilities for the canonical qPCS proof.
-use core::array;
+use super::prover_v2::ProverPrerequisiteErrorV2;
+use super::*;
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     CanonicalProofSectionV2, CanonicalProofTreeKindV2, ProverCanonicalProofPlanV2,
 };
-use super::prover_v2::ProverPrerequisiteErrorV2;
-use super::*;
+use core::array;
 const CANONICAL_REPLAY_PURPOSE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.qpcs.canonical-proof-replay-purpose\0";
 const CANONICAL_TREE_PURPOSE_DOMAIN_V2: &[u8] =

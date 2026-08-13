@@ -5,18 +5,6 @@
 //! independently reauthenticate it. Completed records retain only response
 //! metadata: canonical body bytes remain owned by the v2 body store and must be
 //! resolved there before a response is reconstructed.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{ErrorKind, Read, Write},
-    mem::size_of,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::block::consensus_v2 as wire;
-use norito::codec::{Decode, DecodeAll as _, Encode};
-use thiserror::Error;
 use super::{
     v2::VerifiedHeightContext,
     v2_body_store::{DurableBodyReceipt, V2BodyStore},
@@ -25,6 +13,18 @@ use super::{
         authenticate_certified_body_request_with_verified_height,
     },
 };
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::block::consensus_v2 as wire;
+use norito::codec::{Decode, DecodeAll as _, Encode};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{ErrorKind, Read, Write},
+    mem::size_of,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use thiserror::Error;
 const STORE_DIRECTORY: &str = "certified-serve-payload-v1";
 const FILE_SUFFIX: &str = ".norito";
 const TEMPORARY_FILE_SUFFIX: &str = ".norito.tmp";
@@ -840,6 +840,24 @@ pub(crate) enum CertifiedServePayloadRecoveryError {
     #[error("duplicate authenticated Certified-Serve request hash")]
     DuplicateRequestHash,
 }
+
+/// Failure while refreshing the exact live Serve census for height retirement.
+#[derive(Debug, Error)]
+pub(in crate::sumeragi) enum CertifiedServeRetirementAuthenticationErrorV1 {
+    /// The caller did not retain the exact launched service/store authority.
+    #[error("Certified-Serve retirement used a foreign lifecycle service owner")]
+    ForeignServiceOwner,
+    /// The live coordinator, ledger, admission waits, and payload cut drifted.
+    #[error("Certified-Serve retirement census is not an exact live lifecycle cut")]
+    InvalidLifecycleCensus,
+    /// The retained open store changed behind its sole process owner.
+    #[error(transparent)]
+    Store(#[from] CertifiedServePayloadStoreError),
+    /// Current durable payloads failed verified retirement authentication.
+    #[error(transparent)]
+    Recovery(#[from] CertifiedServePayloadRecoveryError),
+}
+
 /// Failure while opening or advancing the Certified-Serve payload store.
 #[derive(Debug, Error)]
 pub(crate) enum CertifiedServePayloadStoreError {
@@ -1052,6 +1070,40 @@ impl CertifiedServePayloadStoreV1 {
     pub(crate) fn instance_identity(&self) -> CertifiedServePayloadStoreInstanceIdentity {
         CertifiedServePayloadStoreInstanceIdentity(Arc::clone(&self.identity))
     }
+    /// Reauthenticate the current exact directory for lifecycle finalization.
+    ///
+    /// Unlike the immutable startup cut, this bounded scan observes mutations
+    /// made by live Certified-Serve admission and terminal settlement. The
+    /// launch-private permit proves the exact service and store remain coheld
+    /// after ingress closure and output handoff. The in-memory index must equal
+    /// the strict no-symlink directory census before any payload is trusted.
+    pub(in crate::sumeragi) fn authenticate_current_for_lifecycle_retirement(
+        &self,
+        _permit: super::v2_lifecycle_coordinator::ProductionLifecycleServeRetirementAuthenticationPermitV1,
+        verified: &VerifiedHeightContext,
+        local_signer: &KeyPair,
+    ) -> Result<
+        AuthenticatedCertifiedServePayloadRecoveryCut,
+        CertifiedServeRetirementAuthenticationErrorV1,
+    > {
+        if verified.context() != &self.context {
+            return Err(CertifiedServePayloadRecoveryError::ForeignContext.into());
+        }
+        let payloads = self.reload_payload_census_strict()?;
+        if payloads.keys().copied().collect::<BTreeSet<_>>() != self.indexed {
+            return Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch.into());
+        }
+        let authenticated = CertifiedServePayloadRecoveryCut {
+            context_id: self.context.id(),
+            height: self.context.height,
+            payloads,
+        }
+        .authenticate_for_complete_tip_retirement(verified, local_signer)
+        .map_err(CertifiedServeRetirementAuthenticationErrorV1::from)?;
+        self.validate_authenticated_cut(&authenticated)?;
+        Ok(authenticated)
+    }
+
     /// Compare this opened payload owner with one sealed lifecycle root.
     ///
     /// This fixed oracle exposes neither the root nor the indexed requests.
@@ -2395,19 +2447,19 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[cfg(feature = "bls")]
-    use std::num::NonZeroU64;
+    use crate::sumeragi::v2_chunks::encode_payload;
+    use crate::sumeragi::v2_transport::authenticate_certified_body_request;
     #[cfg(feature = "bls")]
     use iroha_crypto::SignatureOf;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     #[cfg(feature = "bls")]
     use iroha_data_model::block::{BlockSignature, SignedBlock};
     use iroha_data_model::{block::BlockHeader, peer::PeerId};
-    use tempfile::TempDir;
-    use super::*;
     #[cfg(feature = "bls")]
-    use crate::sumeragi::v2_chunks::encode_payload;
-    use crate::sumeragi::v2_transport::authenticate_certified_body_request;
+    use std::num::NonZeroU64;
+    use tempfile::TempDir;
     fn context_and_keys() -> (wire::HeightContext, Vec<KeyPair>) {
         let mut keys = (0x41_u8..=0x44)
             .map(|seed| {
@@ -2934,9 +2986,24 @@ mod tests {
             .persist_pending_with_verified_retention(&verified, &keys[0], &request)
             .expect("persist verified locally retained request");
         let outcome = CertifiedServePayloadNegativeOutcome::Rejected(19);
-        let _negative_receipt = store
+        store
             .persist_negative(pending.id(), outcome)
             .expect("persist typed negative");
+        let live_retirement = store
+            .authenticate_current_for_lifecycle_retirement(
+                crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleServeRetirementAuthenticationPermitV1::for_test(),
+                &verified,
+                &keys[0],
+            )
+            .expect("refresh the exact live retirement-only payload census");
+        assert!(matches!(
+            live_retirement
+                .get(pending.id())
+                .expect("live retirement cut contains the new terminal")
+                .state(),
+            AuthenticatedRecoveredCertifiedServePayloadState::Negative(recovered)
+                if *recovered == outcome
+        ));
         drop(store);
         let (_store, recovery) =
             CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())

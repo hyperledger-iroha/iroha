@@ -2,17 +2,16 @@
 //!
 //! This child freezes the exact ciphertext/source coordinate map and the
 //! future aggregation transcript, but deliberately constructs no relation
-//! polynomial and mints no proof, writer, snapshot, or qPCS authority.  Both
-//! inputs to its sole parent seam are uninhabited in production.  Test-only
-//! permits exercise framing without making the existing Phase-23 context seal
-//! or any release capability constructible.
+//! polynomial and mints no proof, writer, snapshot, or qPCS authority. The
+//! ordering seal at its parent seam is uninhabited in production; the separate
+//! radix/Hyrax seal is accepted only after authenticated source replay exists.
+//! Test-only permits exercise framing without making the existing Phase-23
+//! context seal or any release capability constructible.
 
 #![allow(
     dead_code,
     reason = "both production seals are intentionally uninhabited"
 )]
-use core::convert::Infallible;
-use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
 use super::super::super::super::{
     ZkAmsMkheErrorV1,
     direct_object_transport::{
@@ -25,6 +24,8 @@ use super::{
     PHASE23_MANIFEST_CAPACITY_V1, PHASE23_RECORD_COUNT_V1, PHASE23_RING_DEGREE_V1,
     ZkAmsPhase23MaterializedEncryptedSourceOwnerV1, phase23_record_position_v1,
 };
+use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
+use core::convert::Infallible;
 const SOURCE_ALGEBRA_VERSION_V2: u8 = 2;
 const SOURCE_ALGEBRA_RECORDS_V2: usize = 43;
 const SOURCE_ALGEBRA_EQUATIONS_V2: usize = 2;
@@ -128,6 +129,7 @@ pub(super) enum OrderedCiphertextBundleSealV2 {
     TestOnly,
 }
 /// Production cannot claim radix/quotient/Hyrax completion in this slice.
+/// This authority is accepted only after authenticated source replay exists.
 pub(super) enum RadixHyraxProofSealV2 {
     Production {
         packing: Infallible,
@@ -553,7 +555,6 @@ fn aggregate_schedule_digest_v2<K, P>(
 struct SourceAlgebraLiveV2<K, P> {
     owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>,
     _ordered_ciphertexts: OrderedCiphertextBundleSealV2,
-    _radix_hyrax_proof: Option<RadixHyraxProofSealV2>,
 }
 struct SourceAlgebraIngressV2<K, P> {
     live: Option<SourceAlgebraLiveV2<K, P>>,
@@ -581,8 +582,9 @@ struct SourceAlgebraPrerequisiteRecordV2 {
     release_complete: bool,
     record_digest: [u8; 32],
 }
-/// Move-only owner of the consumed Phase-23 bundle and its false-gated
-/// prerequisite record.  It has no field accessors or decomposition seam.
+/// Move-only pre-replay owner of the consumed Phase-23 bundle and its
+/// false-gated prerequisite record. It makes no radix/Hyrax claim and has no
+/// field accessors or decomposition seam.
 pub(super) struct Phase23SourceAlgebraPrerequisiteV2<K, P> {
     live: Option<SourceAlgebraLiveV2<K, P>>,
     record: SourceAlgebraPrerequisiteRecordV2,
@@ -590,9 +592,10 @@ pub(super) struct Phase23SourceAlgebraPrerequisiteV2<K, P> {
 #[path = "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1.rs"]
 mod global_lookup_source_replay_v1;
 pub(super) use global_lookup_source_replay_v1::{
-    GlobalLookupCanonicalReopenSealV1, GlobalLookupSourceOpeningEntropySealV1,
-    GlobalLookupSourceReplaySinkSealV1, Phase23GlobalLookupSourceReopenedV1,
-    Phase23GlobalLookupSourceReplayV1,
+    GlobalLookupCanonicalReopenSealV1, GlobalLookupProofSessionEntropySealV1,
+    GlobalLookupSourceReplaySinkSealV1, Phase23GlobalLookupRadixSourceCursorV2,
+    Phase23GlobalLookupSourceReopenedV1, Phase23GlobalLookupSourceReplayEvidenceV1,
+    Phase23GlobalLookupSourceReplayV1, bind_radix_hyrax_replay_after_materialization_v2,
 };
 impl<K, P> SourceAlgebraIngressV2<K, P> {
     fn begin_v2(
@@ -603,7 +606,6 @@ impl<K, P> SourceAlgebraIngressV2<K, P> {
             live: Some(SourceAlgebraLiveV2 {
                 owner,
                 _ordered_ciphertexts: ordered_ciphertexts,
-                _radix_hyrax_proof: None,
             }),
         }
     }
@@ -623,13 +625,10 @@ impl<K, P> SourceAlgebraIngressV2<K, P> {
     }
 }
 impl<K, P> SourceAlgebraPreflightV2<K, P> {
-    fn freeze_v2(
-        mut self,
-        radix_hyrax_proof: RadixHyraxProofSealV2,
-    ) -> Result<Phase23SourceAlgebraPrerequisiteV2<K, P>, ZkAmsMkheErrorV1> {
+    fn freeze_v2(mut self) -> Result<Phase23SourceAlgebraPrerequisiteV2<K, P>, ZkAmsMkheErrorV1> {
         // As above, take precedes every revalidation and every future read
         // boundary represented by this prerequisite.
-        let mut live = self
+        let live = self
             .live
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -666,7 +665,6 @@ impl<K, P> SourceAlgebraPreflightV2<K, P> {
         };
         record.record_digest = prerequisite_record_digest_v2(&record)?;
         validate_prerequisite_record_v2(&record)?;
-        live._radix_hyrax_proof = Some(radix_hyrax_proof);
         Ok(Phase23SourceAlgebraPrerequisiteV2 {
             live: Some(live),
             record,
@@ -679,9 +677,13 @@ impl<K, P> Phase23SourceAlgebraPrerequisiteV2<K, P> {
     pub(super) fn into_global_lookup_source_replay_v1(
         self,
         sink: GlobalLookupSourceReplaySinkSealV1,
-        opening_entropy: GlobalLookupSourceOpeningEntropySealV1,
-    ) -> Result<Phase23GlobalLookupSourceReplayV1<K, P>, ZkAmsMkheErrorV1> {
-        global_lookup_source_replay_v1::replay_global_lookup_source_v1(self, sink, opening_entropy)
+        proof_session_entropy: GlobalLookupProofSessionEntropySealV1,
+    ) -> Result<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>, ZkAmsMkheErrorV1> {
+        global_lookup_source_replay_v1::replay_global_lookup_source_v1(
+            self,
+            sink,
+            proof_session_entropy,
+        )
     }
 }
 fn prerequisite_record_digest_v2(
@@ -748,11 +750,10 @@ fn nonzero_digest_v2(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
 pub(super) fn consume_phase23_source_algebra_prerequisite_v2<K, P>(
     owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>,
     ordered_ciphertexts: OrderedCiphertextBundleSealV2,
-    radix_hyrax_proof: RadixHyraxProofSealV2,
 ) -> Result<Phase23SourceAlgebraPrerequisiteV2<K, P>, ZkAmsMkheErrorV1> {
     SourceAlgebraIngressV2::begin_v2(owner, ordered_ciphertexts)
         .preflight_v2()?
-        .freeze_v2(radix_hyrax_proof)
+        .freeze_v2()
 }
 #[cfg(test)]
 #[path = "incremental_source_phase23_source_algebra_tests.rs"]

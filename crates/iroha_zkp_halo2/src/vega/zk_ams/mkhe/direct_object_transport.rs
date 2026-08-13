@@ -1267,6 +1267,51 @@ where
         }
         result
     }
+    /// Perform one immutable provider read without releasing staging authority.
+    ///
+    /// The publication session and exact staged length are authenticated before
+    /// and after the read. A failed or panicking read permanently poisons this
+    /// transaction, matching the write-side fail-closed behavior.
+    pub(super) fn read_immutable_provider<R>(
+        &mut self,
+        read: impl FnOnce(&mut P) -> Result<R, ZkAmsMkheErrorV1>,
+    ) -> Result<R, ZkAmsMkheErrorV1> {
+        if self.failed {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        self.failed = true;
+        let result = self.read_immutable_provider_inner(read);
+        if result.is_ok() {
+            self.failed = false;
+        }
+        result
+    }
+    fn read_immutable_provider_inner<R>(
+        &mut self,
+        read: impl FnOnce(&mut P) -> Result<R, ZkAmsMkheErrorV1>,
+    ) -> Result<R, ZkAmsMkheErrorV1> {
+        let staging = self
+            .staging
+            .as_ref()
+            .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        if observe_direct_object_staged_len_v1(self.publisher, self.publication_identity, staging)?
+            != self.next_offset
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        ensure_direct_object_publication_identity_v1(self.publisher, self.publication_identity)?;
+        let value = read(self.publisher);
+        let stable =
+            ensure_direct_object_publication_identity_v1(self.publisher, self.publication_identity);
+        let staged_len =
+            observe_direct_object_staged_len_v1(self.publisher, self.publication_identity, staging);
+        let value = value?;
+        stable?;
+        if staged_len? != self.next_offset {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Ok(value)
+    }
     fn write_exact_inner(&mut self, source: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
         if source.is_empty() {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -1461,8 +1506,8 @@ where
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use super::*;
+    use std::sync::Arc;
     const PROVIDER_ID: [u8; 32] = [0x51; 32];
     const DRIFTED_PROVIDER_ID: [u8; 32] = [0x52; 32];
     const SNAPSHOT_ID: [u8; 32] = [0x61; 32];
@@ -2627,6 +2672,41 @@ mod tests {
         receipt.staging_token_digest[0] ^= 1;
         receipt.receipt_digest = direct_object_publication_receipt_digest(&receipt);
         assert!(receipt.validate().is_err());
+    }
+    #[test]
+    fn publication_transaction_allows_snapshot_stable_reads_between_writes() {
+        let mut store = TestCasStore::new();
+        let source = payload(37);
+        let source_receipt = publish_test_payload(
+            &mut store,
+            ZkAmsMkheDirectObjectKindV1::ProofEnvelope,
+            &source,
+        )
+        .unwrap();
+        let mut transaction = ZkAmsMkheDirectObjectPublicationTransactionV1::begin(
+            ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,
+            2,
+            &mut store,
+        )
+        .unwrap();
+        transaction.write_exact(&[0x5a]).unwrap();
+        let read_receipt = transaction
+            .read_immutable_provider(|provider| {
+                validate_zk_ams_mkhe_direct_object_v1(
+                    ZkAmsMkheDirectObjectKindV1::ProofEnvelope,
+                    source_receipt.pointer(),
+                    provider,
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            read_receipt.payload_blake3(),
+            source_receipt.pointer().payload_blake3()
+        );
+        transaction.write_exact(&[0xa5]).unwrap();
+        assert_eq!(transaction.remaining_bytes(), 0);
+        let receipt = transaction.finish().unwrap();
+        assert_eq!(receipt.pointer().payload_bytes(), 2);
     }
     #[test]
     fn publication_begin_rejects_invalid_bounds_and_zero_session_before_allocation() {

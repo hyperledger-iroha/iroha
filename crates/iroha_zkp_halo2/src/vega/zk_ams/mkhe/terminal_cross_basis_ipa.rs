@@ -12,10 +12,6 @@
 //! both first messages and the complete ordered statement before deriving the
 //! challenge.  No clear evaluation or deterministic folded witness scalar
 //! enters the wire.
-use core::{convert::Infallible, mem};
-use std::collections::BTreeSet;
-use thiserror::Error;
-use crate::generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder, multiexp};
 use super::super::super::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
     bulletproof_t256::{ZeroizingT256ScalarVecV1, ZkAmsT256BulletproofSuiteV1},
@@ -31,6 +27,10 @@ use super::{
     },
     terminal::ZkAmsPhase3PreparedTerminalOpeningsV1,
 };
+use crate::generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder, multiexp};
+use core::{convert::Infallible, mem};
+use std::collections::BTreeSet;
+use thiserror::Error;
 const BRIDGE_VERSION_V2: u8 = 2;
 const BRIDGE_ROWS_V2: usize = ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1
     + ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1;

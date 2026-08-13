@@ -3,8 +3,8 @@
 //! The three commitments are transcript material, but the vector-arithmetic
 //! proof codec is still absent.  Consequently the production seal is
 //! uninhabited and this child cannot authorize a proof or release.
-use core::convert::Infallible;
 use super::*;
+use core::convert::Infallible;
 pub(super) const COEFFICIENT_DIMENSIONS_V1: usize = 14;
 pub(super) const TAU_FIRST_ORDINAL_V1: u32 = 33;
 pub(super) const TAU_LAST_ORDINAL_V1: u32 = 46;

@@ -1,21 +1,27 @@
-use core::convert::Infallible;
-use std::path::PathBuf;
-use iroha_confidential_spool::{
-    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
-    ConfidentialSpoolWriterV1,
-};
-use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
 use super::super::super::super::super::{
     ZkAmsMkheErrorV1, global_lookup_statement_v1::global_lookup_topology_digest_v1,
 };
 use super::super::{
     PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1, PHASE23_MAIN_BLOCK_BYTES_V1, PHASE23_RECORD_COUNT_V1,
     PHASE23_SIGNED_BLOCKS_PER_WITNESS_V1, phase23_record_position_v1,
+    radix_range_v2::RadixWitnessMaterializationSealV2,
 };
-use super::{Phase23SourceAlgebraPrerequisiteV2, validate_prerequisite_record_v2};
+use super::{
+    Phase23SourceAlgebraPrerequisiteV2, RadixHyraxProofSealV2, validate_prerequisite_record_v2,
+};
+use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
+use core::convert::Infallible;
+use iroha_confidential_spool::{
+    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
+    ConfidentialSpoolWriterV1,
+};
+use std::path::PathBuf;
+#[path = "global_lookup_source_replay_v1/radix_source_cursor_v2.rs"]
+mod radix_source_cursor_v2;
+pub(in super::super) use radix_source_cursor_v2::Phase23GlobalLookupRadixSourceCursorV2;
 #[path = "global_lookup_source_replay_v1/source_openings_v1.rs"]
 mod source_openings_v1;
-pub(in super::super) use source_openings_v1::GlobalLookupSourceOpeningEntropySealV1;
+pub(in super::super) use source_openings_v1::GlobalLookupProofSessionEntropySealV1;
 pub(in crate::vega::zk_ams::mkhe) use source_openings_v1::{
     GlobalLookupCanonicalReopenSealV1, Phase23GlobalLookupSourceReopenedV1,
 };
@@ -299,7 +305,7 @@ struct SourceReplayAssemblyV1<K, P> {
 struct SourceReplayIngressV1<K, P> {
     prerequisite: Option<Phase23SourceAlgebraPrerequisiteV2<K, P>>,
     sink: Option<GlobalLookupSourceReplaySinkSealV1>,
-    opening_entropy: Option<GlobalLookupSourceOpeningEntropySealV1>,
+    proof_session_entropy: Option<GlobalLookupProofSessionEntropySealV1>,
 }
 impl<K, P> SourceReplayIngressV1<K, P> {
     fn begin_v1(mut self) -> Result<SourceReplayAssemblyV1<K, P>, ZkAmsMkheErrorV1> {
@@ -311,8 +317,8 @@ impl<K, P> SourceReplayIngressV1<K, P> {
             .sink
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        let opening_entropy = self
-            .opening_entropy
+        let proof_session_entropy = self
+            .proof_session_entropy
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
         validate_prerequisite_record_v2(&prerequisite.record)?;
@@ -341,7 +347,7 @@ impl<K, P> SourceReplayIngressV1<K, P> {
             source_receipt_digest,
             prerequisite.record.record_digest,
             context_digest,
-            opening_entropy,
+            proof_session_entropy,
             &directory,
         )?;
         let layout = ConfidentialSpoolLayoutV1::new_v1(
@@ -512,7 +518,9 @@ impl<K, P> SourceReplayAssemblyV1<K, P> {
         self.live = Some(live);
         Ok(())
     }
-    fn finish_v1(mut self) -> Result<Phase23GlobalLookupSourceReplayV1<K, P>, ZkAmsMkheErrorV1> {
+    fn finish_v1(
+        mut self,
+    ) -> Result<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>, ZkAmsMkheErrorV1> {
         let live = self
             .live
             .take()
@@ -577,7 +585,7 @@ impl<K, P> SourceReplayAssemblyV1<K, P> {
         };
         record.record_digest = replay_record_digest_v1(&record)?;
         validate_replay_record_v1(&record)?;
-        Ok(Phase23GlobalLookupSourceReplayV1 {
+        Ok(Phase23GlobalLookupSourceReplayEvidenceV1 {
             prerequisite: live.prerequisite,
             snapshot,
             openings,
@@ -615,12 +623,136 @@ struct GlobalLookupSourceReplayRecordV1 {
     release_complete: bool,
     record_digest: [u8; 32],
 }
-#[must_use = "dropping this owner closes the compact source and original prerequisite"]
+/// Opaque move-only evidence that exact authenticated source replay completed.
+/// It cannot enter the downstream source-opening path until the later
+/// radix/quotient/Hyrax authority consumes it.
+#[must_use = "dropping this evidence closes the compact source and original prerequisite"]
+pub(in super::super) struct Phase23GlobalLookupSourceReplayEvidenceV1<K, P> {
+    prerequisite: Phase23SourceAlgebraPrerequisiteV2<K, P>,
+    snapshot: ConfidentialSpoolSnapshotV1,
+    openings: GlobalLookupSourceOpeningMaterialV1,
+    record: GlobalLookupSourceReplayRecordV1,
+}
+struct ReplayRadixHyraxBindingV2<K, P> {
+    replay: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>,
+    materialization: Option<RadixWitnessMaterializationSealV2>,
+    radix_hyrax_proof: Option<RadixHyraxProofSealV2>,
+}
+
+/// Future internal binding requires successful compact materialization as well
+/// as replay Evidence and proof authority. No materialized-owner transition is
+/// exposed in this slice.
+pub(in super::super) fn bind_radix_hyrax_replay_after_materialization_v2<K, P>(
+    replay: Phase23GlobalLookupSourceReplayEvidenceV1<K, P>,
+    materialization: RadixWitnessMaterializationSealV2,
+    radix_hyrax_proof: RadixHyraxProofSealV2,
+) -> Result<Phase23GlobalLookupSourceReplayV1<K, P>, ZkAmsMkheErrorV1> {
+    ReplayRadixHyraxBindingV2 {
+        replay: Some(replay),
+        materialization: Some(materialization),
+        radix_hyrax_proof: Some(radix_hyrax_proof),
+    }
+    .finish_radix_hyrax_binding_v2()
+}
+
+impl<K, P> ReplayRadixHyraxBindingV2<K, P> {
+    fn finish_radix_hyrax_binding_v2(
+        mut self,
+    ) -> Result<Phase23GlobalLookupSourceReplayV1<K, P>, ZkAmsMkheErrorV1> {
+        // Consume all three move-only authorities before validation. An error
+        // or unwind drops them locally and cannot expose a retry capability.
+        let replay = self
+            .replay
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        let materialization = self
+            .materialization
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        let radix_hyrax_proof = self
+            .radix_hyrax_proof
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        validate_replay_evidence_v1(&replay)?;
+        materialization.validate_for_replay_v2(replay.record.record_digest)?;
+        let Phase23GlobalLookupSourceReplayEvidenceV1 {
+            prerequisite,
+            snapshot,
+            openings,
+            record,
+        } = replay;
+        Ok(Phase23GlobalLookupSourceReplayV1 {
+            prerequisite,
+            snapshot,
+            openings,
+            record,
+            _radix_witness_materialization: materialization,
+            _radix_hyrax_proof: radix_hyrax_proof,
+        })
+    }
+    #[cfg(test)]
+    fn panic_after_authority_take_for_test_v2(&mut self) {
+        let _replay = self.replay.take().expect("authenticated replay evidence");
+        let _materialization = self
+            .materialization
+            .take()
+            .expect("radix witness materialization authority");
+        let _radix_hyrax_proof = self
+            .radix_hyrax_proof
+            .take()
+            .expect("radix Hyrax proof authority");
+        panic!("intentional replay authority unwind test");
+    }
+}
+fn validate_replay_evidence_v1<K, P>(
+    replay: &Phase23GlobalLookupSourceReplayEvidenceV1<K, P>,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    validate_prerequisite_record_v2(&replay.prerequisite.record)?;
+    validate_replay_record_v1(&replay.record)?;
+    replay.openings.validate_v1()?;
+    let owner = replay
+        .prerequisite
+        .live
+        .as_ref()
+        .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+    owner.owner.validate_v1()?;
+    let source_receipt_digest = owner.owner.source.receipt_v1().receipt_digest_v1();
+    let topology_digest = global_lookup_topology_digest_v1();
+    let plane_mapping_digest = exact_mapping_digest_v1()?;
+    let axes = SourceReplayContextAxesV1 {
+        source_receipt_digest,
+        prerequisite_record_digest: replay.prerequisite.record.record_digest,
+        source_formula_digest: replay.prerequisite.record.formula_digest,
+        source_mapping_digest: replay.prerequisite.record.mapping_digest,
+        ordered_bundle_root: replay.prerequisite.record.ordered_bundle_root,
+        source_lineage_root: replay.prerequisite.record.source_lineage_root,
+        output_lineage_root: replay.prerequisite.record.output_lineage_root,
+        preflight_digest: replay.prerequisite.record.preflight_digest,
+        aggregate_schedule_digest: replay.prerequisite.record.aggregate_schedule_digest,
+    };
+    if replay.record.source_receipt_digest != source_receipt_digest
+        || replay.record.prerequisite_record_digest != replay.prerequisite.record.record_digest
+        || replay.record.topology_digest != topology_digest
+        || replay.record.plane_mapping_digest != plane_mapping_digest
+        || replay.record.spool_context_digest
+            != spool_context_digest_v1(axes, plane_mapping_digest, topology_digest)?
+        || replay.snapshot.slot_count_v1() != COMPACT_PLANE_COUNT_V1 as u64
+        || replay.snapshot.plaintext_len_v1() != COMPACT_PLANE_BYTES_V1
+        || replay.snapshot.file_len_v1() != COMPACT_SPOOL_FILE_BYTES_V1
+        || *replay.snapshot.snapshot_digest_v1() != replay.record.snapshot_root
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+#[must_use = "dropping this owner closes the proof-bound replay and original prerequisite"]
 pub(in crate::vega::zk_ams::mkhe) struct Phase23GlobalLookupSourceReplayV1<K, P> {
     prerequisite: Phase23SourceAlgebraPrerequisiteV2<K, P>,
     snapshot: ConfidentialSpoolSnapshotV1,
     openings: GlobalLookupSourceOpeningMaterialV1,
     record: GlobalLookupSourceReplayRecordV1,
+    _radix_witness_materialization: RadixWitnessMaterializationSealV2,
+    _radix_hyrax_proof: RadixHyraxProofSealV2,
 }
 fn replay_record_digest_v1(
     record: &GlobalLookupSourceReplayRecordV1,
@@ -731,12 +863,12 @@ fn require_nonzero_v1(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
 pub(super) fn replay_global_lookup_source_v1<K, P>(
     prerequisite: Phase23SourceAlgebraPrerequisiteV2<K, P>,
     sink: GlobalLookupSourceReplaySinkSealV1,
-    opening_entropy: GlobalLookupSourceOpeningEntropySealV1,
-) -> Result<Phase23GlobalLookupSourceReplayV1<K, P>, ZkAmsMkheErrorV1> {
+    proof_session_entropy: GlobalLookupProofSessionEntropySealV1,
+) -> Result<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>, ZkAmsMkheErrorV1> {
     let mut assembly = SourceReplayIngressV1 {
         prerequisite: Some(prerequisite),
         sink: Some(sink),
-        opening_entropy: Some(opening_entropy),
+        proof_session_entropy: Some(proof_session_entropy),
     }
     .begin_v1()?;
     for record in 0..PHASE23_RECORD_COUNT_V1 {

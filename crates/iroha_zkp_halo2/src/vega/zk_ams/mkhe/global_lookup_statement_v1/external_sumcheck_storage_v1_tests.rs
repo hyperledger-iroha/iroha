@@ -159,7 +159,7 @@ fn independent_literal_frames_pin_mapping_manifest_and_role_contexts() {
 }
 #[test]
 fn tiny_authenticated_pair_roundtrip_and_two_folds_are_exact() {
-    let directory = tempfile::tempdir().expect("tempdir");
+    let directory = crate::testing::TestDirectory::new("external-sumcheck-storage-roundtrip");
     let public = [0x33; 32];
     let mut initial = begin_initial_pair_v1(
         public,
@@ -256,7 +256,7 @@ fn malformed_padding_order_message_and_challenge_fail_closed() {
         validate_message_v1(&bad_message),
         Err(ExternalStorageErrorV1::Encoding)
     );
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::testing::TestDirectory::new("external-sumcheck-storage-invalid");
     let mut initial = begin_initial_pair_v1(
         [7; 32],
         InitialProducerSealV1::TestOnly {

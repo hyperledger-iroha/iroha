@@ -15,9 +15,9 @@
 //! derive the post-root points, and freeze the opening-quotient root. Batching,
 //! FRI, cross-field binding, and proof emission remain absent; every
 //! completion gate remains false.
+use super::*;
 use core::{convert::Infallible, fmt, sync::atomic};
 use std::path::Path;
-use super::*;
 const MASK_SAMPLE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.mask-sample.external-entropy\0";
 const MASK_SAMPLE_ATTEMPTS_V2: u16 = 256;

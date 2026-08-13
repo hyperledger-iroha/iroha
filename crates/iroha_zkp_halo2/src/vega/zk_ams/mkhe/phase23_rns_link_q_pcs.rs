@@ -45,17 +45,15 @@
 //! still accepts only two batch rows, and no production uniform sampler,
 //! source link, ten-row prover, or wire integration exists.
 //! All qualification booleans below consequently remain false.
-use core::fmt;
-use crate::vega::sponge::{keccak256, shake256};
 use super::super::manifest::{
     RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, release_profile_v1,
 };
 use super::super::{ZkAmsMkheErrorV1, is_prime_u64};
+use crate::vega::sponge::{keccak256, shake256};
+use core::fmt;
 #[cfg(test)]
 #[path = "phase23_rns_link_q_pcs_masking.rs"]
 mod masking;
-#[path = "phase23_rns_link_q_pcs_spool.rs"]
-mod spool;
 #[path = "phase23_rns_link_q_pcs_v2_soundness.rs"]
 mod v2_soundness;
 const PCS_VERSION_V1: u8 = 1;
@@ -205,8 +203,7 @@ fn zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
     let mut minimum_base_two_adicity = u32::MAX;
     let mut minimum_extension_two_adicity = u32::MAX;
     for (limb, &modulus) in RELEASE_MODULI_V1.iter().enumerate() {
-        if modulus < 3
-            || modulus >= 1_u64 << 62
+        if !(3..(1_u64 << 62)).contains(&modulus)
             || modulus.is_multiple_of(2)
             || !is_prime_u64(modulus)
             || RELEASE_MODULI_V1[..limb].contains(&modulus)
@@ -360,8 +357,7 @@ struct Fq2ParametersV1 {
 }
 impl Fq2ParametersV1 {
     fn derive(modulus: u64, domain_log: usize) -> Result<Self, QPcsErrorV1> {
-        if modulus < 3
-            || modulus >= 1_u64 << 62
+        if !(3..(1_u64 << 62)).contains(&modulus)
             || modulus.is_multiple_of(2)
             || !is_prime_u64(modulus)
             || domain_log == 0
@@ -1031,6 +1027,10 @@ fn q_pcs_parameter_digest_v1(
     }
     Ok(keccak256(&frame))
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed Merkle leaf axes remain explicit to preserve canonical hash framing"
+)]
 fn merkle_leaf_hash_v1(
     parameter_digest: [u8; 32],
     kind: MerkleLayerKindV1,
@@ -1239,6 +1239,10 @@ fn canonical_indices_v1(indices: &[usize], length: usize) -> Result<Vec<usize>, 
     }
     Ok(canonical)
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed multiproof axes remain explicit to preserve canonical verification order"
+)]
 fn verify_merkle_multi_proof_v1(
     expected_root: [u8; 32],
     parameter_digest: [u8; 32],
@@ -1420,15 +1424,18 @@ fn fold_cross_limb_layer_v1(
             1_u128 << (u32::from(field.domain_log) - layer_log),
         );
         let mut x = Fq2V1::ONE;
-        for index in 0..half {
+        for (index, _) in current.columns[limb * BATCH_ROWS_V1][..half]
+            .iter()
+            .enumerate()
+        {
             let inverse_two_x = field.scale(field.inverse(x)?, two_inverse[limb]);
-            for row in 0..BATCH_ROWS_V1 {
+            for (row, &alpha) in alphas[limb].iter().enumerate() {
                 let coordinate = limb * BATCH_ROWS_V1 + row;
                 let positive = current.columns[coordinate][index];
                 let negative = current.columns[coordinate][index + half];
                 let even = field.scale(field.add(positive, negative), two_inverse[limb]);
                 let odd = field.mul(field.sub(positive, negative), inverse_two_x);
-                columns[coordinate][index] = field.add(even, field.mul(alphas[limb][row], odd));
+                columns[coordinate][index] = field.add(even, field.mul(alpha, odd));
             }
             x = field.mul(x, root);
         }
@@ -1690,7 +1697,7 @@ fn verify_cross_limb_fri_v1(
         derive_common_query_positions_v1(transcript, query_count, initial_length)?;
     let mut query_positions = initial_queries.clone();
     let mut length = initial_length;
-    for layer in 0..proof.layer_roots.len() {
+    for (layer, layer_alphas) in all_alphas.iter().enumerate() {
         let indices = query_pair_indices_v1(&query_positions, length);
         verify_merkle_multi_proof_v1(
             proof.layer_roots[layer],
@@ -1741,7 +1748,7 @@ fn verify_cross_limb_fri_v1(
                 let x = field.pow(root, base as u128);
                 let inverse_two = mod_pow_v1(2, moduli[limb] - 2, moduli[limb]);
                 let inverse_two_x = field.scale(field.inverse(x)?, inverse_two);
-                for row in 0..BATCH_ROWS_V1 {
+                for (row, &alpha) in layer_alphas[limb].iter().enumerate() {
                     let coordinate = limb * BATCH_ROWS_V1 + row;
                     let even = field.scale(
                         field.add(positive[coordinate], negative[coordinate]),
@@ -1751,7 +1758,7 @@ fn verify_cross_limb_fri_v1(
                         field.sub(positive[coordinate], negative[coordinate]),
                         inverse_two_x,
                     );
-                    let expected = field.add(even, field.mul(all_alphas[layer][limb][row], odd));
+                    let expected = field.add(even, field.mul(alpha, odd));
                     if next_values[coordinate] != expected {
                         return Err(QPcsErrorV1::InvalidFriProof);
                     }
@@ -2019,7 +2026,7 @@ fn build_batch_layer_v1(
     for limb in 0..public.moduli.len() {
         let field = parameters[limb];
         let mut x = Fq2V1::ONE;
-        for index in 0..length {
+        for (index, _) in public.columns[2 * limb][..length].iter().enumerate() {
             let x_to_n = field.pow(x, geometry.ring_degree as u128);
             let x_to_five = field.pow(x, OPENING_REPETITIONS_V1 as u128);
             let x_to_n_plus_five = field.mul(x_to_n, x_to_five);
@@ -3060,7 +3067,11 @@ mod tests {
         assert!(source.contains(
             "#[cfg(test)]\n#[path = \"phase23_rns_link_q_pcs_masking.rs\"]\nmod masking;"
         ));
-        assert!(source.contains("#[path = \"phase23_rns_link_q_pcs_spool.rs\"]\nmod spool;"));
+        assert!(!source.contains("#[path = \"phase23_rns_link_q_pcs_spool.rs\"]\nmod spool;"));
+        assert!(
+            include_str!("phase23_rns_link_q_pcs_spool.rs")
+                .contains("const RELEASE_READY_V2: bool = false;")
+        );
         assert!(
             source.contains(
                 "#[path = \"phase23_rns_link_q_pcs_v2_soundness.rs\"]\nmod v2_soundness;"

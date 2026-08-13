@@ -18988,13 +18988,8 @@ pub mod isi {
     }
     #[cfg(test)]
     mod tests {
-        use core::num::{NonZeroU32, NonZeroU64};
-        use std::{
-            collections::{BTreeMap, BTreeSet},
-            str::FromStr,
-            sync::Arc,
-        };
         use crate::smartcontracts::triggers::set::SetReadOnly;
+        use core::num::{NonZeroU32, NonZeroU64};
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
         #[allow(unused_imports)]
@@ -19057,6 +19052,11 @@ pub mod isi {
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
+        use std::{
+            collections::{BTreeMap, BTreeSet},
+            str::FromStr,
+            sync::Arc,
+        };
         const TEST_HALO2_CIRCUIT_ID: &str = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
         const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-execution-v1";
         const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
@@ -19100,25 +19100,114 @@ pub mod isi {
             KeyPair::try_random_with_algorithm(algorithm)
                 .expect("world ISI fixture key generation for requested algorithm should succeed")
         }
-        include!("world_validation_fee_tests.rs");
-        #[test]
-        fn set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate() {
-            use iroha_data_model::parameter::{CustomParameter, CustomParameterId};
-            let state = State::new_for_testing(
+        fn blank_test_state() -> State {
+            State::new_for_testing(
                 World::default(),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
+            )
+        }
+        fn blank_state() -> State {
+            State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            )
+        }
+        macro_rules! proof_verification_fixture {
+            ($state:ident, $block:ident, $exec:ident) => {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let $state = State::new(World::default(), kura, query_handle);
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut $block = $state.block(header);
+                let $exec = Executor::default();
+            };
+        }
+        macro_rules! sccp_message {
+            ($key:ident, $instruction:ident, $payload:ident) => {
+                let $key = crate::bridge::test_sccp_outbound_message_key(&$payload);
+                let $instruction = crate::bridge::test_record_sccp_message(
+                    canonical_test_sccp_payload_bytes(&$payload),
+                );
+            };
+        }
+        macro_rules! state_transaction {
+            ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
+                let $block = new_dummy_block();
+                let mut $state_block = $state.block($block.as_ref().header());
+                let mut $stx = $state_block.transaction();
+            };
+        }
+        macro_rules! blank_test_state_transaction {
+            ($state:ident, $block:ident, $stx:ident) => {
+                let $state = blank_test_state();
+                let header = first_test_block_header();
+                let mut $block = $state.block(header);
+                let mut $stx = $block.transaction();
+            };
+            (checked $state:ident, $block:ident, $stx:ident) => {
+                let $state = blank_test_state();
+                let header = first_test_block_header_with_checked_height();
+                let mut $block = $state.block(header);
+                let mut $stx = $block.transaction();
+            };
+        }
+        macro_rules! second_height_transaction {
+            ($state:ident, $block:ident, $state_transaction:ident) => {
+                let $state = blank_test_state();
+                let header = BlockHeader::new(
+                    NonZeroU64::new(2).expect("nonzero height"),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut $block = $state.block(header);
+                let mut $state_transaction = $block.transaction();
+            };
+        }
+        macro_rules! blank_state_transaction {
+            ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
+                let $state = blank_state();
+                let $block = new_dummy_block();
+                let mut $state_block = $state.block($block.as_ref().header());
+                let mut $stx = $state_block.transaction();
+            };
+        }
+        fn first_test_block_header() -> iroha_data_model::block::BlockHeader {
+            iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            )
+        }
+        fn first_test_block_header_with_checked_height() -> iroha_data_model::block::BlockHeader {
+            iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(1).expect("nonzero height"),
                 None,
                 None,
                 None,
                 0,
                 0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            )
+        }
+        include!("world_validation_fee_tests.rs");
+        #[test]
+        fn set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate() {
+            use iroha_data_model::parameter::{CustomParameter, CustomParameterId};
+            blank_test_state_transaction!(checked state, block, stx);
             let parameter_id = CustomParameterId(
                 "ivm_gas_units_per_gas"
                     .parse()
@@ -20189,21 +20278,7 @@ pub mod isi {
         }
         #[test]
         fn direct_deploy_isi_cannot_bypass_exact_governance_admission() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             let network_id = *state_transaction.network_id();
             let contract_address =
                 ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
@@ -20294,21 +20369,7 @@ pub mod isi {
         }
         #[test]
         fn direct_runtime_upgrade_proposal_requires_the_exact_abi_target_permission() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             let network_id = *state_transaction.network_id();
             let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
             let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
@@ -20396,21 +20457,7 @@ pub mod isi {
         }
         #[test]
         fn direct_zk_ballot_isi_rejects_closed_input_bypasses_before_proof_dispatch() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             state_transaction.gov.citizenship_bond_amount = Quantity::zero();
             let permission: Permission =
                 iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot {
@@ -20500,21 +20547,7 @@ pub mod isi {
         }
         #[test]
         fn direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             let wrong_target_permission: Permission = CanSubmitGovernanceBallot {
                 referendum_id: "election-2".to_owned(),
             }
@@ -20574,21 +20607,7 @@ pub mod isi {
         #[test]
         fn create_election_rejects_noncanonical_selector_before_mutating_governance_state() {
             use iroha_executor_data_model::permission::governance::CanManageParliament;
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             state_transaction.world.account_permissions.insert(
                 ALICE_ID.clone(),
                 BTreeSet::from([Permission::from(CanManageParliament)]),
@@ -20622,21 +20641,7 @@ pub mod isi {
         }
         #[test]
         fn ballot_permission_rejects_noncanonical_selector_before_permission_lookup() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             let referendum_id = "invalid/referendum";
             state_transaction.world.account_permissions.insert(
                 ALICE_ID.clone(),
@@ -20657,21 +20662,7 @@ pub mod isi {
         }
         #[test]
         fn finalize_election_rejects_noncanonical_selector_before_state_lookup() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             state_transaction.world.account_permissions.insert(
                 ALICE_ID.clone(),
                 BTreeSet::from([Permission::from(CanEnactGovernance)]),
@@ -20697,21 +20688,7 @@ pub mod isi {
         }
         #[test]
         fn slash_and_restitution_reject_noncanonical_selectors_before_permission_lookup() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             let referendum_id = "invalid/referendum";
             state_transaction.world.account_permissions.insert(
                 ALICE_ID.clone(),
@@ -20761,21 +20738,7 @@ pub mod isi {
         }
         #[test]
         fn scoped_governance_mutation_isis_reject_wrong_targets_without_state_changes() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(
-                NonZeroU64::new(2).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            second_height_transaction!(state, block, state_transaction);
             state_transaction.gov.citizenship_bond_amount = Quantity::zero();
             state_transaction
                 .gov
@@ -20895,6 +20858,16 @@ pub mod isi {
                 "wrong-target slash and restitution must not create ledger state"
             );
         }
+        use super::*;
+        use crate::{
+            block::ValidBlock,
+            executor::Executor,
+            kura::Kura,
+            nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
+            query::store::LiveQueryStore,
+            state::{State, StateTransaction, SumeragiPolicyConfig, World},
+            zk::hash_vk,
+        };
         use iroha_executor_data_model::permission::{
             account::{AccountAliasPermissionScope, CanManageAccountAlias},
             domain::CanModifyDomainMetadata,
@@ -20906,16 +20879,6 @@ pub mod isi {
         #[allow(unused_imports)]
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
-        use super::*;
-        use crate::{
-            block::ValidBlock,
-            executor::Executor,
-            kura::Kura,
-            nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
-            query::store::LiveQueryStore,
-            state::{State, StateTransaction, SumeragiPolicyConfig, World},
-            zk::hash_vk,
-        };
         fn new_dummy_block_at_height(height: NonZeroU64) -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) =
                 checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
@@ -20974,14 +20937,8 @@ pub mod isi {
         }
         #[test]
         fn register_zk_asset_rejects_shield_without_redemption_verifier() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let state = blank_test_state();
+            state_transaction!(state, block, state_block, stx);
             let domain_id =
                 DomainId::try_new("redeemable", "universal").expect("valid test domain");
             let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -21057,12 +21014,8 @@ pub mod isi {
         }
         #[test]
         fn register_zk_asset_requires_owner_or_exact_scoped_grant() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let state = blank_test_state();
+            state_transaction!(state, block, state_block, stx);
             let domain_id =
                 DomainId::try_new("confidential", "universal").expect("valid test domain");
             let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -21194,14 +21147,8 @@ pub mod isi {
         }
         #[test]
         fn confidential_policy_transition_requires_owner_or_exact_scoped_grant() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let state = blank_test_state();
+            state_transaction!(state, block, state_block, stx);
             let domain_id = DomainId::try_new("policy", "universal").expect("valid test domain");
             let asset_definition_id = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
@@ -21348,14 +21295,8 @@ pub mod isi {
         }
         #[test]
         fn confidential_policy_transition_cap_rejects_before_mutation() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let state = blank_test_state();
+            state_transaction!(state, block, state_block, stx);
             stx.zk.policy_transition_max_per_height =
                 NonZeroU32::new(1).expect("nonzero transition cap");
             let domain_id =
@@ -21459,19 +21400,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_non_sora_origin_payloads() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
                 version: 1,
@@ -21525,22 +21454,10 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_stale_binding_route_and_cross_profile_contexts() {
-            use iroha_data_model::bridge::{SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1};
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            use iroha_data_model::bridge::{
+                SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
+            };
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let payload = sora_outbound_sccp_payload(88);
             let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
@@ -21593,27 +21510,12 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_without_verified_ivm_proof() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             stx.sccp_ivm_proved_execution_binding = None;
             let payload = sora_outbound_sccp_payload(49);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let error = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("plain SCCP recording must require a verified IVM proof");
@@ -21726,26 +21628,11 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_when_nexus_disabled() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             stx.nexus.enabled = false;
             let payload = sora_outbound_sccp_payload(50);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("SCCP outbox recording must reject when Nexus is disabled");
@@ -21757,25 +21644,10 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_missing_lane_context() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             let payload = sora_outbound_sccp_payload(47);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("SCCP outbox recording without a lane context must reject");
@@ -21787,27 +21659,12 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_missing_dataspace_context() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
             let payload = sora_outbound_sccp_payload(53);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("SCCP outbox recording without a dataspace context must reject");
@@ -21819,19 +21676,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_dataspace_mismatch_for_active_lane() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
@@ -21839,10 +21684,7 @@ pub mod isi {
             stx.current_dataspace_id = Some(wrong_dataspace);
             stx.world.current_dataspace_id = Some(wrong_dataspace);
             let payload = sora_outbound_sccp_payload(54);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
                 "SCCP outbox recording must reject stale routing dataspace for an active lane",
             );
@@ -21854,19 +21696,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_recreated_lane_stale_dataspace_context() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             let recreated_lane = LaneId::new(4);
             let retired_dataspace = DataSpaceId::new(20);
@@ -21908,10 +21738,7 @@ pub mod isi {
             stx.current_dataspace_id = Some(retired_dataspace);
             stx.world.current_dataspace_id = Some(retired_dataspace);
             let payload = sora_outbound_sccp_payload(68);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
                 "SCCP outbox recording must reject a recreated lane with stale dataspace context",
             );
@@ -21925,29 +21752,14 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_inconsistent_world_dataspace_context() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::new(7));
             let payload = sora_outbound_sccp_payload(55);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
                 "SCCP outbox recording must reject inconsistent transaction/world dataspaces",
             );
@@ -21959,19 +21771,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_stale_geometry_lane_context() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             let stale_lane = LaneId::new(1);
             let stale_geometry_catalog = LaneCatalog::new(
                 NonZeroU32::new(2).expect("nonzero lane count"),
@@ -21992,10 +21792,7 @@ pub mod isi {
             stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&stale_geometry_catalog);
             enable_sccp_recording_for_test(&mut stx, stale_lane);
             let payload = sora_outbound_sccp_payload(48);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("stale lane geometry must not authorize SCCP outbox recording");
@@ -22007,9 +21804,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_future_created_autoscale_lane_context() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let state = blank_test_state();
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(6).unwrap(),
                 None,
@@ -22050,10 +21845,7 @@ pub mod isi {
             stx.nexus.lane_catalog = lane_catalog;
             enable_sccp_recording_for_test(&mut stx, future_lane);
             let payload = sora_outbound_sccp_payload(52);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
                 "future-created autoscale lane must not authorize SCCP outbox recording",
             );
@@ -22065,27 +21857,12 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_outbound_route_domain_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let mut payload = sora_outbound_sccp_payload(56);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.route_id = b"nexus:bsc:xor".to_vec();
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("outbound SCCP route id must bind to the destination domain");
@@ -22097,27 +21874,12 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_outbound_route_asset_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let mut payload = sora_outbound_sccp_payload(57);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_id = b"rose".to_vec();
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("outbound SCCP route id must bind to the asset key");
@@ -22129,28 +21891,13 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_outbound_non_text_route_id() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let mut payload = sora_outbound_sccp_payload(58);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.route_id_codec = iroha_sccp::SCCP_CODEC_EVM_ADDRESS20;
             transfer.route_id = vec![0x11; 20];
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("outbound SCCP route id aliases must be rejected");
@@ -22162,28 +21909,13 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_outbound_empty_asset_scope() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let mut payload = sora_outbound_sccp_payload(65);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_id = b"xor#".to_vec();
             transfer.route_id = b"nexus:eth:xor".to_vec();
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("outbound SCCP asset_id aliases with empty scope must reject");
@@ -22195,28 +21927,13 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_outbound_scoped_asset_alias() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let mut payload = sora_outbound_sccp_payload(67);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_id = b"xor#universal".to_vec();
             transfer.route_id = b"nexus:eth:xor".to_vec();
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("outbound SCCP scoped asset aliases must reject");
@@ -22228,28 +21945,13 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_cross_domain_outbound_asset_home() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let mut payload = sora_outbound_sccp_payload(59);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_BSC;
             transfer.route_id = b"bsc:sora:xor".to_vec();
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let err = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("outbound SCCP asset home must bind to SORA or destination");
@@ -22261,29 +21963,14 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_destination_home_outbound_asset() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let mut payload = sora_outbound_sccp_payload(60);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_ETH;
             transfer.asset_id = b"weth".to_vec();
             transfer.route_id = b"eth:sora:weth".to_vec();
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
+            sccp_message!(key, instruction, payload);
             let error = instruction
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("first-release SCCP must reject non-SORA-home outbound assets");
@@ -22292,19 +21979,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_records_outbound_key() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             seed_sccp_test_tx_call_hash(&mut stx, 0x81);
             let payload = sora_outbound_sccp_payload(43);
@@ -22359,21 +22034,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_pending_count_limit_is_exact_and_atomic() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(checked state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             seed_sccp_test_tx_call_hash(&mut stx, 0x82);
             stx.zk.sccp.max_pending_outbound_messages =
@@ -22401,21 +22062,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_pending_payload_byte_limit_is_exact_and_atomic() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(checked state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             seed_sccp_test_tx_call_hash(&mut stx, 0x83);
             stx.zk.sccp.max_pending_outbound_messages =
@@ -22459,21 +22106,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_missing_call_hash_before_lock_or_outbox() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(checked state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             assert!(stx.tx_call_hash.is_none());
             let payload = sora_outbound_sccp_payload(148);
@@ -22495,19 +22128,8 @@ pub mod isi {
         }
         #[test]
         fn replay_sccp_message_skips_call_hash_and_transfer_transcript() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_test_state();
+            let header = first_test_block_header_with_checked_height();
             let mut block = state.block(header);
             block.replay_compatibility = true;
             let mut stx = block.transaction();
@@ -22529,21 +22151,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_corrupt_or_overflowing_usage_before_mutation() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(checked state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let payload = sora_outbound_sccp_payload(147);
             let instruction = crate::bridge::test_record_sccp_message(
@@ -22584,19 +22192,8 @@ pub mod isi {
         }
         #[test]
         fn rejected_later_instruction_rolls_back_pending_usage_custody_and_indexes() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_test_state();
+            let header = first_test_block_header_with_checked_height();
             let mut block = state.block(header);
             {
                 let mut setup = block.transaction();
@@ -22834,21 +22431,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_sender_authority_mismatch_without_lock_or_outbox() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
             let sender_asset = AssetId::new(settlement_asset.clone(), ALICE_ID.clone());
@@ -22875,21 +22458,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_non_taira_sender_discriminant_without_side_effects() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
             let sender_asset = AssetId::new(settlement_asset.clone(), ALICE_ID.clone());
@@ -22916,21 +22485,7 @@ pub mod isi {
         #[cfg(feature = "bls")]
         #[test]
         fn record_sccp_message_rejects_unsupported_controllers_before_lock_or_outbox() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
             let custody_asset = AssetId::new(settlement_asset.clone(), custody);
@@ -22992,21 +22547,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_insufficient_balance_without_partial_lock_or_outbox() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
             let sender_asset = AssetId::new(settlement_asset.clone(), ALICE_ID.clone());
@@ -23026,21 +22567,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_route_scale_incompatible_with_asset_spec() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             stx.sccp_registry =
                 crate::state::ValidatedSccpRegistryV1::try_from_wire(test_active_eth_registry())
                     .expect("active ETH registry fixture");
@@ -23074,21 +22601,7 @@ pub mod isi {
         }
         #[test]
         fn route_owner_never_aliases_its_network_bound_protocol_escrow() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             let mut registry = test_active_eth_registry();
             registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
@@ -23103,21 +22616,7 @@ pub mod isi {
         }
         #[test]
         fn sccp_route_escrow_accepts_only_owner_funding_and_rejects_ordinary_drain() {
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             let mut registry = test_active_eth_registry();
             registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
@@ -23180,19 +22679,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_duplicate_outbound_key() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             seed_sccp_test_tx_call_hash(&mut stx, 0x86);
             let instruction = crate::bridge::test_record_sccp_message(
@@ -23212,22 +22699,10 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_duplicate_reject_does_not_commit_partial_outbox_write() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let state = blank_test_state();
             let payload = sora_outbound_sccp_payload(46);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            sccp_message!(key, instruction, payload);
+            let header = first_test_block_header();
             {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
@@ -23261,22 +22736,10 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_replay_after_commit_on_different_lane() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let state = blank_test_state();
             let payload = sora_outbound_sccp_payload(45);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
-            let instruction = crate::bridge::test_record_sccp_message(
-                canonical_test_sccp_payload_bytes(&payload),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            sccp_message!(key, instruction, payload);
+            let header = first_test_block_header();
             {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
@@ -23323,9 +22786,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_hex_alias_payload_after_commit_on_different_lane() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let state = blank_test_state();
             let payload = sora_outbound_sccp_payload(51);
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
             let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
@@ -23333,14 +22794,7 @@ pub mod isi {
             let hex_alias_instruction = crate::bridge::test_record_sccp_message(
                 format!("0x{}", hex::encode(&payload_bytes)).into_bytes(),
             );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let header = first_test_block_header();
             {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
@@ -23495,11 +22949,7 @@ seiyaku GovernanceLifecycle {
             let (artifact, manifest) = governance_lifecycle_artifact();
             let code_hash = manifest.code_hash.expect("verified code hash");
             let abi_hash = manifest.abi_hash.expect("verified ABI hash");
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = blank_test_state();
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,
@@ -23554,11 +23004,7 @@ seiyaku GovernanceLifecycle {
             let (artifact, manifest) = governance_lifecycle_artifact();
             let code_hash = manifest.code_hash.expect("verified code hash");
             let abi_hash = manifest.abi_hash.expect("verified ABI hash");
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = blank_test_state();
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,
@@ -23615,11 +23061,7 @@ seiyaku GovernanceLifecycle {
             let valid_artifact_for_stub = valid_artifact.clone();
             let valid_hash = valid_manifest.code_hash.expect("verified code hash");
             let abi_hash = valid_manifest.abi_hash.expect("verified ABI hash");
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = blank_test_state();
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,
@@ -23724,19 +23166,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn contract_manifest_is_immutable_for_registered_code_hash() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             bootstrap_alice_account(&mut stx);
             let signer_one = checked_keypair_with_algorithm(Algorithm::Ed25519);
             let signer_two = checked_keypair_with_algorithm(Algorithm::Ed25519);
@@ -24347,9 +23777,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_requires_active_sns_lease_for_non_genesis_owner() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             {
                 let mut block_hashes = state.block_hashes.block();
                 block_hashes.push_for_tests(
@@ -24374,9 +23802,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn replay_allows_legacy_domain_registration_without_active_sns_lease() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             {
                 let mut block_hashes = state.block_hashes.block();
                 block_hashes.push_for_tests(
@@ -24402,9 +23828,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_in_empty_state_does_not_require_sns_lease() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -24420,12 +23844,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_in_genesis_does_not_require_sns_lease() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (authority, _) = gen_account_in("tenants");
             let domain_id: DomainId = DomainId::try_new("leased-genesis", "world").expect("domain");
             Register::domain(Domain::new(domain_id.clone()))
@@ -25131,12 +24550,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn resolve_vk_commitment_accepts_normalized_circuit_id() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_test");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
             let commitment = hash_vk(&vk_box);
@@ -25189,9 +24603,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn resolve_vk_requires_single_attachment() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let stx = state_block.transaction();
@@ -25207,12 +24619,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn resolve_ballot_and_tally_vk_reject_retired_halo2_vote_circuits() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let ballot_vk_id = VerifyingKeyId::new("halo2/ipa", "vk_ballot_ok");
             let tally_vk_id = VerifyingKeyId::new("halo2/ipa", "vk_tally_ok");
             let ballot_vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4, 5]);
@@ -25278,12 +24685,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn resolve_ballot_and_tally_vk_reject_generic_stark_role_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let backend = "stark/fri/sha256-goldilocks";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_ok");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![9, 8, 7, 6, 5]);
@@ -25353,12 +24755,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn resolve_ballot_and_tally_vk_reject_stark_role_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let backend = "stark/fri/sha256-goldilocks";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_bad");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
@@ -25418,6 +24815,20 @@ seiyaku GovernanceLifecycle {
             Register::account(new_account_in_domain(&ALICE_ID))
                 .execute(&ALICE_ID, stx)
                 .expect("register ALICE account");
+        }
+        fn grant_alice_account_permission(
+            stx: &mut StateTransaction<'_, '_>,
+            permission: &str,
+            expectation: &str,
+        ) {
+            bootstrap_alice_account(stx);
+            let permission = Permission::new(
+                permission.parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(permission, ALICE_ID.clone())
+                .execute(&ALICE_ID, stx)
+                .expect(expectation);
         }
         fn configure_universal_dataspace(stx: &mut StateTransaction<'_, '_>) {
             let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
@@ -25972,9 +25383,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_preserves_global_account_records_and_owned_foreign_nfts() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let other_domain_id: DomainId =
@@ -25986,9 +25395,7 @@ seiyaku GovernanceLifecycle {
             );
             let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::domain_unregister"));
             let dataspace = DataSpaceId::new(17);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -26086,9 +25493,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_keeps_aliases_in_same_named_foreign_dataspace() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let global_domain_id: DomainId =
                 DomainId::try_new("billing", "universal").expect("domain id parses");
             let retail_domain_id: DomainId =
@@ -26104,9 +25509,7 @@ seiyaku GovernanceLifecycle {
                 Some(AccountAliasDomain::new(retail_domain_id.name().clone())),
                 retail_dataspace,
             );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             let dataspace_catalog = DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: DataSpaceId::UNIVERSAL,
@@ -26196,15 +25599,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_removes_assets_with_definitions_in_other_domains() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId = DomainId::try_new("defs", "world").expect("domain id parses");
             let holder_domain: DomainId =
                 DomainId::try_new("holder", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register defs domain");
@@ -26260,16 +25659,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_preserves_surviving_account_foreign_ownerships() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
             let foreign_domain: DomainId =
                 DomainId::try_new("foreign", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26335,14 +25730,10 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn unregister_domain_allows_surviving_accounts_used_by_global_config_and_invalid_literals()
         {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26378,18 +25769,14 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_preserves_configured_canonical_account() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let remove_domain: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
             let retained_domain: DomainId =
                 DomainId::try_new("retained", "world").expect("domain id parses");
             let holder_domain: DomainId =
                 DomainId::try_new("holder", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(remove_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -26444,16 +25831,12 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_has_foreign_repo_agreement_state()
         {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
             let foreign_domain: DomainId =
                 DomainId::try_new("external", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26527,18 +25910,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_has_settlement_receipt() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = blank_state();
             let domain_id =
                 DomainId::try_new("cleanup", "world").expect("cleanup domain id parses");
             let foreign_domain =
                 DomainId::try_new("external", "world").expect("foreign domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26621,14 +25998,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_ignores_mismatched_public_lane_reward_record_for_domain_asset() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26680,14 +26053,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_is_governance_voting_asset() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26725,14 +26094,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_rejects_immutable_governance_lock_custody_after_config_change() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("custody", "history").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register custody domain");
@@ -26792,14 +26157,10 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_is_governance_viral_reward_asset()
         {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26837,14 +26198,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_is_oracle_reward_asset() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26880,14 +26237,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_is_nexus_fee_asset() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26923,14 +26276,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_is_nexus_staking_asset() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -26966,14 +26315,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_removes_offline_escrow_mappings_for_domain_asset_definitions() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -27029,16 +26374,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_preserves_accounts_with_active_settlement_oracle_and_offline_state() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
             let external_domain: DomainId =
                 DomainId::try_new("external", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -27238,15 +26579,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_preserves_accounts_with_active_governance_and_storage_audit_state() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let network_id = *state.network_id_ref();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -27450,14 +26787,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_removes_associated_permissions_from_accounts_and_roles() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("kingdom", "universal").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -27520,14 +26853,10 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn unregister_domain_preserves_account_target_permissions_for_surviving_accounts_and_roles()
         {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -27595,14 +26924,10 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn unregister_domain_preserves_citizen_service_permissions_for_surviving_accounts_and_roles()
          {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -27669,18 +26994,14 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_preserves_other_domain_permissions_for_same_subject() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
             let retained_domain_id: DomainId =
                 DomainId::try_new("retained", "world").expect("domain id parses");
             let holder_domain_id: DomainId =
                 DomainId::try_new("holder", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -27752,18 +27073,14 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_preserves_foreign_nft_permissions_for_surviving_accounts_and_roles() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
             let foreign_domain_id: DomainId =
                 DomainId::try_new("foreign", "world").expect("domain id parses");
             let holder_domain_id: DomainId =
                 DomainId::try_new("holder", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -27846,14 +27163,10 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_domain_clears_endorsements_and_policy() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("endorsed", "world").expect("domain id parses");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register domain");
@@ -27927,12 +27240,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_role_auto_grants_owner() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             // Bootstrap a domain and the Alice account
             bootstrap_alice_account(&mut stx);
             // Register a role with Alice as the initial owner
@@ -27981,16 +27289,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_peer_rejects_non_bls() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             // Enable BLS batching requirement so we exercise the key-type validation.
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 1;
             state.set_pipeline(pipeline);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             // Construct a peer with a non-BLS-normal key (Ed25519)
             let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
             let peer_id = crate::PeerId::new(kp.public_key().clone());
@@ -28003,12 +27307,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn unregister_peer_ignores_mismatched_public_lane_validator_rows() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = PeerId::new(keypair.public_key().clone());
             let validator = AccountId::new(keypair.public_key().clone());
@@ -28046,12 +27345,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_emits_event() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let artifact = sccp_message_artifact_for_receipt_test(
                 sccp_transfer_payload_for_receipt_test(50),
                 1,
@@ -28079,12 +27373,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn generic_bridge_proof_cannot_be_submitted_even_if_seeded_for_receipt_tests() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 2);
             let err = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -28104,14 +27393,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn generic_bridge_proof_has_no_receipt_projection() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 11);
             set_current_lane_for_test(&mut stx, LaneId::SINGLE);
             stx.world.internal_event_buf.clear();
@@ -28152,14 +27434,7 @@ seiyaku GovernanceLifecycle {
                 },
                 payload: BridgeProofPayload::SccpDestination(exact.bridge_proof),
             };
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             stx.register_sccp_proof(1, crate::state::SccpVerifierWorkV1::default())
                 .expect("reserve the only configured SCCP proof slot");
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
@@ -28213,14 +27488,7 @@ seiyaku GovernanceLifecycle {
                 },
                 payload: BridgeProofPayload::SccpDestination(exact.bridge_proof),
             };
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             stx.world
@@ -28256,14 +27524,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_rejects_missing_call_hash_without_mutation_and_retries() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(80, 7),
             );
@@ -28334,14 +27595,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_rejects_blacklisted_custody_before_proof_work() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(179, 7),
             );
@@ -28380,14 +27634,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_rejects_custody_cap_before_proof_work() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(177, 7),
             );
@@ -28435,14 +27682,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_persists_custody_transfer_control_usage() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(178, 7),
             );
@@ -28482,14 +27722,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_rejects_recipient_overflow_before_work_or_mutation() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(180, 7),
             );
@@ -28569,11 +27802,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn replay_native_transfer_skips_call_hash_and_transfer_transcript() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             state_block.replay_compatibility = true;
@@ -28613,14 +27842,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_releases_custody_atomically_and_only_once() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(81, 7),
             );
@@ -28667,14 +27889,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn proof_finalized_under_previous_anchor_settles_once_after_rotation() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             stx.zk.sccp.max_proofs_per_transaction = NonZeroU32::new(2).unwrap();
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(181, 7),
@@ -28729,14 +27944,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn trust_anchor_advance_cannot_close_below_admitted_high_water() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (_, native, registry) = native_ethereum_bridge_proof_for_test();
             stx.sccp_registry = registry;
             stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
@@ -28807,14 +28015,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn trust_anchor_advance_rejects_retained_history_overflow_without_mutation() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let mut wire = test_active_eth_registry();
             let lane = wire
                 .lanes
@@ -28903,11 +28104,7 @@ seiyaku GovernanceLifecycle {
             };
             let rotated = rotate_native_registry_for_test(registry.as_ref(), successor_anchor);
             let retired = retire_native_registry_route_for_test(rotated.as_ref(), cutoff);
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut pre_cutoff = state_block.transaction();
@@ -28948,14 +28145,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn native_proof_rejects_unknown_and_forged_historical_anchor_without_side_effects() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             stx.zk.sccp.max_proofs_per_transaction = NonZeroU32::new(2).unwrap();
             let (proof, native, registry) = native_ethereum_bridge_proof_for_test();
             let previous = native.trust_anchor;
@@ -29002,14 +28192,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_rejects_empty_custody_without_proof_or_replay() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(82, 7),
             );
@@ -29039,14 +28222,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_rejects_asset_precision_loss_without_side_effects() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(83, 7),
             );
@@ -29076,14 +28252,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_transfer_proof_rejects_non_sora_home_asset_without_release() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let mut payload = sccp_native_inbound_transfer_payload_for_test(84, 7);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_ETH;
@@ -29115,12 +28284,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_bridge_proof_records_durable_exact_lane_replay_evidence() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(194, 7),
             );
@@ -29175,12 +28339,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_bridge_proof_rejects_replay_after_retention_prunes_artifact() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(195, 7),
             );
@@ -29268,12 +28427,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn submit_native_bridge_proof_does_not_alias_same_message_id_on_another_exact_lane() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(196, 7),
             );
@@ -29328,9 +28482,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn dropped_native_bridge_transaction_rolls_back_proof_and_replay_record_atomically() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
@@ -29377,9 +28529,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_requires_same_transaction_proof() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let artifact = sccp_message_artifact_for_receipt_test(
@@ -29407,12 +28557,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_rejects_unknown_proof_hash() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             set_current_lane_for_test(&mut stx, LaneId::SINGLE);
             let receipt = bridge_receipt_for_test([0x44; 32]);
             let err = RecordBridgeReceipt::new(receipt)
@@ -29423,12 +28568,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_consumes_proof_hash_once() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let artifact = sccp_message_artifact_for_receipt_test(
                 sccp_transfer_payload_for_receipt_test(48),
                 4,
@@ -29457,12 +28597,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_rejects_missing_lane_context() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 5);
             stx.world.internal_event_buf.clear();
             let receipt = bridge_receipt_for_test(proof_hash);
@@ -29484,12 +28619,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_rejects_when_nexus_disabled() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 12);
             set_current_lane_for_test(&mut stx, LaneId::SINGLE);
             stx.nexus.enabled = false;
@@ -29513,12 +28643,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_rejects_mismatched_transaction_lane() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE, LaneId::new(7)]);
             let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 6);
             set_current_lane_for_test(&mut stx, LaneId::new(7));
@@ -29542,12 +28667,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_rejects_stale_geometry_lane_context() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let stale_lane = LaneId::new(1);
             let stale_geometry_catalog = LaneCatalog::new(
                 NonZeroU32::new(2).expect("nonzero lane count"),
@@ -29585,12 +28705,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_accepts_sccp_transfer_receipt_matching_proof() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let artifact = sccp_message_artifact_for_receipt_test(
                 sccp_transfer_payload_for_receipt_test(51),
                 5,
@@ -29720,12 +28835,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn record_bridge_receipt_allows_corrected_sccp_receipt_after_failed_validation() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let artifact = sccp_message_artifact_for_receipt_test(
                 sccp_transfer_payload_for_receipt_test(68),
                 18,
@@ -29865,12 +28975,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn sccp_outbound_proof_replay_index_detects_distinct_artifact_same_message() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let original_artifact = sccp_message_artifact_for_receipt_test(
                 sccp_transfer_payload_for_receipt_test(91),
                 41,
@@ -29960,12 +29065,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn sccp_outbound_proof_index_allows_distinct_messages_at_same_finality_height() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let first_artifact = sccp_message_artifact_for_receipt_test(
                 sccp_transfer_payload_for_receipt_test(101),
                 50,
@@ -30022,12 +29122,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_requires_permission() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30065,12 +29160,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_when_nexus_disabled() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             configure_universal_dataspace(&mut stx);
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30095,12 +29185,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_when_disabled() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             configure_universal_dataspace(&mut stx);
@@ -30125,12 +29210,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_requires_multisig_authority() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30156,12 +29236,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_unknown_lane() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30187,12 +29262,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_stale_geometry_lane() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30250,9 +29320,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_future_created_autoscale_lane() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block_at_height(NonZeroU64::new(2).expect("nonzero height"));
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -30312,12 +29380,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_unregistered_peer() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30345,12 +29408,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_peer_without_live_consensus_key() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30379,12 +29437,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_peer_outside_commit_topology() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30423,12 +29476,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30453,12 +29501,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_rejects_expiry_beyond_max_ttl() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30483,12 +29526,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_inserts_and_deduplicates() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30529,12 +29567,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_lane_relay_emergency_validators_clears_on_empty_list() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
@@ -30928,17 +29961,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn confidential_transfer_v2_accepts_canonical_envelope_metadata_before_proof_decode() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_conf_v2_canonical");
@@ -31187,12 +30211,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_accepts_idn_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let domain_id: DomainId =
                 DomainId::try_new("例え", "テスト").expect("IDN label parses");
             Register::domain(Domain::new(domain_id.clone()))
@@ -31206,12 +30225,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_requires_endorsement_when_configured() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             stx.nexus.enabled = true;
             let kp = checked_keypair();
             stx.nexus.endorsement.quorum = 1;
@@ -31278,12 +30292,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_rejects_missing_endorsement_when_quorum_set() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             stx.nexus.enabled = true;
             stx.nexus.endorsement.quorum = 1;
             let kp = checked_keypair();
@@ -31316,12 +30325,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_duplicate_does_not_persist_endorsement() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             stx.nexus.enabled = true;
             stx.nexus.endorsement.quorum = 1;
             let kp = checked_keypair();
@@ -31421,12 +30425,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_rejects_expired_endorsement() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             stx.nexus.enabled = true;
             let kp = checked_keypair();
             stx.nexus.endorsement.quorum = 1;
@@ -31485,15 +30484,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_peer_validates() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             // BLS-normal key with valid PoP
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
@@ -31513,9 +30508,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_peer_applies_key_policy_defaults() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
@@ -31582,15 +30575,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_peer_rejects_id_collision() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
@@ -31637,15 +30626,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_peer_small_validates() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             let bls_small = checked_keypair_with_algorithm(Algorithm::BlsSmall);
             let peer_id = crate::PeerId::new(bls_small.public_key().clone());
             let pop = iroha_crypto::bls_small_pop_prove(bls_small.private_key()).expect("pop");
@@ -31660,15 +30645,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_peer_small_rejected_even_with_batching() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 16; // ensure batching enabled
             state.set_pipeline(pipeline);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             let bls_small = checked_keypair_with_algorithm(Algorithm::BlsSmall);
             let peer_id = crate::PeerId::new(bls_small.public_key().clone());
             let pop = iroha_crypto::bls_small_pop_prove(bls_small.private_key()).expect("pop");
@@ -31683,15 +30664,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_peer_fails_when_bls_batch_disabled() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 0;
             state.set_pipeline(pipeline);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
@@ -31709,9 +30686,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_peer_requires_hsm_binding_when_policy_enabled() {
             let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
@@ -31771,9 +30746,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_peer_rejects_activation_before_lead_time() {
             let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
@@ -31807,9 +30780,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_peer_rejects_identifier_collisions() {
             let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
@@ -31856,12 +30827,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_accepts_canonical_soracloud_bootstrap_record() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -31949,12 +30915,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_active_soracloud_bootstrap_without_inline_key() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -31974,12 +30935,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn update_vk_rejects_soracloud_bootstrap_metadata_drift() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32015,12 +30971,7 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-stark")]
         #[test]
         fn register_vk_accepts_soracloud_fhe_stark_verifier_payload_at_production_floor() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32097,14 +31048,7 @@ seiyaku GovernanceLifecycle {
                 format!("{direct_error:?}").contains("invalid STARK payload"),
                 "unexpected Soracloud alternate-layout rejection: {direct_error:?}"
             );
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32127,12 +31071,7 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-stark")]
         #[test]
         fn register_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32169,12 +31108,7 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-stark")]
         #[test]
         fn update_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32219,14 +31153,7 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
         fn register_vk_accepts_and_stores_canonical_compiled_halo2_key() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32259,14 +31186,7 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
         fn register_vk_rejects_parseable_halo2_key_relabelled_as_ivm_execution() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32296,14 +31216,7 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
         fn update_vk_rejects_parseable_halo2_key_relabelled_as_same_circuit() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32347,14 +31260,7 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
         fn register_vk_rejects_noncanonical_fixed_halo2_parameter_degree() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32390,14 +31296,7 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-stark")]
         #[test]
         fn register_vk_rejects_tiny_stark_key_with_huge_declared_inner_length() {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32457,20 +31356,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_requires_gas_schedule() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction();
             let exec = Executor::default();
@@ -32499,20 +31386,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_inline_key_length_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction();
             let exec = Executor::default();
@@ -32542,20 +31417,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_cross_engine_backend_tag() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction();
             let exec = Executor::default();
@@ -32588,20 +31451,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_protocol_names_as_backend_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
             for (idx, backend) in UNSUPPORTED_PROTOCOL_BACKEND_LABELS
@@ -32667,12 +31518,7 @@ seiyaku GovernanceLifecycle {
                 record.gas_schedule_id = Some("halo2_default".into());
                 record
             }
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -32769,20 +31615,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_production_claim_backend_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
             for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
@@ -32826,20 +31660,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_trusted_setup_halo2_backend_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
             for backend in [
@@ -32884,20 +31706,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_developer_only_backend_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
             for (idx, (backend, tag, curve, schedule)) in [
@@ -32984,20 +31794,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_unsupported_backend_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
             for (idx, (backend, tag, curve, schedule)) in [
@@ -33114,20 +31912,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_trusted_setup_stark_backend_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
             for backend in [
@@ -33166,20 +31952,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_vk_rejects_mixed_case_stark_curve() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction();
             let exec = Executor::default();
@@ -33213,21 +31987,16 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_consensus_key_enforces_policy() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageConsensusKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageConsensusKeys",
+                    "grant manage consensus keys",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage consensus keys");
                 let params = stx.world.parameters.get().sumeragi.clone();
                 assert!(
                     params
@@ -33307,21 +32076,16 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_consensus_key_requires_hsm_when_configured() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageConsensusKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageConsensusKeys",
+                    "grant manage consensus keys",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage consensus keys");
                 let params = stx.world.parameters.get_mut();
                 params.sumeragi.key_require_hsm = true;
                 let params = stx.world.parameters.get().sumeragi.clone();
@@ -33362,21 +32126,16 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_consensus_key_rejects_disallowed_algorithm() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageConsensusKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageConsensusKeys",
+                    "grant manage consensus keys",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage consensus keys");
                 let params = stx.world.parameters.get().sumeragi.clone();
                 stx.apply();
                 params
@@ -33417,22 +32176,17 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_consensus_key_records_lifecycle_history() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             crate::sumeragi::status::reset_consensus_keys_for_tests();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageConsensusKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageConsensusKeys",
+                    "grant manage consensus keys",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage consensus keys");
                 let params = stx.world.parameters.get().sumeragi.clone();
                 stx.apply();
                 params
@@ -33475,9 +32229,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         #[allow(clippy::too_many_lines)]
         fn register_consensus_key_respects_config_allowlist_and_hsm_flag() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let sumeragi_cfg = SumeragiPolicyConfig {
                 key_require_hsm: false,
                 key_activation_lead_blocks:
@@ -33494,14 +32246,11 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageConsensusKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageConsensusKeys",
+                    "grant manage consensus keys",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage consensus keys");
                 let params = stx.world.parameters.get().sumeragi.clone();
                 stx.apply();
                 params
@@ -33611,22 +32360,17 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn rotate_consensus_key_requires_hsm_when_configured() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             crate::sumeragi::status::reset_consensus_keys_for_tests();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageConsensusKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageConsensusKeys",
+                    "grant manage consensus keys",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage consensus keys");
                 let params = stx.world.parameters.get_mut();
                 params.sumeragi.key_require_hsm = true;
                 let params = stx.world.parameters.get().sumeragi.clone();
@@ -33700,9 +32444,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         #[allow(clippy::too_many_lines)]
         fn rotate_consensus_key_allows_missing_hsm_when_optional() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let sumeragi_cfg = SumeragiPolicyConfig {
                 key_require_hsm: false,
                 key_activation_lead_blocks:
@@ -33720,14 +32462,11 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageConsensusKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageConsensusKeys",
+                    "grant manage consensus keys",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage consensus keys");
                 let params = stx.world.parameters.get().sumeragi.clone();
                 stx.apply();
                 params
@@ -33804,9 +32543,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         #[allow(clippy::too_many_lines)]
         fn register_consensus_key_rejects_empty_allowlists() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let mut state = blank_state();
             let mut sumeragi_cfg = SumeragiPolicyConfig {
                 key_require_hsm: true,
                 key_activation_lead_blocks:
@@ -33987,21 +32724,16 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn rotate_consensus_key_marks_previous_retiring() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageConsensusKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageConsensusKeys",
+                    "grant manage consensus keys",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage consensus keys");
                 let params = stx.world.parameters.get().sumeragi.clone();
                 stx.apply();
                 params
@@ -34079,12 +32811,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_parameter_updates_mutable_max_clock_drift() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             SetParameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("max clock drift is the mutable first-release Sumeragi parameter");
@@ -34097,12 +32824,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES,
                 ivm::Memory::HEAP_MAX_SIZE
             );
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             for parameter in [
                 Parameter::SmartContract(SmartContractParameter::Memory(NonZeroU64::MAX)),
                 Parameter::Executor(SmartContractParameter::Memory(NonZeroU64::MAX)),
@@ -34136,12 +32858,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_parameter_updates_host_output_limits() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             let max_items = NonZeroU64::new(19).expect("non-zero item limit");
             let max_bytes = NonZeroU64::new(65_536).expect("non-zero byte limit");
             for parameter in [
@@ -34277,9 +32994,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn set_parameter_rejects_zero_npos_reconfig_fields() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let state = blank_state();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             {
@@ -34345,12 +33060,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn malformed_manage_verifying_keys_payload_does_not_authorize_registration() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             let malformed = Permission::new(
                 "CanManageVerifyingKeys".parse().unwrap(),
@@ -34392,12 +33102,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn update_vk_rejects_circuit_identity_change_without_rewriting_index() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
@@ -34467,20 +33172,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn update_vk_rejects_non_ipa_backend() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             // Seed registry with a valid record
             let mut stx = state_block.transaction();
@@ -34541,20 +33234,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn update_vk_rejects_non_production_existing_backend_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
             for (idx, (backend, tag, curve, schedule, expected_msg)) in [
@@ -34696,20 +33377,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn update_vk_rejects_inline_key_length_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction();
             let exec = Executor::default();
@@ -34768,20 +33437,8 @@ seiyaku GovernanceLifecycle {
         #[cfg(feature = "zk-stark")]
         #[test]
         fn update_vk_rejects_mixed_case_stark_curve() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction();
             let exec = Executor::default();
@@ -34857,29 +33514,13 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn verify_proof_rejects_missing_circuit_index() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let exec = Executor::default();
             // Grant permission to manage verifying keys
             let mut stx = block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             // Register a verifying key
             let mut stx = block.transaction();
@@ -34944,28 +33585,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn verify_proof_requires_open_verify_envelope() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let exec = Executor::default();
             let mut stx = block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
@@ -35011,19 +33636,7 @@ seiyaku GovernanceLifecycle {
                 .copied()
                 .enumerate()
             {
-                let kura = Kura::blank_kura_for_testing();
-                let query_handle = LiveQueryStore::start_test();
-                let state = State::new(World::default(), kura, query_handle);
-                let header = iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(1).unwrap(),
-                    None,
-                    None,
-                    None,
-                    0,
-                    0,
-                );
-                let mut block = state.block(header);
-                let exec = Executor::default();
+                proof_verification_fixture!(state, block, exec);
                 let mut stx = block.transaction();
                 bootstrap_alice_account(&mut stx);
                 stx.apply();
@@ -35049,19 +33662,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn verify_proof_rejects_production_claim_backend_labels_before_registry_lookup() {
             for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
-                let kura = Kura::blank_kura_for_testing();
-                let query_handle = LiveQueryStore::start_test();
-                let state = State::new(World::default(), kura, query_handle);
-                let header = iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(1).unwrap(),
-                    None,
-                    None,
-                    None,
-                    0,
-                    0,
-                );
-                let mut block = state.block(header);
-                let exec = Executor::default();
+                proof_verification_fixture!(state, block, exec);
                 let mut stx = block.transaction();
                 bootstrap_alice_account(&mut stx);
                 stx.apply();
@@ -35089,19 +33690,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn verify_proof_rejects_cross_engine_record_tag() {
             for (idx, backend_tag) in [BackendTag::Stark].into_iter().enumerate() {
-                let kura = Kura::blank_kura_for_testing();
-                let query_handle = LiveQueryStore::start_test();
-                let state = State::new(World::default(), kura, query_handle);
-                let header = iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(1).unwrap(),
-                    None,
-                    None,
-                    None,
-                    0,
-                    0,
-                );
-                let mut block = state.block(header);
-                let exec = Executor::default();
+                proof_verification_fixture!(state, block, exec);
                 let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
                 let vk_commitment = hash_vk(&vk_box);
@@ -35163,17 +33752,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn verify_proof_rejects_inline_verifying_key() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let exec = Executor::default();
             let mut stx = block.transaction();
@@ -35211,28 +33791,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn verify_proof_rejects_missing_verifying_key_bytes() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let exec = Executor::default();
             let mut stx = block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
@@ -35294,28 +33858,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn verify_proof_records_invalid_cryptographic_proof_as_rejected() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let exec = Executor::default();
             let mut stx = block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
@@ -35380,28 +33928,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn verify_proof_rejects_wrong_envelope_backend_tag() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let exec = Executor::default();
             let mut stx = block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
@@ -35493,28 +34025,13 @@ seiyaku GovernanceLifecycle {
                     "verifying key is not active",
                 ),
             ] {
-                let kura = Kura::blank_kura_for_testing();
-                let query_handle = LiveQueryStore::start_test();
-                let state = State::new(World::default(), kura, query_handle);
-                let header = iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(1).unwrap(),
-                    None,
-                    None,
-                    None,
-                    0,
-                    0,
-                );
-                let mut block = state.block(header);
-                let exec = Executor::default();
+                proof_verification_fixture!(state, block, exec);
                 let mut stx = block.transaction();
-                bootstrap_alice_account(&mut stx);
-                let perm = Permission::new(
-                    "CanManageVerifyingKeys".parse().unwrap(),
-                    iroha_primitives::json::Json::new(()),
+                grant_alice_account_permission(
+                    &mut stx,
+                    "CanManageVerifyingKeys",
+                    "grant manage vk",
                 );
-                Grant::account_permission(perm, ALICE_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("grant manage vk");
                 stx.apply();
                 let mut stx = block.transaction();
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
@@ -35593,17 +34110,8 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn verify_proof_rejects_existing_proof_record() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let exec = Executor::default();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_replay_existing");
@@ -35693,19 +34201,7 @@ seiyaku GovernanceLifecycle {
                     "verifying key backend mismatch",
                 ),
             ] {
-                let kura = Kura::blank_kura_for_testing();
-                let query_handle = LiveQueryStore::start_test();
-                let state = State::new(World::default(), kura, query_handle);
-                let header = iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(1).unwrap(),
-                    None,
-                    None,
-                    None,
-                    0,
-                    0,
-                );
-                let mut block = state.block(header);
-                let exec = Executor::default();
+                proof_verification_fixture!(state, block, exec);
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
                 let vk_id = VerifyingKeyId::new(
                     "halo2/ipa",
@@ -35774,28 +34270,12 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn verify_proof_rejects_missing_gas_schedule() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let state = blank_state();
+            let header = first_test_block_header();
             let mut block = state.block(header);
             let exec = Executor::default();
             let mut stx = block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             // Register verifying key
             let mut stx = block.transaction();
@@ -35908,19 +34388,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn contract_binding_mutations_require_runtime_lifecycle_authority() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed authority");
@@ -36166,19 +34634,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn native_upload_finalization_enforces_live_cycle_ceiling_and_retains_staging() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed upload authority");
@@ -36239,19 +34695,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn commit_contract_deployment_enforces_cas_derivation_and_protected_rotation() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed deployment authority");
@@ -36505,19 +34949,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn activate_contract_instance_requires_governance_for_protected_namespace() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
+            blank_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed authority");
@@ -36572,9 +35004,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_domain_rejects_missing_endorsement_when_required() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let mut state = blank_test_state();
             state.nexus.get_mut().enabled = true;
             state.nexus.get_mut().endorsement.quorum = 1;
             state.nexus.get_mut().endorsement.committee_keys = vec!["noop".to_string()];
@@ -36604,9 +35034,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn domain_endorsement_with_valid_scope_is_recorded() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let mut state = blank_test_state();
             let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             state.nexus.get_mut().enabled = true;
@@ -36664,9 +35092,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn domain_endorsement_rejects_window_and_dataspace_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let mut state = blank_test_state();
             let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             state.nexus.get_mut().enabled = true;
             state.nexus.get_mut().endorsement.quorum = 1;
@@ -36739,11 +35165,14 @@ seiyaku GovernanceLifecycle {
     }
     /// Query module provides `IrohaQuery` Peer related implementations.
     pub mod query {
-        use std::collections::BTreeSet;
+        use super::*;
+        use crate::{
+            smartcontracts::ValidQuery,
+            state::{StateReadOnly, WorldReadOnly},
+        };
         use eyre::Result;
         use iroha_data_model::{
             parameter::Parameters,
-            prelude::*,
             proof::{ProofId, ProofRecord, ProofStatus},
             query::{
                 dsl::{CompoundPredicate, EvaluatePredicate},
@@ -36753,11 +35182,7 @@ seiyaku GovernanceLifecycle {
             role::Role,
         };
         use norito::json::Value;
-        use super::*;
-        use crate::{
-            smartcontracts::ValidQuery,
-            state::{StateReadOnly, WorldReadOnly},
-        };
+        use std::collections::BTreeSet;
         fn role_id_from_value(value: &Value) -> Option<RoleId> {
             norito::json::from_value(value.clone()).ok()
         }

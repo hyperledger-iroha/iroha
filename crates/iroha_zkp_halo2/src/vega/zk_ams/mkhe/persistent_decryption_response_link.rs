@@ -11,7 +11,6 @@
 //! Earliest hook: the CPK prover owner retains all eight `s` openings/blindings. Production lacks `C^Y` before `D`; required order is `C^s,C^Y,A_pk,A_share -> D -> Z_s -> beta -> BP`; seals are uninhabited and every gate false. This does not close persistent-decryption audit bit 7.
 
 #![allow(dead_code, reason = "production response-link seals are uninhabited")]
-use core::convert::Infallible;
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite, Variable,
@@ -23,6 +22,7 @@ use crate::{
         sponge::{Keccak256, keccak256},
     },
 };
+use core::convert::Infallible;
 const RESPONSE_LINK_VERSION_V1: u8 = 1;
 const RESPONSE_LINK_WIRE_TAG_V1: [u8; 4] = *b"ZPRL";
 const RESPONSE_LINK_WIRE_FLAGS_V1: u8 = 0;
@@ -613,17 +613,18 @@ fn validate_core_v1(core: &[u8]) -> Result<(), ResponseLinkErrorV1> {
         return Err(ResponseLinkErrorV1::ProofEncoding);
     }
     let mut cursor = 0;
-    let mut take_point = || -> Result<(), ResponseLinkErrorV1> {
-        let end = cursor + 33;
-        Point::from_non_identity_wire_bytes_exact(&core[cursor..end])
-            .map_err(|_| ResponseLinkErrorV1::PointEncoding)?;
-        cursor = end;
-        Ok(())
-    };
-    for _ in 0..41 {
-        take_point()?;
+    {
+        let mut take_point = || -> Result<(), ResponseLinkErrorV1> {
+            let end = cursor + 33;
+            Point::from_non_identity_wire_bytes_exact(&core[cursor..end])
+                .map_err(|_| ResponseLinkErrorV1::PointEncoding)?;
+            cursor = end;
+            Ok(())
+        };
+        for _ in 0..41 {
+            take_point()?;
+        }
     }
-    drop(take_point);
     for _ in 0..3 {
         let end = cursor + 32;
         let bytes: [u8; 32] = core[cursor..end]

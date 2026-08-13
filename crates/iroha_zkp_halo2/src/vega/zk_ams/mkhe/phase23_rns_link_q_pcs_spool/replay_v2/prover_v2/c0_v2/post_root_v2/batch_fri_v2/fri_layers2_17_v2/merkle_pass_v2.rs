@@ -1,9 +1,9 @@
 //! One-pass canonical multiproof emission with a bounded transposition window.
-use core::{array, sync::atomic};
+use super::*;
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     CanonicalProofSectionV2, CanonicalProofTreeKindV2, ProverCanonicalProofPlanV2,
 };
-use super::*;
+use core::{array, sync::atomic};
 const CANONICAL_LEAF_BYTES_V2: usize = 6_080;
 const CANONICAL_COLUMNS_V2: usize = 380;
 const CANONICAL_MAX_OPENED_V2: usize = 320;
@@ -419,8 +419,8 @@ const _: () = {
 };
 #[cfg(test)]
 mod tests {
-    use iroha_confidential_spool::ConfidentialSpoolChunkV1;
     use super::*;
+    use iroha_confidential_spool::ConfidentialSpoolChunkV1;
     struct VecSinkV2 {
         bytes: Vec<u8>,
         expected: usize,

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, num::NonZeroU64, sync::Arc};
+use super::*;
 use crate::sumeragi::{
     InboundBlockMessage,
     message::BlockMessage,
@@ -23,8 +23,8 @@ use iroha_data_model::{
     merge::MergeQuorumCertificate,
     peer::PeerId,
 };
+use std::{collections::VecDeque, num::NonZeroU64, sync::Arc};
 use tempfile::TempDir;
-use super::*;
 #[test]
 fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
     let mut outcome = PostFinalityCleanupOutcome::default();
@@ -230,6 +230,23 @@ impl FakeRuntime {
     }
 }
 impl EffectRuntime for FakeRuntime {
+    fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        ingress_ownership.validate_exact()
+            && ingress_ownership.matches_message(&BlockMessage::V2(message.clone()))
+    }
+
+    fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        _message: &wire::ConsensusMessageV2,
+        _ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        false
+    }
+
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         assert!(!self.panic_step, "model safety-WAL step panic");
         if self.scheduler_ownership_ready {

@@ -807,6 +807,10 @@ where
         limb_index_digest,
     })
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed provider-binding axes remain explicit to preserve digest order"
+)]
 fn seekable_provider_binding_digest(
     runtime_context_digest: [u8; 32],
     entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
@@ -2149,15 +2153,11 @@ impl ZkAmsMkheTrustedCksContextV1 {
             || key_material_digest == [0; 32]
             || transcript_digest == [0; 32]
             || collective_key_digest == [0; 32]
-            || share_digests.iter().any(|digest| *digest == [0; 32])
+            || share_digests.contains(&[0; 32])
             || public_key_a_native_digest == [0; 32]
             || public_key_a_wire_digest == [0; 32]
-            || party_public_b_native_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
-            || party_public_b_wire_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
+            || party_public_b_native_digests.contains(&[0; 32])
+            || party_public_b_wire_digests.contains(&[0; 32])
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -3169,11 +3169,7 @@ impl EvidenceHasher {
         )?;
         self.advance()
     }
-    fn finish<S>(
-        mut self,
-        expected_records: u32,
-        sink: &mut S,
-    ) -> Result<[u8; 32], ZkAmsMkheErrorV1>
+    fn finish<S>(self, expected_records: u32, sink: &mut S) -> Result<[u8; 32], ZkAmsMkheErrorV1>
     where
         S: ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1,
     {

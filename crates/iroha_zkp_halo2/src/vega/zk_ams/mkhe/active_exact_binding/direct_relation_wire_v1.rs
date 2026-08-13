@@ -16,20 +16,26 @@ use super::{
     CHALLENGE_REPETITIONS_V1, ExactBindingTranscriptContextV1, PersistentDirectRelationV1,
 };
 use crate::vega::sponge::Keccak256;
+#[path = "direct_relation_wire_v1/predecode_v1.rs"]
 mod predecode_v1;
+#[path = "direct_relation_wire_v1/statement_v1.rs"]
 pub(super) mod statement_v1;
-pub(super) use predecode_v1::{
-    PredecodedDirectRelationProofV1, UntrustedDirectRelationProofBytesV1,
-    predecode_direct_relation_proof_v1,
-};
+#[cfg(test)]
+#[allow(
+    unused_imports,
+    reason = "test namespace preserves every reviewed direct-relation object role while only three are exercised by current cases"
+)]
 pub(super) use statement_v1::{
     AggregateH0ObjectRoleV1, AggregateH1ObjectRoleV1, DirectPolynomialObjectV1,
-    DirectRelationPublicObjectsV1, ExpectedDirectRelationStatementV1, GaloisBObjectRoleV1,
-    RkgH0ObjectRoleV1, RkgH1ObjectRoleV1, RkgKObjectRoleV1, RkgNormalizationObjectRoleV1,
+    GaloisBObjectRoleV1, RkgH0ObjectRoleV1, RkgH1ObjectRoleV1, RkgKObjectRoleV1,
+    RkgNormalizationObjectRoleV1,
 };
+pub(super) use statement_v1::{DirectRelationPublicObjectsV1, ExpectedDirectRelationStatementV1};
 #[cfg(test)]
+#[path = "direct_relation_wire_v1/kats.rs"]
 mod kats;
 #[cfg(test)]
+#[path = "direct_relation_wire_v1/tests.rs"]
 mod tests;
 const DIRECT_RELATION_WIRE_MAGIC_V1: [u8; 4] = *b"ZAXR";
 const DIRECT_RELATION_STATEMENT_MAGIC_V1: [u8; 4] = *b"ZADS";

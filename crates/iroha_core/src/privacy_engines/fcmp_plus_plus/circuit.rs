@@ -293,16 +293,16 @@ impl<F: ProofScalar> ZeroizingScalarVec<F> {
     fn as_slice(&self) -> &[F] {
         &self.values
     }
-    fn push(&mut self, mut value: F) -> Result<(), FcmpNativeErrorV1> {
-        let incoming = BorrowedProofScalarSlot(&mut value);
+    fn push_borrowed(&mut self, value: &F) -> Result<(), FcmpNativeErrorV1> {
+        let value = SecretScalarGuard::copy_from_borrowed(value);
         if self.values.len() >= self.logical_capacity {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
         debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
-        self.values.push(incoming.get());
-        // The retained element does not consume this `Copy` parameter slot.
+        self.values.push(value.expose_copy());
+        // The retained element does not consume the guarded callee-owned copy.
         // Explicitly erase it on success; the guard also covers an unwind.
-        drop(incoming);
+        drop(value);
         debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
         Ok(())
     }
@@ -431,13 +431,13 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
         }
         let mut witness = ZeroizingScalarVec::new(2 * COMMITMENT_WORD_LEN)?;
         for value in dlog.iter().copied() {
-            witness.push(F::from_u64(value))?;
+            witness.push_borrowed(&F::from_u64(value))?;
         }
         witness.extend_from_slice(padding)?;
         while witness.len() < (2 * COMMITMENT_WORD_LEN) - 1 {
-            witness.push(F::ZERO)?;
+            witness.push_borrowed(&F::ZERO)?;
         }
-        witness.push(*extra)?;
+        witness.push_borrowed(extra)?;
         let mut variables = self.append_word(&witness.as_slice()[..COMMITMENT_WORD_LEN])?;
         variables.extend(self.append_word(&witness.as_slice()[COMMITMENT_WORD_LEN..])?);
         let extra = variables
@@ -462,21 +462,21 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
         let mut witness = ZeroizingScalarVec::new(2 * COMMITMENT_WORD_LEN)?;
-        witness.push(divisor.y)?;
+        witness.push_borrowed(&divisor.y)?;
         for index in 0..parameters.yx_coefficients {
-            witness.push(divisor.yx.get(index).copied().unwrap_or(F::ZERO))?;
+            witness.push_borrowed(divisor.yx.get(index).unwrap_or(&F::ZERO))?;
         }
         for index in 1..parameters.x_coefficients {
-            witness.push(divisor.x.get(index).copied().unwrap_or(F::ZERO))?;
+            witness.push_borrowed(divisor.x.get(index).unwrap_or(&F::ZERO))?;
         }
-        witness.push(divisor.zero)?;
+        witness.push_borrowed(&divisor.zero)?;
         if witness.len() > 255 {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
         while witness.len() < (2 * COMMITMENT_WORD_LEN) - 1 {
-            witness.push(F::ZERO)?;
+            witness.push_borrowed(&F::ZERO)?;
         }
-        witness.push(*extra)?;
+        witness.push_borrowed(extra)?;
         let mut variables = self.append_word(&witness.as_slice()[..COMMITMENT_WORD_LEN])?;
         variables.extend(self.append_word(&witness.as_slice()[COMMITMENT_WORD_LEN..])?);
         let extra = variables
@@ -602,14 +602,15 @@ impl<F: ProofScalar> SecretScalarGuard<F> {
         drop(incoming);
         owned
     }
-    fn take(value: &mut F) -> Self {
-        let incoming = BorrowedProofScalarSlot(value);
-        let owned = Self(incoming.get());
-        drop(incoming);
-        owned
+    /// Copies a borrowed secret directly into this drop-zeroizing owner.
+    fn copy_from_borrowed(value: &F) -> Self {
+        Self(*value)
     }
     fn expose_copy(&self) -> F {
         self.0
+    }
+    fn expose_ref(&self) -> &F {
+        &self.0
     }
     fn expose_mut(&mut self) -> &mut F {
         &mut self.0
@@ -647,18 +648,16 @@ impl<F: ProofScalar> CircuitProverWitnesses<F> {
         }
         Ok(self.a_l.logical_capacity)
     }
-    fn push_gate(&mut self, mut left: F, mut right: F) -> Result<(), FcmpNativeErrorV1> {
-        // Guard the incoming copies as well as the final vector slots. A
-        // rejected gate must not leave its named arguments uncleared.
-        let left = SecretScalarGuard::take(&mut left);
-        let right = SecretScalarGuard::take(&mut right);
-        if self.len()? >= self.a_l.logical_capacity
-            || self.a_l.logical_capacity != self.a_r.logical_capacity
-        {
+    fn push_gate(&mut self, left: &F, right: &F) -> Result<(), FcmpNativeErrorV1> {
+        // Validate both preallocated vectors before making the only
+        // intentional witness copies. The scalar-vector insertion boundary
+        // immediately guards and clears each callee-owned copy.
+        let row_capacity = self.row_capacity()?;
+        if self.len()? >= row_capacity {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        self.a_l.push(left.expose_copy())?;
-        self.a_r.push(right.expose_copy())?;
+        self.a_l.push_borrowed(left)?;
+        self.a_r.push_borrowed(right)?;
         Ok(())
     }
     fn take(&mut self) -> (Vec<F>, Vec<F>) {
@@ -767,14 +766,8 @@ impl<S: ProofSuite> Circuit<S> {
         &mut self,
         left: Option<LinComb<S::Scalar>>,
         right: Option<LinComb<S::Scalar>>,
-        mut witness: Option<(S::Scalar, S::Scalar)>,
+        witness: Option<(&S::Scalar, &S::Scalar)>,
     ) -> Result<(Variable, Variable, Variable), FcmpNativeErrorV1> {
-        let witness = witness.as_mut().map(|(left, right)| {
-            (
-                SecretScalarGuard::take(left),
-                SecretScalarGuard::take(right),
-            )
-        });
         if self.prover.is_some() != witness.is_some() {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
@@ -786,14 +779,12 @@ impl<S: ProofSuite> Circuit<S> {
         let l = Variable::aL(index);
         let r = Variable::aR(index);
         let o = Variable::aO(index);
-        if let Some((left, right)) = &witness {
+        if let Some((left, right)) = witness {
             let prover = self
                 .prover
                 .as_mut()
                 .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
-            prover
-                .witnesses
-                .push_gate(left.expose_copy(), right.expose_copy())?;
+            prover.witnesses.push_gate(left, right)?;
         }
         self.muls = next_muls;
         if let Some(left) = left {
@@ -812,11 +803,13 @@ impl<S: ProofSuite> Circuit<S> {
         match (&left, &right) {
             (Some(left), Some(right)) => match (self.eval(left)?, self.eval(right)?) {
                 (Some(left_witness), Some(right_witness)) => self.mul_with_witness(
-                    left,
-                    right,
-                    Some((left_witness.expose_copy(), right_witness.expose_copy())),
+                    Some(left.clone()),
+                    Some(right.clone()),
+                    Some((left_witness.expose_ref(), right_witness.expose_ref())),
                 ),
-                (None, None) => self.mul_with_witness(left, right, None),
+                (None, None) => {
+                    self.mul_with_witness(Some(left.clone()), Some(right.clone()), None)
+                }
                 _ => return Err(FcmpNativeErrorV1::ArithmeticInvariant),
             },
             _ if self.prover.is_none() => self.mul_with_witness(left, right, None),
@@ -843,7 +836,7 @@ impl<S: ProofSuite> Circuit<S> {
                 self.mul_with_witness(
                     value,
                     None,
-                    Some((value_witness.expose_copy(), inverse_witness.expose_copy())),
+                    Some((value_witness.expose_ref(), inverse_witness.expose_ref())),
                 )?
             }
             None => self.mul_with_witness(value, None, None)?,
@@ -897,7 +890,7 @@ impl<S: ProofSuite> Circuit<S> {
                 self.mul_with_witness(
                     None,
                     Some(x1_minus_x0),
-                    Some((slope_witness.expose_copy(), x_difference.expose_copy())),
+                    Some((slope_witness.expose_ref(), x_difference.expose_ref())),
                 )?
             }
             (None, None) => self.mul_with_witness(None, Some(x1_minus_x0), None)?,
@@ -1366,7 +1359,7 @@ fn divisor_challenge_eval<S: ProofSuite>(
             circuit.mul_with_witness(
                 Some(p_d),
                 None,
-                Some((denominator.expose_copy(), quotient_witness.expose_copy())),
+                Some((denominator.expose_ref(), quotient_witness.expose_ref())),
             )?
         }
         (None, None) => circuit.mul_with_witness(Some(p_d), None, None)?,
@@ -1608,6 +1601,7 @@ mod tests {
     std::thread_local! {
         static TRACKING_CLEAR_CALLS: Cell<usize> = const { Cell::new(0) };
         static TRACKING_PANIC_ON_ADD_ASSIGN: Cell<bool> = const { Cell::new(false) };
+        static TRACKING_PANIC_ON_CLEAR_CALL: Cell<usize> = const { Cell::new(0) };
     }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct TrackingScalar(u64);
@@ -1696,15 +1690,23 @@ mod tests {
         fn clear_secret(&mut self) {
             self.0 = 0;
             TRACKING_CLEAR_CALLS.with(|calls| calls.set(calls.get() + 1));
+            TRACKING_PANIC_ON_CLEAR_CALL.with(|call| match call.get() {
+                0 => {}
+                1 => {
+                    call.set(0);
+                    panic!("tracking scalar clear panic");
+                }
+                remaining => call.set(remaining - 1),
+            });
         }
     }
     fn tracking_values(len: usize, offset: u64) -> ZeroizingScalarVec<TrackingScalar> {
         let mut values = ZeroizingScalarVec::new(len).expect("tracking allocation");
         for index in 0..len {
             values
-                .push(TrackingScalar(offset.wrapping_add(
-                    u64::try_from(index).expect("small tracking index"),
-                )))
+                .push_borrowed(&TrackingScalar(
+                    offset.wrapping_add(u64::try_from(index).expect("small tracking index")),
+                ))
                 .expect("tracking value fits exact allocation");
         }
         values
@@ -1720,6 +1722,9 @@ mod tests {
     }
     fn tracking_add_assign_will_panic() -> bool {
         TRACKING_PANIC_ON_ADD_ASSIGN.with(Cell::get)
+    }
+    fn set_tracking_clear_panic(call: usize) {
+        TRACKING_PANIC_ON_CLEAR_CALL.with(|pending| pending.set(call));
     }
     #[test]
     fn tape_layout_matches_first_release_word_packing() {
@@ -1829,13 +1834,15 @@ mod tests {
         assert_eq!(verifier_transcript.consumed(), proof.len());
     }
     #[test]
-    fn scalar_vector_push_erases_success_and_overflow_parameter_slots() {
+    fn scalar_vector_borrowed_push_erases_success_and_overflow_copy_slots() {
         reset_tracking_clears();
         let mut values = ZeroizingScalarVec::<TrackingScalar>::new(1).expect("bounded vector");
-        values.push(TrackingScalar(41)).expect("first value");
+        values
+            .push_borrowed(&TrackingScalar(41))
+            .expect("first value");
         assert_eq!(tracking_clears(), 1);
         assert_eq!(
-            values.push(TrackingScalar(43)),
+            values.push_borrowed(&TrackingScalar(43)),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         );
         assert_eq!(tracking_clears(), 2);
@@ -1849,9 +1856,20 @@ mod tests {
             .split_once("impl<F: ProofScalar> Drop for ZeroizingScalarVec<F>")
             .expect("zeroizing scalar vector boundary")
             .0;
-        assert!(owner.contains("let incoming = BorrowedProofScalarSlot(&mut value);"));
-        assert!(owner.contains("self.values.push(incoming.get());"));
-        assert!(owner.contains("drop(incoming);"));
+        let guard = owner
+            .find("let value = SecretScalarGuard::copy_from_borrowed(value);")
+            .expect("direct borrowed-copy owner");
+        let capacity = owner
+            .find("if self.values.len() >= self.logical_capacity")
+            .expect("capacity check");
+        let retained = owner
+            .find("self.values.push(value.expose_copy());")
+            .expect("retained vector slot");
+        assert!(guard < capacity && capacity < retained);
+        assert!(!owner.contains("let mut value_copy = *value;"));
+        assert!(!owner.contains("SecretScalarGuard::take"));
+        assert!(owner.contains("fn push_borrowed(&mut self, value: &F)"));
+        assert!(!owner.contains("fn push(&mut self"));
     }
     #[test]
     fn prover_tape_never_reallocates_scalar_buffers_and_clears_error_paths() {
@@ -1936,8 +1954,10 @@ mod tests {
             .expect("secret scalar guard boundary")
             .0;
         assert!(scalar_guard.contains("fn new(mut value: F) -> Self"));
-        assert!(scalar_guard.contains("fn take(value: &mut F) -> Self"));
-        assert_eq!(scalar_guard.matches("BorrowedProofScalarSlot").count(), 2);
+        assert!(scalar_guard.contains("fn copy_from_borrowed(value: &F) -> Self"));
+        assert!(scalar_guard.contains("Self(*value)"));
+        assert!(!scalar_guard.contains("let mut value_copy = *value;"));
+        assert_eq!(scalar_guard.matches("BorrowedProofScalarSlot").count(), 1);
         let mul = source
             .split_once("pub(super) fn mul(")
             .expect("multiplication helper")
@@ -1946,7 +1966,7 @@ mod tests {
             .expect("inverse follows multiplication")
             .0;
         assert!(!mul.contains("let witness = match"));
-        assert!(mul.contains("Some((left_witness.expose_copy(), right_witness.expose_copy()))"));
+        assert!(mul.contains("Some((left_witness.expose_ref(), right_witness.expose_ref()))"));
         let inverse = source
             .split_once("pub(super) fn inverse(")
             .expect("inverse helper")
@@ -1957,8 +1977,8 @@ mod tests {
         assert!(!inverse.contains("let value = value.expose_copy()"));
         assert!(!inverse.contains("let witness ="));
         assert!(inverse.contains("let inverse_witness = SecretScalarGuard::new"));
-        assert!(inverse.contains("value_witness.expose_copy()"));
-        assert!(inverse.contains("inverse_witness.expose_copy()"));
+        assert!(inverse.contains("value_witness.expose_ref()"));
+        assert!(inverse.contains("inverse_witness.expose_ref()"));
         let incomplete_add = source
             .split_once("pub(super) fn incomplete_add_fixed(")
             .expect("incomplete-add helper")
@@ -1970,8 +1990,8 @@ mod tests {
         assert!(!incomplete_add.contains("let x_difference = x_difference.expose_copy()"));
         assert!(!incomplete_add.contains("let slope_witness = match"));
         assert!(incomplete_add.contains("let slope_witness = SecretScalarGuard::new"));
-        assert!(incomplete_add.contains("slope_witness.expose_copy()"));
-        assert!(incomplete_add.contains("x_difference.expose_copy()"));
+        assert!(incomplete_add.contains("slope_witness.expose_ref()"));
+        assert!(incomplete_add.contains("x_difference.expose_ref()"));
         let divisor_eval = source
             .split_once("fn divisor_challenge_eval<")
             .expect("divisor challenge evaluator")
@@ -1983,8 +2003,8 @@ mod tests {
         assert!(!divisor_eval.contains("let numerator = numerator.expose_copy()"));
         assert!(!divisor_eval.contains("let quotient_witness = match"));
         assert!(divisor_eval.contains("let quotient_witness = SecretScalarGuard::new"));
-        assert!(divisor_eval.contains("denominator.expose_copy()"));
-        assert!(divisor_eval.contains("quotient_witness.expose_copy()"));
+        assert!(divisor_eval.contains("denominator.expose_ref()"));
+        assert!(divisor_eval.contains("quotient_witness.expose_ref()"));
         let witness_owner = source
             .split_once("impl<F: ProofScalar> CircuitProverWitnesses<F> {")
             .expect("circuit witness owner")
@@ -1992,55 +2012,107 @@ mod tests {
             .split_once("struct CircuitProverData")
             .expect("circuit witness owner boundary")
             .0;
-        let left_transfer = witness_owner
-            .find("let left = SecretScalarGuard::take(&mut left);")
-            .expect("left parameter transfer");
-        let right_transfer = witness_owner
-            .find("let right = SecretScalarGuard::take(&mut right);")
-            .expect("right parameter transfer");
+        let witness_api = source
+            .split_once("pub(super) fn mul_with_witness(")
+            .expect("borrowed circuit witness API")
+            .1
+            .split_once("pub(super) fn mul(")
+            .expect("borrowed circuit witness API boundary")
+            .0;
+        assert!(witness_api.contains("witness: Option<(&S::Scalar, &S::Scalar)>"));
+        assert!(!witness_api.contains("Option<(S::Scalar, S::Scalar)>"));
+        let capacity_check = witness_owner
+            .find("let row_capacity = self.row_capacity()?;")
+            .expect("capacity preflight");
         let first_check = witness_owner
-            .find("if self.len()?")
-            .expect("first shape check");
-        assert!(left_transfer < first_check && right_transfer < first_check);
+            .find("if self.len()? >= row_capacity")
+            .expect("length preflight");
+        let left_transfer = witness_owner
+            .find("self.a_l.push_borrowed(left)?;")
+            .expect("left insertion transfer");
+        let right_transfer = witness_owner
+            .find("self.a_r.push_borrowed(right)?;")
+            .expect("right insertion transfer");
+        assert!(capacity_check < first_check);
+        assert!(first_check < left_transfer && left_transfer < right_transfer);
+        assert!(!witness_owner.contains(".push(*left)"));
+        assert!(!witness_owner.contains(".push(*right)"));
         let mut witnesses =
             CircuitProverWitnesses::<TrackingScalar>::new(2).expect("bounded witness allocation");
         let left_pointer = witnesses.a_l.as_slice().as_ptr();
         let right_pointer = witnesses.a_r.as_slice().as_ptr();
         let left_allocation_capacity = witnesses.a_l.allocation_capacity;
         let right_allocation_capacity = witnesses.a_r.allocation_capacity;
+        let first = (TrackingScalar(2), TrackingScalar(3));
+        witnesses.push_gate(&first.0, &first.1).expect("first gate");
+        let second = (TrackingScalar(5), TrackingScalar(7));
         witnesses
-            .push_gate(TrackingScalar(2), TrackingScalar(3))
-            .expect("first gate");
-        witnesses
-            .push_gate(TrackingScalar(5), TrackingScalar(7))
+            .push_gate(&second.0, &second.1)
             .expect("second gate");
         assert_eq!(witnesses.a_l.as_slice().as_ptr(), left_pointer);
         assert_eq!(witnesses.a_r.as_slice().as_ptr(), right_pointer);
         assert_eq!(witnesses.a_l.allocation_capacity, left_allocation_capacity);
         assert_eq!(witnesses.a_r.allocation_capacity, right_allocation_capacity);
         assert_eq!(witnesses.len(), Ok(2));
-        assert_eq!(tracking_clears(), 12);
+        assert_eq!(tracking_clears(), 4);
+        let overflow = (TrackingScalar(11), TrackingScalar(13));
         assert_eq!(
-            witnesses.push_gate(TrackingScalar(11), TrackingScalar(13)),
+            witnesses.push_gate(&overflow.0, &overflow.1),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         );
-        assert_eq!(tracking_clears(), 16);
+        assert_eq!(tracking_clears(), 4);
         reset_tracking_clears();
         drop(witnesses);
         assert_eq!(tracking_clears(), 4);
         reset_tracking_clears();
         let mut zero =
             CircuitProverWitnesses::<TrackingScalar>::new(0).expect("zero public gate bound");
+        let zero_gate = (TrackingScalar(17), TrackingScalar(19));
         assert_eq!(
-            zero.push_gate(TrackingScalar(17), TrackingScalar(19)),
+            zero.push_gate(&zero_gate.0, &zero_gate.1),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         );
         assert_eq!(zero.len(), Ok(0));
-        assert_eq!(tracking_clears(), 4);
+        assert_eq!(tracking_clears(), 0);
+        let mut mismatched =
+            CircuitProverWitnesses::<TrackingScalar>::new(1).expect("matched witness allocation");
+        mismatched.a_r.logical_capacity = 0;
+        let rejected = (TrackingScalar(31), TrackingScalar(37));
+        assert_eq!(
+            mismatched.push_gate(&rejected.0, &rejected.1),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        );
+        assert_eq!(mismatched.a_l.len(), 0);
+        assert_eq!(mismatched.a_r.len(), 0);
+        assert_eq!(tracking_clears(), 0);
+        let mut invalid_second_vector =
+            CircuitProverWitnesses::<TrackingScalar>::new(1).expect("second-vector allocation");
+        invalid_second_vector.a_r.allocation_capacity = 0;
+        let rejected = (TrackingScalar(41), TrackingScalar(43));
+        assert_eq!(
+            invalid_second_vector.push_gate(&rejected.0, &rejected.1),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        );
+        assert_eq!(invalid_second_vector.a_l.len(), 0);
+        assert_eq!(invalid_second_vector.a_r.len(), 0);
+        assert_eq!(tracking_clears(), 0);
+        reset_tracking_clears();
+        let unwind = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut partially_inserted = CircuitProverWitnesses::<TrackingScalar>::new(1)
+                .expect("partial second-vector unwind allocation");
+            let witness = (TrackingScalar(47), TrackingScalar(53));
+            // The first owner clear fails after retaining the left witness and
+            // before the right insertion, so unwind must erase the partial row.
+            set_tracking_clear_panic(1);
+            let _ = partially_inserted.push_gate(&witness.0, &witness.1);
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(tracking_clears(), 2);
         let mut witnesses =
             CircuitProverWitnesses::<TrackingScalar>::new(1).expect("single witness allocation");
+        let single = (TrackingScalar(2), TrackingScalar(3));
         witnesses
-            .push_gate(TrackingScalar(2), TrackingScalar(3))
+            .push_gate(&single.0, &single.1)
             .expect("single witness");
         reset_tracking_clears();
         let valid = LinComb::empty()
@@ -2073,42 +2145,33 @@ mod tests {
         let unwind = panic::catch_unwind(AssertUnwindSafe(|| {
             let mut witnesses = CircuitProverWitnesses::<TrackingScalar>::new(1)
                 .expect("single witness allocation");
+            let witness = (TrackingScalar(23), TrackingScalar(29));
             witnesses
-                .push_gate(TrackingScalar(23), TrackingScalar(29))
+                .push_gate(&witness.0, &witness.1)
                 .expect("witness before unwind");
             panic!("exercise witness cleanup during unwind");
         }));
         assert!(unwind.is_err());
-        // The two outer parameter transfers, two vector-parameter guards,
-        // and two gate owners clear before both retained slots unwind.
-        assert_eq!(tracking_clears(), 8);
+        // Both borrowed-copy owners clear before the retained slots unwind.
+        assert_eq!(tracking_clears(), 4);
     }
     #[test]
     fn circuit_enforces_the_public_prover_gate_bound_without_partial_growth() {
         let mut zero = Circuit::<SeleneSuite>::prove(Vec::new(), 0).expect("zero-gate circuit");
+        let zero_witness = (Field25519::from_u64(2), Field25519::from_u64(3));
         assert_eq!(
-            zero.mul_with_witness(
-                None,
-                None,
-                Some((Field25519::from_u64(2), Field25519::from_u64(3)))
-            ),
+            zero.mul_with_witness(None, None, Some((&zero_witness.0, &zero_witness.1))),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         );
         assert_eq!(zero.muls(), 0);
         let mut one = Circuit::<SeleneSuite>::prove(Vec::new(), 1).expect("one-gate circuit");
-        one.mul_with_witness(
-            None,
-            None,
-            Some((Field25519::from_u64(2), Field25519::from_u64(3))),
-        )
-        .expect("first gate");
+        let first_witness = (Field25519::from_u64(2), Field25519::from_u64(3));
+        one.mul_with_witness(None, None, Some((&first_witness.0, &first_witness.1)))
+            .expect("first gate");
         assert_eq!(one.muls(), 1);
+        let overflow_witness = (Field25519::from_u64(5), Field25519::from_u64(7));
         assert_eq!(
-            one.mul_with_witness(
-                None,
-                None,
-                Some((Field25519::from_u64(5), Field25519::from_u64(7)))
-            ),
+            one.mul_with_witness(None, None, Some((&overflow_witness.0, &overflow_witness.1))),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         );
         assert_eq!(one.muls(), 1);

@@ -16,8 +16,6 @@
     dead_code,
     reason = "the production context-correspondence seal is intentionally uninhabited"
 )]
-use std::path::Path;
-use crate::vega::sponge::Keccak256;
 use super::super::super::{
     ZkAmsMkheErrorV1,
     packing::{
@@ -41,6 +39,8 @@ use super::{
     ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1,
 };
+use crate::vega::sponge::Keccak256;
+use std::path::Path;
 const PHASE23_ORCHESTRATOR_VERSION_V1: u8 = 1;
 const PHASE23_RECORD_COUNT_V1: usize = 43;
 const PHASE23_MAIN_BLOCKS_PER_RECORD_V1: usize = 896;
@@ -704,13 +704,8 @@ impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
     fn into_source_algebra_prerequisite_v2(
         self,
         ordered_ciphertexts: source_algebra::OrderedCiphertextBundleSealV2,
-        radix_hyrax_proof: source_algebra::RadixHyraxProofSealV2,
     ) -> Result<source_algebra::Phase23SourceAlgebraPrerequisiteV2<K, P>, ZkAmsMkheErrorV1> {
-        source_algebra::consume_phase23_source_algebra_prerequisite_v2(
-            self,
-            ordered_ciphertexts,
-            radix_hyrax_proof,
-        )
+        source_algebra::consume_phase23_source_algebra_prerequisite_v2(self, ordered_ciphertexts)
     }
 }
 #[cfg(test)]

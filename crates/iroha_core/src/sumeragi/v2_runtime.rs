@@ -16,15 +16,15 @@
 //! Within the exact eligible set, a small deterministic arbiter and cyclic
 //! class service prevent a saturated normal prefix from starving a locked
 //! Commit vote or trusted local completion.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
-};
+#![cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "recovered-runtime seams remain test-sealed until cutover"
+    )
+)]
+#[cfg(test)]
+use super::v2::{AdapterEquivocationEvidence, DeferredPriority};
 #[cfg(test)]
 use super::v2_core::check_production_effect_to_candidate_transition;
 use super::v2_core::{
@@ -51,8 +51,6 @@ use super::v2_core::{
     check_production_ingress_transition, classify_exact_body_completion_ownership,
     select_bounded_service_class,
 };
-use iroha_data_model::block::consensus_v2 as wire;
-use norito::codec::{Decode as _, Encode as _};
 use super::{
     FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken,
     FairV2IngressOwnershipEvidence,
@@ -86,8 +84,17 @@ use super::{
         RecoveredWalVoteReplayEvidenceV1,
     },
 };
-#[cfg(test)]
-use super::v2::{AdapterEquivocationEvidence, DeferredPriority};
+use iroha_data_model::block::consensus_v2 as wire;
+use norito::codec::{Decode as _, Encode as _};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 const RETRANSMIT_DIVISOR: u32 = 5;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 /// Actor-global source for immutable lifecycle admission ordinals.
@@ -2673,7 +2680,7 @@ pub(in crate::sumeragi) fn project_recovered_lifecycle_next_wal_vote_candidate(
 /// Consume one adapter-authenticated recovered control token into its exact
 /// pending owner and replay-authorized lifecycle admission.
 #[allow(clippy::result_large_err)]
-pub(crate) fn project_recovered_wal_control_sign(
+pub(in crate::sumeragi) fn project_recovered_wal_control_sign(
     verified: &super::v2::VerifiedHeightContext,
     recovered: RecoveredWalControlSign,
 ) -> Result<AuthenticatedRecoveredWalControlProjection, RecoveredWalControlSign> {
@@ -2685,7 +2692,7 @@ pub(crate) fn project_recovered_wal_control_sign(
 }
 /// Consume one authenticated Decision Fetch token into its closed lifecycle projection.
 #[allow(clippy::result_large_err)]
-pub(crate) fn project_recovered_wal_decision_fetch(
+pub(in crate::sumeragi) fn project_recovered_wal_decision_fetch(
     verified: &super::v2::VerifiedHeightContext,
     recovered: RecoveredWalDecisionFetch,
 ) -> Result<AuthenticatedRecoveredWalDecisionFetchProjection, RecoveredWalDecisionFetch> {

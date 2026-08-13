@@ -17,9 +17,9 @@ use super::{
         first_layer,
     },
     field::{
-        Field25519, HeliosPoint, HelioseleneField, SelenePoint, decode_field25519_scalar,
-        decode_helioselene_scalar, edwards_to_wei25519, encode_field25519, helios_hash_initializer,
-        selene_hash_initializer,
+        Field25519, HeliosPoint, HelioseleneField, SecretCycleCoordinatesV1, SelenePoint,
+        decode_field25519_scalar, decode_helioselene_scalar, edwards_to_wei25519,
+        encode_field25519, helios_hash_initializer, selene_hash_initializer,
     },
     proof_math::{
         HeliosSuite, ProofPoint, ProofSuite, SecretMultiexpBuilder, SeleneSuite,
@@ -36,7 +36,7 @@ use std::sync::OnceLock;
 fn secret_unblind_helios_coordinates_v1(
     prior_commitment: &HeliosPoint,
     mask: &HelioseleneField,
-) -> Result<(Field25519, Field25519), FcmpNativeErrorV1> {
+) -> Result<SecretCycleCoordinatesV1<Field25519>, FcmpNativeErrorV1> {
     let mut terms = SecretMultiexpBuilder::<HeliosSuite>::new(2)?;
     terms.push(&HelioseleneField::ONE, prior_commitment)?;
     let negative_h = -helios_bp_generators().h;
@@ -49,7 +49,7 @@ fn secret_unblind_helios_coordinates_v1(
 fn secret_unblind_selene_coordinates_v1(
     prior_commitment: &SelenePoint,
     mask: &Field25519,
-) -> Result<(HelioseleneField, HelioseleneField), FcmpNativeErrorV1> {
+) -> Result<SecretCycleCoordinatesV1<HelioseleneField>, FcmpNativeErrorV1> {
     let mut terms = SecretMultiexpBuilder::<SeleneSuite>::new(2)?;
     terms.push(&Field25519::ONE, prior_commitment)?;
     let negative_h = -selene_bp_generators().h;
@@ -240,6 +240,10 @@ fn verify_root_blind(
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
+#[allow(
+    single_use_lifetimes,
+    reason = "impl-Trait iterator items cannot use anonymous reference lifetimes"
+)]
 pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
     parameters: &NativeParameters,
     layers: usize,
@@ -356,14 +360,10 @@ pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
             .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
         let prior_commitment = prior_commitment + helios_hash_initializer();
         let (hash_x, hash_y, _) = match prior_mask {
-            Some(mask) => c1_circuit.mul_with_witness(
-                None,
-                None,
-                Some(secret_unblind_helios_coordinates_v1(
-                    &prior_commitment,
-                    mask,
-                )?),
-            )?,
+            Some(mask) => {
+                let hash_witness = secret_unblind_helios_coordinates_v1(&prior_commitment, mask)?;
+                c1_circuit.mul_with_witness(None, None, Some(hash_witness.component_refs()))?
+            }
             None => c1_circuit.mul_with_witness(None, None, None)?,
         };
         additional_layer::<SeleneSuite>(
@@ -390,14 +390,10 @@ pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
             .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
         let prior_commitment = prior_commitment + selene_hash_initializer();
         let (hash_x, hash_y, _) = match prior_mask {
-            Some(mask) => c2_circuit.mul_with_witness(
-                None,
-                None,
-                Some(secret_unblind_selene_coordinates_v1(
-                    &prior_commitment,
-                    mask,
-                )?),
-            )?,
+            Some(mask) => {
+                let hash_witness = secret_unblind_selene_coordinates_v1(&prior_commitment, mask)?;
+                c2_circuit.mul_with_witness(None, None, Some(hash_witness.component_refs()))?
+            }
             None => c2_circuit.mul_with_witness(None, None, None)?,
         };
         additional_layer::<HeliosSuite>(

@@ -37,7 +37,7 @@ use iroha_data_model::{
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 #[cfg(test)]
 pub(super) struct FailingRngV1;
 #[cfg(test)]
@@ -267,6 +267,29 @@ impl Zeroize for FcmpOutputTupleV1 {
         self.amount_commitment.zeroize();
     }
 }
+/// Move-only owner for a hidden spent-output identifier.
+///
+/// The nested owner clears the digest on normal return, error, and unwind;
+/// callers can only borrow it until an audited preallocated insertion.
+pub(crate) struct FcmpSecretOutputIdV1(wallet::WalletSecretCopyValueV1<[u8; 32]>);
+impl FcmpSecretOutputIdV1 {
+    pub(crate) fn as_ref(&self) -> &[u8; 32] {
+        self.0.expose_ref()
+    }
+}
+impl Drop for FcmpSecretOutputIdV1 {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        let _ = FCMP_SECRET_OUTPUT_ID_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
+    }
+}
+#[cfg(test)]
+std::thread_local! {
+    static FCMP_SECRET_OUTPUT_ID_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 impl FcmpOutputTupleV1 {
     /// Construct one strict FCMP++ `(O, I, C)` output tuple.
     pub fn new(
@@ -312,6 +335,34 @@ impl FcmpOutputTupleV1 {
             self.linking_tag_generator,
             self.amount_commitment,
         )
+    }
+    /// Borrow the canonical `(O, I, C)` components without copying hidden
+    /// tuple bytes into by-value prover slots.
+    pub(crate) const fn component_refs_v1(
+        &self,
+    ) -> (
+        &[u8; FCMP_POINT_BYTES_V1],
+        &[u8; FCMP_POINT_BYTES_V1],
+        &[u8; FCMP_POINT_BYTES_V1],
+    ) {
+        (
+            &self.output_key,
+            &self.linking_tag_generator,
+            &self.amount_commitment,
+        )
+    }
+    /// Derive a hidden spent-output identifier without copying the tuple into
+    /// a by-value receiver or leaving SHA-256 state and encoding scratch alive.
+    pub(crate) fn secret_output_id_v1(&self) -> FcmpSecretOutputIdV1 {
+        let mut encoded = Zeroizing::new([0_u8; FCMP_OUTPUT_TUPLE_BYTES_V1]);
+        let (output_key, linking_tag_generator, amount_commitment) = self.component_refs_v1();
+        encoded[..32].copy_from_slice(output_key);
+        encoded[32..64].copy_from_slice(linking_tag_generator);
+        encoded[64..].copy_from_slice(amount_commitment);
+        FcmpSecretOutputIdV1(wallet::secret_sha256_v1(&[
+            OUTPUT_ID_DOMAIN_V1,
+            encoded.as_ref(),
+        ]))
     }
     /// Encode the tuple without framing.
     pub fn encode(self) -> [u8; FCMP_OUTPUT_TUPLE_BYTES_V1] {
@@ -742,6 +793,104 @@ mod tests {
         )
         .expect("reordered points remain individually valid");
         assert_ne!(output.output_id(), reordered.output_id());
+    }
+    #[test]
+    fn hidden_output_identifier_matches_public_bytes_and_drops_on_return_and_unwind() {
+        let output = output_from_multiples(5, 7, 11);
+        let expected = output.output_id();
+        FCMP_SECRET_OUTPUT_ID_DROPS_V1.with(|drops| drops.set(0));
+        let identifier = output.secret_output_id_v1();
+        assert_eq!(identifier.as_ref(), &expected);
+        assert_eq!(FCMP_SECRET_OUTPUT_ID_DROPS_V1.with(std::cell::Cell::get), 0);
+        drop(identifier);
+        assert_eq!(FCMP_SECRET_OUTPUT_ID_DROPS_V1.with(std::cell::Cell::get), 1);
+
+        FCMP_SECRET_OUTPUT_ID_DROPS_V1.with(|drops| drops.set(0));
+        let unwind = std::panic::catch_unwind(|| {
+            let identifier = output.secret_output_id_v1();
+            assert_eq!(identifier.as_ref(), &expected);
+            let _ = core::hint::black_box(&identifier);
+            panic!("exercise hidden output identifier unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(FCMP_SECRET_OUTPUT_ID_DROPS_V1.with(std::cell::Cell::get), 1);
+    }
+    #[test]
+    fn hidden_output_identifier_source_borrows_tuple_and_erases_hash_scratch() {
+        let source = include_str!("mod.rs");
+        let secret_identifier = source
+            .split_once("pub(crate) fn secret_output_id_v1(&self)")
+            .expect("borrowed hidden output identifier")
+            .1
+            .split_once("/// Encode the tuple without framing.")
+            .expect("hidden output identifier boundary")
+            .0;
+        for required in [
+            "Zeroizing::new([0_u8; FCMP_OUTPUT_TUPLE_BYTES_V1])",
+            "self.component_refs_v1()",
+            "wallet::secret_sha256_v1(&[",
+            "OUTPUT_ID_DOMAIN_V1,",
+            "encoded.as_ref(),",
+        ] {
+            assert!(secret_identifier.contains(required), "missing {required}");
+        }
+        for forbidden in [
+            "self.encode()",
+            "Sha256::new()",
+            ".finalize()",
+            "self.output_key",
+            "self.linking_tag_generator",
+            "self.amount_commitment",
+        ] {
+            assert!(
+                !secret_identifier.contains(forbidden),
+                "retained {forbidden}"
+            );
+        }
+        let owner = source
+            .split_once("pub(crate) struct FcmpSecretOutputIdV1")
+            .expect("hidden output identifier owner")
+            .1
+            .split_once("impl FcmpOutputTupleV1")
+            .expect("hidden output identifier owner boundary")
+            .0;
+        assert!(owner.contains("pub(crate) fn as_ref(&self) -> &[u8; 32]"));
+        assert!(owner.contains("impl Drop for FcmpSecretOutputIdV1"));
+        assert!(!owner.contains("#[derive(Clone"));
+        assert!(!owner.contains("impl Clone for FcmpSecretOutputIdV1"));
+        assert!(!owner.contains("impl Copy for FcmpSecretOutputIdV1"));
+
+        let wallet_source = include_str!("wallet.rs");
+        let secret_sha = wallet_source
+            .split_once("struct WalletSecretSha256V1 {")
+            .expect("shared secret SHA-256 owner")
+            .1
+            .split_once("/// Decrypted fixed-width FCMP++ wallet note.")
+            .expect("shared secret SHA-256 boundary")
+            .0;
+        for required in [
+            "state: [u32; 8]",
+            "block: [u8; 64]",
+            "compress256(&mut self.state",
+            "self.block.zeroize()",
+            "impl Drop for WalletSecretSha256V1",
+            "self.state.zeroize()",
+            "compiler_fence",
+            "black_box",
+        ] {
+            assert!(secret_sha.contains(required), "missing {required}");
+        }
+        let borrowed_hash = wallet_source
+            .split_once("pub(super) fn secret_sha256_v1(inputs: &[&[u8]])")
+            .expect("borrowed secret SHA-256 helper")
+            .1
+            .split_once("/// Decrypted fixed-width FCMP++ wallet note.")
+            .expect("borrowed secret SHA-256 helper boundary")
+            .0;
+        assert!(borrowed_hash.contains("WalletSecretSha256V1::new()"));
+        assert!(borrowed_hash.contains("for input in inputs"));
+        assert!(borrowed_hash.contains("hash.update_v1(input)"));
+        assert!(borrowed_hash.contains("hash.finalize_v1()"));
     }
     #[test]
     fn root_codec_binds_layer_range_and_curve_parity() {

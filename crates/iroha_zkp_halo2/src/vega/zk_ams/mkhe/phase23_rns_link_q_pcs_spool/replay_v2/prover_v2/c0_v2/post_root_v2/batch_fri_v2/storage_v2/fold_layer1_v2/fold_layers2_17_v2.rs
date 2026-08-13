@@ -1,14 +1,14 @@
 //! Generic authenticated storage, replay, and rooting for qPCS B1 through B17.
+use super::*;
+use crate::vega::{
+    sponge::Keccak256, zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::ProverFriRoundContextV2,
+};
 use core::sync::atomic;
-use std::path::Path;
 use iroha_confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
-use crate::vega::{
-    sponge::Keccak256, zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::ProverFriRoundContextV2,
-};
-use super::*;
+use std::path::Path;
 const FRI_CONTINUATION_CONTEXT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.batch-fri.continuation.context\0";
 const FRI_CONTINUATION_LEAF_BYTES_V2: usize = 380 * 16;

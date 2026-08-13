@@ -4,15 +4,15 @@
 //! that owner enters the five-row reuse guard.  The stored row has exactly `N`
 //! canonical residues and authenticates `S[N - 1] = 0`.  The sealed store is
 //! move-only and exposes only a sequential, purpose-bound replay.
+use super::*;
+use crate::vega::sponge::Keccak256;
 use core::sync::atomic;
-use std::path::Path;
 use iroha_confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1,
     ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
-use crate::vega::sponge::Keccak256;
-use super::*;
+use std::path::Path;
 const MASK_SPOOL_MAPPING_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.mask-s-spool.mapping\0";
 const MASK_SPOOL_CONTEXT_DOMAIN_V2: &[u8] =

@@ -1,4 +1,3 @@
-use crate::vega::VegaT256ScalarV1 as Scalar;
 use super::super::super::{
     ZkAmsMkheErrorV1,
     direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
@@ -22,6 +21,7 @@ use super::{
     challenge_vector_from_first_messages, membership_share_statement_digest,
     ordered_membership_roots,
 };
+use crate::vega::VegaT256ScalarV1 as Scalar;
 pub(super) const MEMBERSHIP_HEADER_BYTES_V1: usize = 339;
 pub(super) const BOUND_ONE_CHUNK_WIRE_BYTES_V1: usize = 1_494;
 pub(super) const BOUND_TWO_CHUNK_WIRE_BYTES_V1: usize = 1_560;
@@ -117,6 +117,10 @@ impl<'a> PreflightedDirectRelationMembershipFramesV1<'a> {
         }
         Ok(())
     }
+    #[allow(
+        clippy::type_complexity,
+        reason = "fixed membership arrays preserve reviewed direct-relation tuple order"
+    )]
     fn materialize(
         self,
     ) -> Result<

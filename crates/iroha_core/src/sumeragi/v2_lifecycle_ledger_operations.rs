@@ -390,7 +390,7 @@ impl LifecycleLedgerV1 {
             next_sign_ordinal,
         })
     }
-    /// Stage the exact all-row tombstone successor for CompleteTip retirement.
+    /// Stage the exact all-row tombstone successor for finalized-height retirement.
     ///
     /// Existing terminal rows remain byte-for-byte unchanged. Every live
     /// Certified-Serve row must consume one payload-store-authenticated
@@ -399,14 +399,14 @@ impl LifecycleLedgerV1 {
     /// corresponding no-update coverage proof. Every other live row becomes a
     /// `Cancelled` tombstone without changing its immutable admission or replay
     /// material. No durable write occurs in this method.
-    fn stage_complete_tip_all_row_retirement(
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn stage_finalized_height_all_row_retirement(
         &self,
         mut serve_reconciliation: CompleteTipServeRetirementReconciliationV1,
-    ) -> Result<Self, LifecycleLedgerError> {
+    ) -> Result<StagedFinalizationRetirementV1, LifecycleLedgerError> {
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
         if !serve_reconciliation.authenticates_source(self) {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip Serve retirement belongs to another ledger frame".to_owned(),
+                "finalized-height Serve retirement belongs to another ledger frame".to_owned(),
             ));
         }
         let mut consumed_producers = BTreeSet::new();
@@ -417,18 +417,19 @@ impl LifecycleLedgerV1 {
             }
             let work_class = record.work_class().ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable work class".to_owned(),
+                    "finalized-height retirement encountered an undecodable work class".to_owned(),
                 )
             })?;
             let terminal = record.terminal().ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable terminal state".to_owned(),
+                    "finalized-height retirement encountered an undecodable terminal state"
+                        .to_owned(),
                 )
             })?;
             if work_class == LifecycleWorkClass::CertifiedServe {
                 let producer_ordinal = record.ordinal().checked_add(1).ok_or_else(|| {
                     LifecycleLedgerError::InvalidLedger(
-                        "CompleteTip Serve producer ordinal exhausted".to_owned(),
+                        "finalized-height Serve producer ordinal exhausted".to_owned(),
                     )
                 })?;
                 let producer = self
@@ -438,7 +439,7 @@ impl LifecycleLedgerV1 {
                     .and_then(|index| self.records.get(index))
                     .ok_or_else(|| {
                         LifecycleLedgerError::InvalidLedger(
-                            "CompleteTip Serve lost its adjacent ProducerTurn".to_owned(),
+                            "finalized-height Serve lost its adjacent ProducerTurn".to_owned(),
                         )
                     })?;
                 if producer.work_class() != Some(LifecycleWorkClass::ProducerTurn)
@@ -446,7 +447,8 @@ impl LifecycleLedgerV1 {
                     || producer.terminal().is_none()
                 {
                     return Err(LifecycleLedgerError::InvalidLedger(
-                        "CompleteTip Serve/ProducerTurn pair changed before retirement".to_owned(),
+                        "finalized-height Serve/ProducerTurn pair changed before retirement"
+                            .to_owned(),
                     ));
                 }
                 match (
@@ -458,7 +460,7 @@ impl LifecycleLedgerV1 {
                             .take_terminal_update_for_exact_pair(record, producer)
                             .ok_or_else(|| {
                                 LifecycleLedgerError::InvalidLedger(
-                                    "live CompleteTip Serve has no exact terminal payload update"
+                                    "live finalized-height Serve has no exact terminal payload update"
                                         .to_owned(),
                                 )
                             })?;
@@ -466,7 +468,7 @@ impl LifecycleLedgerV1 {
                             .consume_for_exact_ledger_pair(record, producer)
                             .ok_or_else(|| {
                                 LifecycleLedgerError::InvalidLedger(
-                                    "CompleteTip Serve terminal update changed before staging"
+                                    "finalized-height Serve terminal update changed before staging"
                                         .to_owned(),
                                 )
                             })?;
@@ -481,7 +483,8 @@ impl LifecycleLedgerV1 {
                             TerminalOutcome::Cancelled,
                             producer.durable_payload().ok_or_else(|| {
                                 LifecycleLedgerError::InvalidLedger(
-                                    "CompleteTip ProducerTurn payload is undecodable".to_owned(),
+                                    "finalized-height ProducerTurn payload is undecodable"
+                                        .to_owned(),
                                 )
                             })?,
                             producer_replay,
@@ -493,7 +496,7 @@ impl LifecycleLedgerV1 {
                             .take_terminal_serve_live_producer_coverage(record, producer)
                         {
                             return Err(LifecycleLedgerError::InvalidLedger(
-                                "terminal CompleteTip Serve has no exact live ProducerTurn coverage"
+                                "terminal finalized-height Serve has no exact live ProducerTurn coverage"
                                     .to_owned(),
                             ));
                         }
@@ -508,7 +511,7 @@ impl LifecycleLedgerV1 {
                     }
                     (None, Some(_)) => {
                         return Err(LifecycleLedgerError::InvalidLedger(
-                            "live CompleteTip Serve has an already-terminal ProducerTurn"
+                            "live finalized-height Serve has an already-terminal ProducerTurn"
                                 .to_owned(),
                         ));
                     }
@@ -517,7 +520,8 @@ impl LifecycleLedgerV1 {
             }
             if work_class == LifecycleWorkClass::ProducerTurn {
                 return Err(LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip ProducerTurn was not consumed by its exact Serve owner".to_owned(),
+                    "finalized-height ProducerTurn was not consumed by its exact Serve owner"
+                        .to_owned(),
                 ));
             }
             retired_records.push(if terminal.is_some() {
@@ -528,7 +532,7 @@ impl LifecycleLedgerV1 {
         }
         if !consumed_producers.is_empty() || !serve_reconciliation.is_drained() {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip Serve retirement census was not consumed exactly once".to_owned(),
+                "finalized-height Serve retirement census was not consumed exactly once".to_owned(),
             ));
         }
         let retired = Self::new(
@@ -546,17 +550,21 @@ impl LifecycleLedgerV1 {
             || !retired.producer_debts.is_empty()
         {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip all-row retirement did not reach the exact quiescent frame".to_owned(),
+                "finalized-height all-row retirement did not reach the exact quiescent frame"
+                    .to_owned(),
             ));
         }
-        Ok(retired)
+        Ok(StagedFinalizationRetirementV1 {
+            current: self.clone(),
+            retired,
+        })
     }
     fn cancelled_record(
         record: &LifecycleLedgerRecordV1,
     ) -> Result<LifecycleLedgerRecordV1, LifecycleLedgerError> {
         let payload = record.durable_payload().ok_or_else(|| {
             LifecycleLedgerError::InvalidLedger(
-                "CompleteTip retirement encountered an undecodable payload".to_owned(),
+                "finalized-height retirement encountered an undecodable payload".to_owned(),
             )
         })?;
         Self::terminalized_record(
@@ -576,20 +584,21 @@ impl LifecycleLedgerV1 {
             || record.continuation() != Some(DurableContinuation::None)
         {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip retirement can terminalize only one live uncontinued row".to_owned(),
+                "finalized-height retirement can terminalize only one live uncontinued row"
+                    .to_owned(),
             ));
         }
         LifecycleLedgerRecordV1::new(
             record.key().ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable key".to_owned(),
+                    "finalized-height retirement encountered an undecodable key".to_owned(),
                 )
             })?,
             record.owner(),
             record.ordinal(),
             record.work_class().ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable work class".to_owned(),
+                    "finalized-height retirement encountered an undecodable work class".to_owned(),
                 )
             })?,
             record.stage().ok_or_else(|| {

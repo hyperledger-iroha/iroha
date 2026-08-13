@@ -1,5 +1,4 @@
 //! Exact T256 packing through conjugate quadratic factors of `X^N + 1`.
-use core::fmt;
 use super::{
     BgvProfile, RnsPolynomial, ZkAmsMkheErrorV1, bytes_mod_u64, checked_coefficient_work,
     manifest::{
@@ -12,6 +11,7 @@ use crate::vega::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
     sponge::{Keccak256, keccak256, shake256},
 };
+use core::fmt;
 const PACKING_VERSION_V1: u8 = 1;
 const SLOT_GALOIS_GENERATOR_V1: usize = 5;
 const GALOIS_KEY_SCHEDULE_BITS_V1: u32 = 16;
@@ -2146,9 +2146,9 @@ fn mod_pow_usize(mut base: usize, mut exponent: usize, modulus: usize) -> usize 
 }
 #[cfg(test)]
 pub(super) mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     use super::super::PlaintextModulus;
     use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     const TEST_RNS_MODULI_V1: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const TEST_RNS_ROOTS_V1: [u64; 2] = [1_400_279_418, 677_356_115];
     fn tiny_rns_binding_profile_v1() -> BgvProfile {

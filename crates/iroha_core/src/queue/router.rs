@@ -7158,7 +7158,7 @@ fn transaction_target_routing_requires_state(tx: &dyn TransactionRoutingView) ->
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use super::*;
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -7208,7 +7208,7 @@ mod tests {
     use iroha_primitives::numeric::NumericSpec;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
     fn sample_transaction(
         authority: &AccountId,
         signer: &iroha_crypto::PrivateKey,
@@ -7385,11 +7385,7 @@ mod tests {
         LaneCatalog,
         ConfigLaneRouter,
     ) {
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let catalog = dataspace_catalog(&[
             (DataSpaceId::new(7), "signer"),
             (DataSpaceId::new(8), "multisig"),
@@ -7503,6 +7499,118 @@ mod tests {
     }
     fn blank_state() -> crate::state::State {
         state_from_world(crate::state::World::default())
+    }
+    fn default_routing_policy() -> LaneRoutingPolicy {
+        LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        }
+    }
+    fn default_router(
+        dataspace_catalog: DataSpaceCatalog,
+        lane_catalog: LaneCatalog,
+    ) -> ConfigLaneRouter {
+        ConfigLaneRouter::new(default_routing_policy(), dataspace_catalog, lane_catalog)
+    }
+    macro_rules! two_account_policy_router_fixture {
+        () => {{
+            let (alice_id, alice_keypair) = gen_account_in("wonderland");
+            let (bob_id, _) = gen_account_in("wonderland");
+            let policy = LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![
+                    LaneRoutingRule {
+                        lane: LaneId::new(1),
+                        dataspace: Some(DataSpaceId::new(1)),
+                        matcher: LaneRoutingMatcher {
+                            account: Some(alice_id.to_string()),
+                            instruction: None,
+                            description: None,
+                        },
+                    },
+                    LaneRoutingRule {
+                        lane: LaneId::new(2),
+                        dataspace: Some(DataSpaceId::new(2)),
+                        matcher: LaneRoutingMatcher {
+                            account: Some(bob_id.to_string()),
+                            instruction: None,
+                            description: None,
+                        },
+                    },
+                ],
+            };
+            let lane_catalog = catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(1), DataSpaceId::new(1)),
+                (LaneId::new(2), DataSpaceId::new(2)),
+            ]);
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: DataSpaceId::new(1),
+                    alias: "alice".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: DataSpaceId::new(2),
+                    alias: "bob".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+            (alice_id, alice_keypair, bob_id, router)
+        }};
+    }
+    macro_rules! multisig_routing_fixture {
+        ($submitter_id:ident $submitter_keypair:ident $multisig_id:ident $dataspace_id:ident $lane_id:ident $catalog:ident $lane_catalog:ident $policy:ident $router:ident $proposed:ident) => {
+            let ($submitter_id, $submitter_keypair) = gen_account_in("wonderland");
+            let ($multisig_id, _) = gen_account_in("wonderland");
+            let (target_id, _) = gen_account_in("wonderland");
+            let $dataspace_id = DataSpaceId::new(10);
+            let $lane_id = LaneId::new(2);
+            let $catalog = dataspace_catalog(&[($dataspace_id, "restricted")]);
+            let $lane_catalog = catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                ($lane_id, $dataspace_id),
+            ]);
+            let $policy = default_routing_policy();
+            let $router =
+                ConfigLaneRouter::new($policy.clone(), $catalog.clone(), $lane_catalog.clone());
+            let $proposed = vec![InstructionBox::from(Register::account(
+                Account::new(target_id)
+                    .with_label(Some(account_alias("retail@restricted", &$catalog))),
+            ))];
+        };
+    }
+    fn routed_dataspace_fixture(
+        alias: &str,
+    ) -> (
+        DataSpaceId,
+        LaneId,
+        DataSpaceCatalog,
+        LaneCatalog,
+        ConfigLaneRouter,
+    ) {
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, alias)]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
+        (
+            dataspace_id,
+            lane_id,
+            dataspace_catalog,
+            lane_catalog,
+            router,
+        )
     }
     fn seed_committed_height_for_router_test(state: &crate::state::State, height: u64) {
         let mut block_hashes = state.block_hashes.block();
@@ -7669,6 +7777,43 @@ mod tests {
                 .asset_definitions
                 .insert(asset_definition.id.clone(), asset_definition);
         }
+        state
+    }
+    fn state_with_bound_numeric_asset_definition(
+        asset_definition: &AssetDefinitionId,
+        alias: &str,
+        display_name: &str,
+        owner: &AccountId,
+        dataspace_catalog: DataSpaceCatalog,
+        lane_catalog: LaneCatalog,
+    ) -> crate::state::State {
+        let alias: AssetDefinitionAlias = alias.parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    display_name.to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(owner),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition.clone(),
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
         state
     }
     fn bind_asset_definition_alias(
@@ -7888,11 +8033,7 @@ mod tests {
     #[test]
     fn default_route_shards_no_target_traffic_across_autoscaled_lanes() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -7959,11 +8100,7 @@ mod tests {
     #[test]
     fn default_route_shards_no_target_ivm_traffic_with_state_not_state_free_hint() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -8012,11 +8149,7 @@ mod tests {
     #[test]
     fn default_route_sharding_fails_closed_for_future_created_elastic_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -8274,11 +8407,7 @@ mod tests {
     #[test]
     fn default_route_sharding_ignores_autoscale_lanes_outside_enabled_range() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -8347,11 +8476,7 @@ mod tests {
         ];
         for case in cases {
             let (alice_id, alice_keypair) = gen_account_in("wonderland");
-            let policy = LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            };
+            let policy = default_routing_policy();
             let lane_catalog = lane_catalog_from_configs(vec![
                 default_lane_config(),
                 autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -8401,11 +8526,7 @@ mod tests {
     #[test]
     fn default_route_sharding_ignores_managed_lanes_when_autoscale_disabled() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -8443,11 +8564,7 @@ mod tests {
     #[test]
     fn default_route_sharding_fails_closed_when_nexus_disabled() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -8528,11 +8645,7 @@ mod tests {
     #[test]
     fn default_route_sharding_fails_closed_when_autoscale_max_lanes_exceeds_cap() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -8573,11 +8686,7 @@ mod tests {
     #[test]
     fn default_route_sharding_fails_closed_when_autoscale_min_exceeds_max() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -8613,11 +8722,7 @@ mod tests {
     #[test]
     fn default_route_sharding_fails_closed_when_autoscale_min_equals_max() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(4), DataSpaceId::UNIVERSAL, 7),
@@ -9445,11 +9550,7 @@ mod tests {
         let catalog = dataspace_catalog(&[(static_dataspace, "alpha")]);
         let lane_catalog =
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let tx = sample_transaction(
             &authority_id,
             authority_keypair.private_key(),
@@ -9471,11 +9572,7 @@ mod tests {
         let catalog = dataspace_catalog(&[]);
         let lane_catalog =
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let tx = sample_transaction(
             &authority_id,
             authority_keypair.private_key(),
@@ -9522,11 +9619,7 @@ mod tests {
         let catalog = dataspace_catalog(&[]);
         let lane_catalog =
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let tx = sample_transaction(
             &authority_id,
             authority_keypair.private_key(),
@@ -9655,11 +9748,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -9697,11 +9786,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -9728,11 +9813,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(10);
         let second_dataspace = DataSpaceId::new(11);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "paynet"), (second_dataspace, "cbuae")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -9766,11 +9847,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -9801,11 +9878,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(10);
         let second_dataspace = DataSpaceId::new(11);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "paynet"), (second_dataspace, "cbuae")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -9845,22 +9918,8 @@ mod tests {
     #[test]
     fn asset_home_proved_state_coverage_overlay_mint_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -9916,22 +9975,8 @@ mod tests {
     fn asset_home_proved_state_coverage_overlay_permission_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -9996,15 +10041,7 @@ mod tests {
             (LaneId::new(2), paynet),
             (LaneId::new(3), cbuae),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -10062,11 +10099,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -10164,22 +10197,8 @@ mod tests {
     fn asset_home_proved_settlement_overlay_dvp_global_bindings_route_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let delivery_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("settlement", "universal").expect("domain id"),
             "bond".parse().expect("asset definition name"),
@@ -10320,11 +10339,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -10360,11 +10375,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -10544,11 +10555,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -10606,11 +10613,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -10692,15 +10695,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let tx = sample_transaction(
             &alice_id,
@@ -10936,11 +10931,7 @@ mod tests {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(7);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "acme")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -10969,15 +10960,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(2), dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
         let id_seed_domain = DomainId::try_new("cash", "sbp").expect("asset definition id seed");
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             id_seed_domain,
@@ -11030,15 +11013,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(2), dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -11093,15 +11068,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(2), dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -11161,22 +11128,8 @@ mod tests {
     fn dataspace_restricted_asset_transfer_ignores_universal_account_fallback_scope() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("sbp");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -11249,15 +11202,8 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog,
-            lane_catalog,
-        );
+        let router =
+            ConfigLaneRouter::new(default_routing_policy(), dataspace_catalog, lane_catalog);
         let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -11298,11 +11244,7 @@ mod tests {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -11346,11 +11288,7 @@ mod tests {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace_id, "paynet")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -11398,15 +11336,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(2), dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
         let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -11495,11 +11425,7 @@ mod tests {
         let paynet = DataSpaceId::new(10);
         let cbuae = DataSpaceId::new(11);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(paynet, "paynet"), (cbuae, "cbuae")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -11567,22 +11493,8 @@ mod tests {
     fn global_asset_transfer_alias_binding_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -11598,32 +11510,13 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&sender_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &sender_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         scope_account_to_dataspace(&mut state, &sender_id, dataspace_id);
         assert_eq!(
@@ -11643,22 +11536,8 @@ mod tests {
     fn asset_definition_permission_grant_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -11673,32 +11552,13 @@ mod tests {
                 bob_id,
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -11717,22 +11577,8 @@ mod tests {
     fn asset_definition_permission_revoke_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -11747,32 +11593,13 @@ mod tests {
                 bob_id,
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -11790,22 +11617,8 @@ mod tests {
     #[test]
     fn asset_home_coverage_mint_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -11818,32 +11631,13 @@ mod tests {
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -11861,22 +11655,8 @@ mod tests {
     #[test]
     fn global_asset_mint_to_private_scoped_account_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -11889,32 +11669,13 @@ mod tests {
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
         assert_eq!(
@@ -11933,22 +11694,8 @@ mod tests {
     #[test]
     fn global_asset_burn_from_private_scoped_account_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -11992,22 +11739,8 @@ mod tests {
     #[test]
     fn global_asset_mint_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -12045,22 +11778,8 @@ mod tests {
     #[test]
     fn global_asset_burn_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -12099,22 +11818,8 @@ mod tests {
     fn global_asset_transfer_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -12153,22 +11858,8 @@ mod tests {
     #[test]
     fn explicit_dataspace_scoped_mint_routes_to_private_bucket() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("sbp");
         let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -12217,22 +11908,8 @@ mod tests {
     fn explicit_dataspace_scoped_transfer_routes_to_private_bucket() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("sbp");
         let owning_domain = DomainId::try_new("cash", "sbp").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -12281,22 +11958,8 @@ mod tests {
     #[test]
     fn global_asset_explicit_dataspace_scoped_mint_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("sbp");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -12344,22 +12007,8 @@ mod tests {
     #[test]
     fn global_asset_explicit_dataspace_scoped_burn_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("sbp");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -12401,22 +12050,8 @@ mod tests {
     fn global_asset_explicit_dataspace_scoped_transfer_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("sbp");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -12458,22 +12093,8 @@ mod tests {
     #[test]
     fn global_asset_zk_registration_from_private_authority_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let owning_domain = DomainId::try_new("cash", "paynet").expect("asset definition domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
             owning_domain.clone(),
@@ -12978,11 +12599,7 @@ mod tests {
         let source_lane = LaneId::new(3);
         let destination_lane = LaneId::new(4);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -13247,11 +12864,7 @@ mod tests {
             (source_lane, source_dataspace),
             (destination_lane, destination_dataspace),
         ]);
-        let routing_policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let routing_policy = default_routing_policy();
         let router = ConfigLaneRouter::new(routing_policy, dataspace_catalog, lane_catalog);
         let (corridor, settlement_instruction) = fx_corridor_fixture(
             source_dataspace,
@@ -13329,11 +12942,7 @@ mod tests {
             (auxiliary_lane, auxiliary_dataspace),
             (destination_lane, destination_dataspace),
         ]);
-        let routing_policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let routing_policy = default_routing_policy();
         let router = ConfigLaneRouter::new(
             routing_policy.clone(),
             dataspace_catalog.clone(),
@@ -13531,22 +13140,8 @@ mod tests {
     #[test]
     fn asset_home_coverage_burn_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -13559,32 +13154,13 @@ mod tests {
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -13603,22 +13179,8 @@ mod tests {
     fn asset_home_coverage_modify_asset_metadata_permission_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -13633,32 +13195,13 @@ mod tests {
                 bob_id,
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -13677,22 +13220,8 @@ mod tests {
     fn asset_home_coverage_unregister_asset_definition_permission_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -13707,32 +13236,13 @@ mod tests {
                 bob_id,
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -13751,52 +13261,19 @@ mod tests {
     fn asset_home_extra_coverage_mint_permissions_use_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition.clone(),
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         let permissions = [
             Permission::from(CanMintAssetWithDefinition {
@@ -13834,22 +13311,8 @@ mod tests {
     fn asset_home_extra_coverage_burn_permission_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -13864,32 +13327,13 @@ mod tests {
                 bob_id,
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -13909,22 +13353,8 @@ mod tests {
     {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -13939,32 +13369,13 @@ mod tests {
                 bob_id,
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -13983,22 +13394,8 @@ mod tests {
     fn confidential_policy_permission_uses_exact_asset_definition_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -14013,32 +13410,13 @@ mod tests {
                 bob_id,
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -14057,22 +13435,8 @@ mod tests {
     fn asset_home_more_coverage_revoke_modify_definition_metadata_permission_uses_stored_alias() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
@@ -14087,32 +13451,13 @@ mod tests {
                 bob_id,
             ))],
         );
-        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition.clone(),
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
+        let mut state = state_with_bound_numeric_asset_definition(
+            &asset_definition,
+            "pkr#paynet",
+            "pkr",
+            &alice_id,
             dataspace_catalog,
             lane_catalog,
-        );
-        state
-            .world
-            .asset_definition_aliases
-            .insert(alias.clone(), asset_definition.clone());
-        state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
-            crate::state::AssetDefinitionAliasBindingRecord {
-                alias,
-                lease_expiry_ms: None,
-                grace_until_ms: None,
-                bound_at_ms: 0,
-            },
         );
         assert_eq!(
             router
@@ -14131,22 +13476,8 @@ mod tests {
     fn known_opaque_global_asset_without_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "paynet").expect("asset definition domain"),
@@ -14195,22 +13526,8 @@ mod tests {
     #[test]
     fn known_opaque_global_asset_mint_without_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "paynet").expect("asset definition domain"),
@@ -14257,22 +13574,8 @@ mod tests {
     #[test]
     fn known_opaque_global_asset_mint_with_stored_private_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "paynet").expect("asset definition domain"),
@@ -14589,15 +13892,7 @@ mod tests {
         let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
         let lane_catalog =
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
@@ -14657,22 +13952,8 @@ mod tests {
     fn opaque_asset_transfer_routes_to_sender_single_scope_when_asset_definition_unresolved() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "paynet").expect("asset definition domain"),
@@ -14717,22 +13998,8 @@ mod tests {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"router::uaid-bound-sender"));
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+            routed_dataspace_fixture("paynet");
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "paynet").expect("asset definition domain"),
@@ -14800,15 +14067,7 @@ mod tests {
             (LaneId::new(2), first_dataspace),
             (LaneId::new(3), second_dataspace),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
+        let router = default_router(dataspace_catalog.clone(), lane_catalog.clone());
         let transparent_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("cash", "paynet").expect("asset definition domain"),
@@ -14903,11 +14162,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -15035,11 +14290,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -15119,11 +14370,7 @@ mod tests {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let dataspace = DataSpaceId::new(7);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(dataspace, "acme")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -15165,11 +14412,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -15261,11 +14504,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -15307,11 +14546,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -15353,11 +14588,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -15399,11 +14630,7 @@ mod tests {
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
         let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
+            default_routing_policy(),
             dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
             catalog_with_lane_dataspaces(&[
                 (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -16026,11 +15253,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace = DataSpaceId::new(10);
         let lane = LaneId::new(3);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane, dataspace),
@@ -16083,11 +15306,7 @@ mod tests {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
         let dataspace = DataSpaceId::new(10);
         let lane = LaneId::new(3);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane, dataspace),
@@ -16135,54 +15354,7 @@ mod tests {
     }
     #[test]
     fn account_permission_grant_routes_by_destination_account_policy() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![
-                LaneRoutingRule {
-                    lane: LaneId::new(1),
-                    dataspace: Some(DataSpaceId::new(1)),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(alice_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                },
-                LaneRoutingRule {
-                    lane: LaneId::new(2),
-                    dataspace: Some(DataSpaceId::new(2)),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(bob_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                },
-            ],
-        };
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (LaneId::new(1), DataSpaceId::new(1)),
-            (LaneId::new(2), DataSpaceId::new(2)),
-        ]);
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            iroha_data_model::nexus::DataSpaceMetadata::default(),
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::new(1),
-                alias: "alice".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::new(2),
-                alias: "bob".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog");
-        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let (alice_id, alice_keypair, bob_id, router) = two_account_policy_router_fixture!();
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
@@ -16203,54 +15375,7 @@ mod tests {
     }
     #[test]
     fn asset_definition_permission_grant_routes_by_asset_definition_dataspace_policy() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![
-                LaneRoutingRule {
-                    lane: LaneId::new(1),
-                    dataspace: Some(DataSpaceId::new(1)),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(alice_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                },
-                LaneRoutingRule {
-                    lane: LaneId::new(2),
-                    dataspace: Some(DataSpaceId::new(2)),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(bob_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                },
-            ],
-        };
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (LaneId::new(1), DataSpaceId::new(1)),
-            (LaneId::new(2), DataSpaceId::new(2)),
-        ]);
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            iroha_data_model::nexus::DataSpaceMetadata::default(),
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::new(1),
-                alias: "alice".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::new(2),
-                alias: "bob".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog");
-        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let (alice_id, alice_keypair, bob_id, router) = two_account_policy_router_fixture!();
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("nexus", "universal").unwrap(),
             "ds1".parse().unwrap(),
@@ -16297,54 +15422,7 @@ mod tests {
     }
     #[test]
     fn asset_definition_permission_revoke_routes_by_asset_definition_dataspace_policy() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![
-                LaneRoutingRule {
-                    lane: LaneId::new(1),
-                    dataspace: Some(DataSpaceId::new(1)),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(alice_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                },
-                LaneRoutingRule {
-                    lane: LaneId::new(2),
-                    dataspace: Some(DataSpaceId::new(2)),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(bob_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                },
-            ],
-        };
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (LaneId::new(1), DataSpaceId::new(1)),
-            (LaneId::new(2), DataSpaceId::new(2)),
-        ]);
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            iroha_data_model::nexus::DataSpaceMetadata::default(),
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::new(1),
-                alias: "alice".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::new(2),
-                alias: "bob".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog");
-        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let (alice_id, alice_keypair, bob_id, router) = two_account_policy_router_fixture!();
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("nexus", "universal").unwrap(),
             "ds1".parse().unwrap(),
@@ -16391,54 +15469,7 @@ mod tests {
     }
     #[test]
     fn asset_definition_permission_grant_routes_by_named_dataspace_alias() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![
-                LaneRoutingRule {
-                    lane: LaneId::new(1),
-                    dataspace: Some(DataSpaceId::new(1)),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(alice_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                },
-                LaneRoutingRule {
-                    lane: LaneId::new(2),
-                    dataspace: Some(DataSpaceId::new(2)),
-                    matcher: LaneRoutingMatcher {
-                        account: Some(bob_id.to_string()),
-                        instruction: None,
-                        description: None,
-                    },
-                },
-            ],
-        };
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (LaneId::new(1), DataSpaceId::new(1)),
-            (LaneId::new(2), DataSpaceId::new(2)),
-        ]);
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            iroha_data_model::nexus::DataSpaceMetadata::default(),
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::new(1),
-                alias: "alice".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::new(2),
-                alias: "bob".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog");
-        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let (alice_id, alice_keypair, bob_id, router) = two_account_policy_router_fixture!();
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("vault", "bob").unwrap(),
             "voucher".parse().unwrap(),
@@ -16488,11 +15519,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: vec![],
-        };
+        let policy = default_routing_policy();
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(3), first_dataspace),
@@ -16555,15 +15582,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog,
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog, lane_catalog);
         let permission = Permission::from(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(dataspace_id),
         });
@@ -16592,15 +15611,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog,
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog, lane_catalog);
         let permission = Permission::from(CanResolveAccountAlias {
             scope: AccountAliasPermissionScope::Domain(
                 DomainId::try_new("mibank", "paynet").expect("domain id"),
@@ -16631,15 +15642,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog,
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog, lane_catalog);
         let permission = Permission::from(CanDelegateAccountAliasResolution {
             scope: AccountAliasPermissionScope::Domain(
                 DomainId::try_new("mibank", "paynet").expect("domain id"),
@@ -16866,15 +15869,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let tx = sample_transaction(
             &submitter_id,
             submitter_keypair.private_key(),
@@ -16911,15 +15906,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let tx = sample_transaction(
             &submitter_id,
             submitter_keypair.private_key(),
@@ -17322,25 +16309,7 @@ mod tests {
     }
     #[test]
     fn multisig_propose_routes_by_embedded_instruction_dataspace() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let tx = sample_transaction(
             &submitter_id,
             submitter_keypair.private_key(),
@@ -17397,25 +16366,7 @@ mod tests {
     }
     #[test]
     fn multisig_propose_plan_prefers_embedded_dataspace_over_multiscope_account() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let tx = sample_transaction(
             &submitter_id,
             submitter_keypair.private_key(),
@@ -17458,25 +16409,7 @@ mod tests {
     }
     #[test]
     fn multisig_same_transaction_approve_uses_sibling_proposal_route() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let proposal_hash = HashOf::new(&proposed);
         let tx = sample_transaction(
             &submitter_id,
@@ -17511,25 +16444,7 @@ mod tests {
     }
     #[test]
     fn custom_multisig_propose_defers_and_routes_by_embedded_instruction_dataspace() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let tx = sample_transaction(
             &submitter_id,
             submitter_keypair.private_key(),
@@ -17567,25 +16482,7 @@ mod tests {
     }
     #[test]
     fn multisig_approve_routes_by_multisig_account_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let instructions_hash = HashOf::new(&proposed);
         let tx = sample_transaction(
             &submitter_id,
@@ -17625,25 +16522,7 @@ mod tests {
     }
     #[test]
     fn custom_multisig_approve_defers_and_routes_by_multisig_account_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let instructions_hash = HashOf::new(&proposed);
         let tx = sample_transaction(
             &submitter_id,
@@ -17684,25 +16563,7 @@ mod tests {
     }
     #[test]
     fn multisig_approve_routes_by_persisted_proposal_when_scope_is_missing() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let instructions_hash = HashOf::new(&proposed);
         let tx = sample_transaction(
             &submitter_id,
@@ -17772,25 +16633,7 @@ mod tests {
     }
     #[test]
     fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let instructions_hash = HashOf::new(&proposed);
         let tx = sample_transaction(
             &submitter_id,
@@ -17861,11 +16704,7 @@ mod tests {
             (account_lane, account_dataspace),
             (stale_lane, stale_dataspace),
         ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
+        let policy = default_routing_policy();
         let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
         let approved = vec![InstructionBox::from(Register::account(
             Account::new(approved_target_id)
@@ -17938,25 +16777,7 @@ mod tests {
     }
     #[test]
     fn multisig_approve_plan_prefers_visible_proposal_over_multiscope_account() {
-        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
-        let (multisig_id, _) = gen_account_in("wonderland");
-        let (target_id, _) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let policy = LaneRoutingPolicy {
-            default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::UNIVERSAL,
-            rules: Vec::new(),
-        };
-        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
-        let proposed = vec![InstructionBox::from(Register::account(
-            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
-        ))];
+        multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
         let instructions_hash = HashOf::new(&proposed);
         let tx = sample_transaction(
             &submitter_id,
@@ -18026,15 +16847,7 @@ mod tests {
             (LaneId::new(1), first_dataspace),
             (LaneId::new(2), second_dataspace),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let tx = sample_transaction(
             &submitter_id,
             submitter_keypair.private_key(),
@@ -18071,15 +16884,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("vault", "restricted").expect("domain id"),
             "voucher".parse().expect("asset definition name"),
@@ -18130,15 +16935,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("vault", "restricted").expect("domain id"),
             "voucher".parse().expect("asset definition name"),
@@ -18191,15 +16988,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("domain id"),
             "pkr".parse().expect("asset definition name"),
@@ -18267,15 +17056,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("vault", "restricted").expect("domain id"),
             "voucher".parse().expect("asset definition name"),
@@ -18327,15 +17108,7 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: Vec::new(),
-            },
-            catalog.clone(),
-            lane_catalog,
-        );
+        let router = ConfigLaneRouter::new(default_routing_policy(), catalog.clone(), lane_catalog);
         let transparent_asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("cash", "universal").expect("domain id"),
             "pkr".parse().expect("asset definition name"),

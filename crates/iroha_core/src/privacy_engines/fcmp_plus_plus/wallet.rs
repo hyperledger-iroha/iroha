@@ -35,7 +35,7 @@ const NOTE_AAD_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.wallet.note-aad.v1";
 const NOTE_KEY_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.wallet.note-key.v1";
 const POLY1305_TAG_BYTES_V1: usize = 16;
 const AEAD_BYTES_V1: usize = PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1 + POLY1305_TAG_BYTES_V1;
-struct WalletSecretCopyValueV1<T: Copy + Zeroize>(T);
+pub(super) struct WalletSecretCopyValueV1<T: Copy + Zeroize>(T);
 struct BorrowedWalletCopySlotV1<'a, T: Copy + Zeroize>(&'a mut T);
 impl<T: Copy + Zeroize> BorrowedWalletCopySlotV1<'_, T> {
     fn expose_copy(&self) -> T {
@@ -65,7 +65,7 @@ impl<T: Copy + Zeroize> WalletSecretCopyValueV1<T> {
     fn expose_copy(&self) -> T {
         self.0
     }
-    fn expose_ref(&self) -> &T {
+    pub(super) fn expose_ref(&self) -> &T {
         &self.0
     }
 }
@@ -150,6 +150,15 @@ impl Drop for WalletSecretSha256V1 {
         let _ = core::hint::black_box(&mut self.state);
         let _ = core::hint::black_box(&mut self.block);
     }
+}
+/// Hash borrowed secret-bearing slices while owning and erasing all SHA-256
+/// state, block scratch, and digest output.
+pub(super) fn secret_sha256_v1(inputs: &[&[u8]]) -> WalletSecretCopyValueV1<[u8; 32]> {
+    let mut hash = WalletSecretSha256V1::new();
+    for input in inputs {
+        hash.update_v1(input);
+    }
+    hash.finalize_v1()
 }
 /// Decrypted fixed-width FCMP++ wallet note.
 ///
@@ -642,12 +651,15 @@ mod tests {
         expected.update(aad);
         let expected: [u8; 32] = expected.finalize().into();
         assert_eq!(actual.expose_ref(), &expected);
+        let frozen: [u8; 32] = hex::decode(
+            "69e939fa1441f1353609cf5a5df72e60782976a166884df190e9093b6af54333",
+        )
+        .expect("literal SHA-256")
+        .try_into()
+        .expect("32-byte SHA-256");
         assert_eq!(
             expected,
-            hex::decode("69e939fa1441f1353609cf5a5df72e60782976a166884df190e9093b6af54333")
-                .expect("literal SHA-256")
-                .try_into()
-                .expect("32-byte SHA-256")
+            frozen
         );
     }
     #[test]
@@ -1055,7 +1067,7 @@ mod tests {
             .encrypt(
                 &nonce,
                 Payload {
-                    msg: &mismatching_plaintext,
+                    msg: mismatching_plaintext.as_ref(),
                     aad: &aad,
                 },
             )

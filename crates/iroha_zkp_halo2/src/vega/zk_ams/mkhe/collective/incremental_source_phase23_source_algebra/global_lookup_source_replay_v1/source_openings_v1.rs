@@ -9,11 +9,16 @@
     dead_code,
     reason = "the production entropy and reopen seals are uninhabited"
 )]
-use core::convert::Infallible;
-use std::path::PathBuf;
-use iroha_confidential_spool::{
-    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
-    ConfidentialSpoolWriterV1,
+use super::super::super::super::super::super::{
+    ZkAmsMkheErrorV1, global_lookup_statement_v1::global_lookup_topology_digest_v1,
+};
+use super::super::super::{
+    PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1, PHASE23_MAIN_BLOCK_BYTES_V1, PHASE23_RECORD_COUNT_V1,
+};
+use super::{
+    AUTHENTICATION_TAG_BYTES_V1, GLOBAL_LOOKUP_TOPOLOGY_KAT_V1, Phase23GlobalLookupSourceReplayV1,
+    TOTAL_REPLAY_IO_BYTES_V1, map_leaf_error_v1, validate_canonical_source_block_v1,
+    validate_replay_record_v1,
 };
 use crate::{
     generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder},
@@ -27,19 +32,11 @@ use crate::{
         sponge::Keccak256,
     },
 };
-use super::super::super::super::super::super::{
-    MAX_RANDOM_REJECTION_ATTEMPTS_V1, ZkAmsMkheErrorV1,
-    global_lookup_statement_v1::global_lookup_topology_digest_v1,
+use core::convert::Infallible;
+use iroha_confidential_spool::{
+    ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
-use super::super::super::{
-    MaskedRelaxedRandomSourceV1, PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1,
-    PHASE23_MAIN_BLOCK_BYTES_V1, PHASE23_RECORD_COUNT_V1,
-};
-use super::{
-    AUTHENTICATION_TAG_BYTES_V1, GLOBAL_LOOKUP_TOPOLOGY_KAT_V1, Phase23GlobalLookupSourceReplayV1,
-    TOTAL_REPLAY_IO_BYTES_V1, map_leaf_error_v1, validate_canonical_source_block_v1,
-    validate_replay_record_v1,
-};
+use std::path::PathBuf;
 const SOURCE_OPENING_VERSION_V1: u8 = 1;
 const SOURCE_OPENING_GROUPS_PER_RECORD_V1: usize = 8;
 const SOURCE_OPENING_BLOCKS_PER_GROUP_V1: usize = 64;
@@ -88,8 +85,6 @@ const SOURCE_OPENING_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.commitments\0";
 const SOURCE_OPENING_RECORD_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.record\0";
-const SOURCE_OPENING_TEST_ENTROPY_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.test-entropy\0";
 const SOURCE_OPENING_BLINDING_ORDER_V1: &[u8] =
     b"slot=commitment-ordinal=record*8+group;scalar=canonical-T256-big-endian";
 const CANONICAL_REOPEN_SCHEDULE_DOMAIN_V1: &[u8] =
@@ -306,166 +301,12 @@ fn source_opening_blinding_context_digest_v1(
     hash.update(SOURCE_OPENING_BLINDING_ORDER_V1);
     require_nonzero_opening_digest_v1(hash.finalize())
 }
-/// Production cannot currently mint the proof-session entropy capability.
-/// The deterministic fixture exists only for independent unit tests.
-pub(in crate::vega::zk_ams::mkhe) enum GlobalLookupSourceOpeningEntropySealV1 {
-    Production {
-        proof_session_entropy: Infallible,
-    },
-    #[cfg(test)]
-    TestOnly(DeterministicSourceOpeningEntropyV1),
-}
-#[cfg(test)]
-enum TestEntropyFaultV1 {
-    None,
-    ErrorAt(u16),
-    ZeroAt(u16),
-    PanicAt(u16),
-}
-#[cfg(test)]
-pub(in crate::vega::zk_ams::mkhe) struct DeterministicSourceOpeningEntropyV1 {
-    seed: [u8; 32],
-    next_group: u16,
-    active_group: Option<u16>,
-    attempt: u16,
-    fault: TestEntropyFaultV1,
-}
-#[cfg(test)]
-impl DeterministicSourceOpeningEntropyV1 {
-    const fn new_v1(seed: [u8; 32]) -> Self {
-        Self {
-            seed,
-            next_group: 0,
-            active_group: None,
-            attempt: 0,
-            fault: TestEntropyFaultV1::None,
-        }
-    }
-    const fn with_fault_v1(seed: [u8; 32], fault: TestEntropyFaultV1) -> Self {
-        Self {
-            seed,
-            next_group: 0,
-            active_group: None,
-            attempt: 0,
-            fault,
-        }
-    }
-    fn begin_group_v1(&mut self, group: u16) -> Result<(), ZkAmsMkheErrorV1> {
-        if group != self.next_group || self.active_group.is_some() {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        self.active_group = Some(group);
-        self.attempt = 0;
-        Ok(())
-    }
-    fn finish_group_v1(&mut self) -> Result<(), ZkAmsMkheErrorV1> {
-        if self.active_group != Some(self.next_group) {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        self.active_group = None;
-        self.attempt = 0;
-        self.next_group += 1;
-        Ok(())
-    }
-}
-#[cfg(test)]
-impl MaskedRelaxedRandomSourceV1 for DeterministicSourceOpeningEntropyV1 {
-    fn fill_bytes(
-        &mut self,
-        destination: &mut [u8],
-    ) -> Result<(), crate::vega::MaskedRelaxedRandomErrorV1> {
-        let group = self
-            .active_group
-            .ok_or(crate::vega::MaskedRelaxedRandomErrorV1::Unavailable)?;
-        if destination.len() != SOURCE_OPENING_BLINDING_SLOT_BYTES_V1 as usize {
-            return Err(crate::vega::MaskedRelaxedRandomErrorV1::Unavailable);
-        }
-        match &self.fault {
-            TestEntropyFaultV1::ErrorAt(at) if *at == group => {
-                return Err(crate::vega::MaskedRelaxedRandomErrorV1::Unavailable);
-            }
-            TestEntropyFaultV1::ZeroAt(at) if *at == group => destination.fill(0),
-            TestEntropyFaultV1::PanicAt(at) if *at == group => {
-                panic!("intentional source-opening entropy unwind");
-            }
-            TestEntropyFaultV1::None
-            | TestEntropyFaultV1::ErrorAt(_)
-            | TestEntropyFaultV1::ZeroAt(_)
-            | TestEntropyFaultV1::PanicAt(_) => {
-                let destination: &mut [u8; 32] = destination
-                    .try_into()
-                    .map_err(|_| crate::vega::MaskedRelaxedRandomErrorV1::Unavailable)?;
-                let mut hash = Keccak256::new();
-                hash.update(SOURCE_OPENING_TEST_ENTROPY_DOMAIN_V1);
-                hash.update(&self.seed);
-                hash.update(&group.to_be_bytes());
-                hash.update(&self.attempt.to_be_bytes());
-                hash.finalize_into(destination);
-            }
-        }
-        self.attempt = self.attempt.saturating_add(1);
-        Ok(())
-    }
-}
-#[cfg(test)]
-impl Drop for DeterministicSourceOpeningEntropyV1 {
-    fn drop(&mut self) {
-        self.seed.fill(0);
-        self.next_group = 0;
-        self.active_group = None;
-        self.attempt = 0;
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    }
-}
-impl GlobalLookupSourceOpeningEntropySealV1 {
-    fn sample_blinding_chunk_v1(
-        &mut self,
-        group: u16,
-    ) -> Result<(ConfidentialSpoolChunkV1, ZeroizingT256ScalarCopyV1), ZkAmsMkheErrorV1> {
-        match self {
-            Self::Production {
-                proof_session_entropy,
-            } => match *proof_session_entropy {},
-            #[cfg(test)]
-            Self::TestOnly(entropy) => {
-                entropy.begin_group_v1(group)?;
-                let result = sample_blinding_chunk_from_random_v1(entropy)?;
-                entropy.finish_group_v1()?;
-                Ok(result)
-            }
-        }
-    }
-    #[cfg(test)]
-    pub(super) const fn test_only_v1(seed: [u8; 32]) -> Self {
-        Self::TestOnly(DeterministicSourceOpeningEntropyV1::new_v1(seed))
-    }
-}
-fn sample_blinding_chunk_from_random_v1(
-    random: &mut impl MaskedRelaxedRandomSourceV1,
-) -> Result<(ConfidentialSpoolChunkV1, ZeroizingT256ScalarCopyV1), ZkAmsMkheErrorV1> {
-    for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
-        let mut chunk =
-            ConfidentialSpoolChunkV1::new_zeroed_v1(SOURCE_OPENING_BLINDING_SLOT_BYTES_V1)
-                .map_err(map_leaf_error_v1)?;
-        random
-            .fill_bytes(chunk.as_mut_slice_v1())
-            .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
-        let encoded: &[u8; 32] = chunk
-            .as_mut_slice_v1()
-            .try_into()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        if let Ok(mut blinding) = Scalar::from_be_bytes_exact_ref(encoded) {
-            let blinding = ZeroizingT256ScalarCopyV1::take(&mut blinding);
-            if blinding.get().is_zero() {
-                continue;
-            }
-            return Ok((chunk, blinding));
-        }
-    }
-    Err(ZkAmsMkheErrorV1::RandomUnavailable)
-}
+#[path = "source_openings_v1/commitment_session_v1.rs"]
+mod commitment_session_v1;
+pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::GlobalLookupProofSessionEntropySealV1;
+use commitment_session_v1::{GlobalLookupCommitmentSessionV1, SourceOpeningCompleteStageV1};
 struct SourceOpeningLiveV1 {
-    entropy: GlobalLookupSourceOpeningEntropySealV1,
+    proof_session: GlobalLookupProofSessionEntropySealV1,
     group_scalars: ZeroizingT256ScalarVecV1,
     blinding_writer: ConfidentialSpoolWriterV1,
     commitments: Vec<Point>,
@@ -489,7 +330,7 @@ impl SourceOpeningAssemblyV1 {
         source_receipt_digest: [u8; 32],
         prerequisite_record_digest: [u8; 32],
         replay_spool_context_digest: [u8; 32],
-        entropy: GlobalLookupSourceOpeningEntropySealV1,
+        mut proof_session: GlobalLookupProofSessionEntropySealV1,
         directory: &PathBuf,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         // Establish every local allocation and the pinned basis before any
@@ -510,6 +351,7 @@ impl SourceOpeningAssemblyV1 {
         };
         let context_digest =
             source_opening_context_digest_v1(&axes, topology_digest, mapping_digest, basis_digest)?;
+        proof_session.bind_source_opening_context_v1(context_digest)?;
         let blinding_context_digest = source_opening_blinding_context_digest_v1(
             context_digest,
             mapping_digest,
@@ -542,7 +384,7 @@ impl SourceOpeningAssemblyV1 {
         commitment_hash.update(&(SOURCE_OPENING_GROUP_COUNT_V1 as u16).to_be_bytes());
         Ok(Self {
             live: Some(SourceOpeningLiveV1 {
-                entropy,
+                proof_session,
                 group_scalars: ZeroizingT256ScalarVecV1::with_capacity(
                     SOURCE_OPENING_SCALARS_PER_GROUP_V1,
                 ),
@@ -599,8 +441,9 @@ impl SourceOpeningAssemblyV1 {
             {
                 return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
             }
-            let (blinding_chunk, blinding) =
-                live.entropy.sample_blinding_chunk_v1(coordinate.ordinal)?;
+            let (blinding_chunk, blinding) = live
+                .proof_session
+                .sample_source_blinding_v1(u32::from(coordinate.ordinal))?;
             let commitment = source_opening_commitment_for_suite_v1::<ZkAmsT256BulletproofSuiteV1>(
                 live.group_scalars.as_slice(),
                 blinding.as_ref(),
@@ -619,6 +462,8 @@ impl SourceOpeningAssemblyV1 {
             live.blinding_writer
                 .write_slot_v1(u64::from(coordinate.ordinal), blinding_chunk)
                 .map_err(map_leaf_error_v1)?;
+            live.proof_session
+                .adopt_source_commitment_v1(u32::from(coordinate.ordinal), &commitment)?;
             live.commitments.push(commitment);
             live.group_scalars.clear_and_truncate(0);
             live.next_group = live
@@ -707,10 +552,16 @@ impl SourceOpeningAssemblyV1 {
         };
         record.record_digest = source_opening_record_digest_v1(&record)?;
         validate_source_opening_record_v1(&record)?;
+        let proof_session = live.proof_session.complete_source_opening_v1(
+            record.context_digest,
+            record.commitments_root,
+            record.blinding_snapshot_root,
+        )?;
         let material = GlobalLookupSourceOpeningMaterialV1 {
             blinding_snapshot,
             commitments: live.commitments,
             record,
+            proof_session,
         };
         material.validate_v1()?;
         Ok(material)
@@ -917,10 +768,16 @@ pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupSourceOpeningMaterialV1 {
     blinding_snapshot: ConfidentialSpoolSnapshotV1,
     commitments: Vec<Point>,
     record: SourceOpeningRecordV1,
+    proof_session: GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1>,
 }
 impl GlobalLookupSourceOpeningMaterialV1 {
-    fn validate_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
+    pub(super) fn validate_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
         validate_source_opening_record_v1(&self.record)?;
+        self.proof_session.validate_source_opening_v1(
+            self.record.context_digest,
+            self.record.commitments_root,
+            self.record.blinding_snapshot_root,
+        )?;
         if self.blinding_snapshot.slot_count_v1() != SOURCE_OPENING_GROUP_COUNT_V1 as u64
             || self.blinding_snapshot.plaintext_len_v1() != SOURCE_OPENING_BLINDING_SLOT_BYTES_V1
             || self.blinding_snapshot.file_len_v1() != SOURCE_OPENING_BLINDING_FILE_BYTES_V1

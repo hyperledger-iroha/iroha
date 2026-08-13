@@ -1,581 +1,575 @@
 use super::*;
+
 const PRODUCTION_SOURCE_V2: &str = include_str!("incremental_source_phase23_radix_range_v2.rs");
-const TEST_SOURCE_V2: &str = include_str!("incremental_source_phase23_radix_range_v2_tests.rs");
+const CURSOR_SOURCE_V2: &str = include_str!(
+    "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/radix_source_cursor_v2.rs"
+);
+const REPLAY_SOURCE_V2: &str =
+    include_str!("incremental_source_phase23_source_algebra/global_lookup_source_replay_v1.rs");
 const PARENT_SOURCE_V2: &str = include_str!("incremental_source_phase23.rs");
-fn exact_transcript_manifest_v2() -> Vec<u8> {
-    encode_transcript_frames_v2(&RADIX_RANGE_TRANSCRIPT_FRAMES_V2)
+static RADIX_WITNESS_TEST_LOCK_V2: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn radix_witness_test_guard_v2() -> std::sync::MutexGuard<'static, ()> {
+    RADIX_WITNESS_TEST_LOCK_V2
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-fn encode_transcript_frames_v2(frames: &[&[u8]]) -> Vec<u8> {
-    let mut encoded = Vec::new();
-    for (ordinal, frame) in frames.iter().enumerate() {
-        encoded.extend_from_slice(&(ordinal as u16).to_be_bytes());
-        encoded.extend_from_slice(&(frame.len() as u16).to_be_bytes());
-        encoded.extend_from_slice(frame);
-    }
+
+fn be_from_u64_v2(value: u64) -> [u8; 32] {
+    let mut encoded = [0_u8; 32];
+    encoded[24..].copy_from_slice(&value.to_be_bytes());
     encoded
 }
+
+fn unpack_lanes_v2(packed: &[u8; 3]) -> (u8, u8, [u8; 18], u8) {
+    let b_d = packed[0] & 1;
+    let b_s = (packed[0] >> 1) & 1;
+    let beta = core::array::from_fn(|index| match index {
+        0..=5 => (packed[0] >> (index + 2)) & 1,
+        6..=13 => (packed[1] >> (index - 6)) & 1,
+        14..=17 => (packed[2] >> (index - 14)) & 1,
+        _ => unreachable!(),
+    });
+    (b_d, b_s, beta, (packed[2] >> 4) & 1)
+}
+
 #[test]
-fn exact_topology_formulas_and_coordinates_are_frozen() {
-    assert_eq!(RADIX_RECORDS_V2, 43);
-    assert_eq!(RADIX_RECORD_ORDER_V2, b"X1/U16/E16/RE1/W8/RW1");
-    assert_eq!(RADIX_GROUPS_PER_RECORD_V2, 8);
-    assert_eq!(RADIX_GROUPS_V2, 344);
-    assert_eq!(RADIX_COEFFICIENTS_PER_GROUP_V2, 16_384);
-    assert_eq!(RADIX_SOURCE_BLOCKS_PER_GROUP_V2, 64);
-    assert_eq!(RADIX_SOURCE_COEFFICIENTS_PER_BLOCK_V2, 256);
-    assert_eq!(RADIX_COEFFICIENTS_V2, 5_636_096);
-    assert_eq!(RADIX_LOW_DIGITS_PER_COEFFICIENT_V2, 34);
-    assert_eq!(RADIX_LOW_DIGITS_V2, 191_627_264);
-    assert_eq!(RADIX_TOP_BITS_V2, 11_272_192);
-    assert_eq!(RADIX_INVERSE_PLANES_PER_GROUP_V2, 2);
-    assert_eq!(RADIX_INVERSE_POINTS_PER_PLANE_V2, 17);
-    assert_eq!(RADIX_INVERSE_POINTS_PER_GROUP_V2, 34);
-    assert_eq!(RADIX_COMMITMENT_POINTS_PER_GROUP_V2, 70);
-    assert_eq!(RADIX_RANGE_COMMITMENT_POINTS_V2, 24_080);
-    assert_eq!(RADIX_SOURCE_COEFFICIENT_COMMITMENT_POINTS_V2, 344);
+fn exact_mapping_packing_geometry_and_io_are_frozen() {
+    assert_eq!(RADIX_GROUP_COUNT_V2, 43 * 8);
+    assert_eq!(RADIX_WITNESS_SLOT_COUNT_V2, 1_032);
+    assert_eq!(RADIX_WITNESS_SLOT_PLAINTEXT_BYTES_V2, 16_384);
+    assert_eq!(RADIX_WITNESS_PLAINTEXT_BYTES_V2, 16_908_288);
+    assert_eq!(RADIX_WITNESS_AUTHENTICATION_TAG_BYTES_V2, 16_512);
+    assert_eq!(RADIX_WITNESS_FILE_BYTES_V2, 16_924_800);
+    assert_eq!(RADIX_WITNESS_SPOOL_IO_BYTES_V2, 33_849_600);
+    assert_eq!(RADIX_SOURCE_REREAD_BLOCKS_V2, 43 * 512);
+    assert_eq!(RADIX_SOURCE_REREAD_PLAINTEXT_BYTES_V2, 180_355_072);
+    assert_eq!(RADIX_SOURCE_REREAD_TAG_BYTES_V2, 352_256);
+    assert_eq!(RADIX_SOURCE_REREAD_AUTHENTICATED_BYTES_V2, 180_707_328);
+    assert_eq!(RADIX_WITNESS_TOTAL_IO_BYTES_V2, 214_556_928);
+    assert_eq!(RADIX_COEFFICIENT_SCRATCH_BUDGET_BYTES_V2, 384);
+    assert_eq!(RADIX_WITNESS_NAMED_LIVE_PAYLOAD_BYTES_V2, 57_728);
+    assert!(RADIX_WITNESS_NAMED_LIVE_PAYLOAD_BYTES_V2 <= 64 * 1_024);
+
+    let first = radix_witness_coordinate_v2(0, 0, 0, 0).unwrap();
     assert_eq!(
-        DECOMPOSITION_D_FORMULA_V2,
-        b"D=sum_{h=0}^{16}(2^15)^h*d_h+(2^15)^17*b_d"
+        (
+            first.record,
+            first.family,
+            first.group,
+            first.source_block,
+            first.coefficient,
+            first.source_index,
+            first.packing_index,
+            first.first_slot,
+        ),
+        (0, 1, 0, 0, 0, 0, 0, 0)
     );
+    let transpose = radix_witness_coordinate_v2(0, 0, 1, 2).unwrap();
     assert_eq!(
-        DECOMPOSITION_S_FORMULA_V2,
-        b"S=sum_{h=0}^{16}(2^15)^h*s_h+(2^15)^17*b_s"
+        (transpose.source_index, transpose.packing_index),
+        (258, 129)
     );
-    assert_eq!(CANONICAL_VALUE_FORMULA_V2, b"v=D mod p;D+S=p-1");
-    assert_eq!(DIGIT_TABLE_FORMULA_V2, b"d_h,s_h in [0,32767]");
-    assert_eq!(TOP_BIT_FORMULA_V2, b"b_d*(b_d-1)=b_s*(b_s-1)=b_d*b_s=0");
+    let last = radix_witness_coordinate_v2(42, 7, 63, 255).unwrap();
     assert_eq!(
-        COMMITMENT_TOPOLOGY_FORMULA_V2,
-        b"per-group:source1,D17,S17,Dinv17,Sinv17,Dtop1,Stop1"
+        (
+            last.family,
+            last.source_index,
+            last.packing_index,
+            last.first_slot,
+        ),
+        (6, 5_636_095, 5_636_095, 1_029)
     );
-    assert_eq!(
-        LOOKUP_FORMULA_V2,
-        b"reject until z notin [0,32767];then U_D,U_S=(z-A)^-1;absorb Dinv then Sinv"
-    );
-    let family_boundaries = [(0, 1), (1, 2), (17, 3), (33, 4), (34, 5), (42, 6)];
-    for (ordinal, family) in family_boundaries {
-        assert_eq!(
-            source_coordinate_v2(ordinal, 0, 0, 0).unwrap().family,
-            family
+    assert_eq!(radix_witness_slot_v2(42, 7, 2).unwrap(), 1_031);
+    assert_eq!(radix_witness_packing_index_v2(63, 255).unwrap(), 16_383);
+    assert!(radix_witness_coordinate_v2(43, 0, 0, 0).is_err());
+    assert!(radix_witness_coordinate_v2(0, 8, 0, 0).is_err());
+    assert!(radix_witness_coordinate_v2(0, 0, 64, 0).is_err());
+    assert!(radix_witness_coordinate_v2(0, 0, 0, 256).is_err());
+    assert!(radix_witness_slot_v2(0, 0, 3).is_err());
+    assert!(radix_witness_packing_index_v2(64, 0).is_err());
+    assert_ne!(exact_radix_witness_mapping_digest_v2().unwrap(), [0; 32]);
+    let mapping_scope = PRODUCTION_SOURCE_V2
+        .split("fn exact_radix_witness_mapping_digest_v2")
+        .nth(1)
+        .unwrap()
+        .split("fn radix_witness_context_digest_v2")
+        .next()
+        .unwrap();
+    for required in [
+        "for record in 0..PHASE23_RECORD_COUNT_V1",
+        "for group in 0..RADIX_GROUPS_PER_RECORD_V2",
+        "for source_block in 0..RADIX_SOURCE_BLOCKS_PER_GROUP_V2",
+        "for coefficient in 0..RADIX_SOURCE_COEFFICIENTS_PER_BLOCK_V2",
+        "radix_witness_coordinate_v2(",
+        "coordinate.source_index.to_be_bytes()",
+        "coordinate.packing_index.to_be_bytes()",
+        "coordinate.first_slot.to_be_bytes()",
+    ] {
+        assert!(
+            mapping_scope.contains(required),
+            "incomplete mapping digest: {required}"
         );
     }
-    let first = source_coordinate_v2(0, 0, 0, 0).unwrap();
-    assert_eq!(first.ordinal, 0);
-    assert_eq!(first.group, 0);
-    assert_eq!(first.source_block, 0);
-    assert_eq!(first.coefficient, 0);
-    assert_eq!(first.source_index, 0);
-    assert_eq!(first.packing_index, 0);
-    let transposed = source_coordinate_v2(0, 0, 1, 2).unwrap();
-    assert_eq!(transposed.source_index, 258);
-    assert_eq!(transposed.packing_index, 129);
-    let last = source_coordinate_v2(42, 7, 63, 255).unwrap();
-    assert_eq!(last.source_index, 5_636_095);
-    assert_eq!(last.packing_index, 5_636_095);
-    assert!(source_coordinate_v2(43, 0, 0, 0).is_err());
-    assert!(source_coordinate_v2(0, 8, 0, 0).is_err());
-    assert!(source_coordinate_v2(0, 0, 64, 0).is_err());
-    assert!(source_coordinate_v2(0, 0, 0, 256).is_err());
-    let order = core::array::from_fn(|index| index as u16);
-    let exact = topology_digest_for_record_order_v2(&order).unwrap();
-    assert_eq!(exact, exact_topology_digest_v2().unwrap());
-    let mut swapped = order;
-    swapped.swap(0, 1);
-    assert_ne!(
-        topology_digest_for_record_order_v2(&swapped).unwrap(),
-        exact
-    );
-    swapped[1] = 1;
-    assert!(topology_digest_for_record_order_v2(&swapped).is_err());
 }
+
 #[test]
-fn exact_wire_work_io_heap_and_soundness_equations_are_planning_only() {
-    let wire_components = [
-        RADIX_WIRE_HEADER_BYTES_V2,
-        RADIX_WIRE_TERMINAL_BP_BYTES_V2,
-        RADIX_WIRE_CROSS_SCHNORR_BYTES_V2,
-        RADIX_WIRE_SOURCE_COEFFICIENT_POINTS_BYTES_V2,
-        RADIX_WIRE_DIGIT_SLACK_INVERSE_TOP_POINTS_BYTES_V2,
-        RADIX_WIRE_MULTIPLICITY_BYTES_V2,
-        RADIX_WIRE_CUBIC_MESSAGES_BYTES_V2,
-        RADIX_WIRE_HIDDEN_EVALUATION_COMMITMENTS_BYTES_V2,
-        RADIX_WIRE_COEFFICIENT_BASIS_IPAS_BYTES_V2,
-        RADIX_WIRE_TABLE_IPA_BYTES_V2,
-        RADIX_WIRE_MASK_COMMITMENT_IPA_BYTES_V2,
-        RADIX_WIRE_32_GATE_BP_BYTES_V2,
-        RADIX_WIRE_PACKING_OPENINGS_BYTES_V2,
-    ];
-    assert_eq!(wire_components.into_iter().sum::<usize>(), 2_149_717);
-    assert_eq!(RADIX_WIRE_CUBIC_MESSAGES_BYTES_V2, 233 * 96);
-    assert_eq!(RADIX_WIRE_HIDDEN_EVALUATION_COMMITMENTS_BYTES_V2, 52 * 33);
-    assert_eq!(RADIX_WIRE_COEFFICIENT_BASIS_IPAS_BYTES_V2, 16_352);
-    assert_eq!(RADIX_WIRE_TABLE_IPA_BYTES_V2, 1_088);
-    assert_eq!(RADIX_WIRE_MASK_COMMITMENT_IPA_BYTES_V2, 725);
-    assert_eq!(RADIX_WIRE_32_GATE_BP_BYTES_V2, 834);
-    assert_eq!(RADIX_WIRE_PACKING_OPENINGS_BYTES_V2, 1_216_031);
-    assert_eq!(Q_PCS_WIRE_BYTES_V2, 29_245_792);
-    assert_eq!(RADIX_Q_PCS_COMBINED_WIRE_BYTES_V2, 31_395_509);
-    assert_eq!(RADIX_Q_PCS_COMBINED_CAP_BYTES_V2, 33_554_432);
-    assert_eq!(RADIX_Q_PCS_COMBINED_MARGIN_BYTES_V2, 2_158_923);
-    assert_eq!(RADIX_DIGIT_SLACK_EMISSIONS_V2, 191_627_264);
-    assert_eq!(RADIX_BATCH_INVERSIONS_MAX_V2, 344 * 17);
-    assert_eq!(RADIX_INVERSE_PASS_MULTIPLICATIONS_V2, 574_881_792);
-    assert_eq!(RADIX_FIXED_BASE_SOURCE_RANGE_TERMS_V2, 400_187_240);
-    assert_eq!(RADIX_FIXED_BASE_TERMINAL_TERMS_V2, 1_574_400);
-    assert_eq!(RADIX_SUMCHECK_VISITS_V2, 789_053_396);
-    assert_eq!(RADIX_PACKING_TRANSPOSE_STAGES_V2, 95_813_632);
-    assert_eq!(RADIX_COMMITTED_IPAS_V2, 1_536);
-    assert_eq!(RADIX_COMMITTED_IPA_VECTOR_LENGTH_V2, 2_048);
-    assert_eq!(RADIX_TABLE_IPAS_V2, 1);
-    assert_eq!(RADIX_TABLE_IPA_VECTOR_LENGTH_V2, 32_768);
-    assert_eq!(RADIX_EXTERNAL_IO_BYTES_V2, 26_846_528_789);
-    assert_eq!(RADIX_CONFIDENTIAL_SCRATCH_BYTES_V2, 6_836_977_664);
-    assert_eq!(RADIX_SOURCE_PUBLICATION_BYTES_V2, 7_152_600_416);
-    assert_eq!(Q_PCS_EXTERNAL_PEAK_BYTES_V2, 10_504_241_168);
-    assert_eq!(RADIX_LOCAL_HEAP_BYTES_V2, 20_598_361);
-    assert_eq!(RADIX_RETAINED_SOURCE_ROOT_BYTES_V2, 83_503_936);
-    assert_eq!(RADIX_PHASE_NAMED_HEAP_BYTES_V2, 104_102_297);
-    assert_eq!(Q_PCS_CONSERVATIVE_HEAP_BYTES_V2, 120_129_088);
-    assert_eq!(RADIX_Q_PCS_OVERLAP_HEAP_BYTES_V2, 140_727_449);
-    assert_eq!(RADIX_Q_PCS_HEAP_CEILING_BYTES_V2, 167_772_160);
-    assert_eq!(RADIX_Q_PCS_HEAP_MARGIN_BYTES_V2, 27_044_711);
-    let modulus = VEGA_T256_SCALAR_MODULUS_BE_V1
-        .iter()
-        .fold(0.0_f64, |value, byte| value * 256.0 + f64::from(*byte));
-    let failure = RADIX_LOOKUP_SOUNDNESS_NUMERATOR_V2 as f64 / (modulus - 32_768.0);
-    let bits = -failure.log2();
-    assert!((228.48..228.49).contains(&bits));
-    assert_eq!(RADIX_LOOKUP_SOUNDNESS_BITS_X100_FLOOR_V2, 22_848);
+fn exact_15_bit_decomposition_complement_and_centering_boundaries_hold() {
+    let _guard = radix_witness_test_guard_v2();
+    let mut threshold_minus_one = RADIX_CENTERING_THRESHOLD_BE_V2;
+    let mut one = [0_u8; 32];
+    one[31] = 1;
+    let mut result = [0_u8; 32];
+    let threshold_borrow = fixed_subtract_be_v2(&threshold_minus_one, &one, &mut result);
+    assert_eq!(*threshold_borrow.as_ref_v2(), 0);
+    threshold_minus_one = result;
+    let mut two_to_255 = [0_u8; 32];
+    two_to_255[0] = 0x80;
+    let mut threshold_digits = [0_u16; RADIX_LOW_LIMBS_V2];
+    let threshold_top =
+        extract_radix_digits_v2(&RADIX_CENTERING_THRESHOLD_BE_V2, &mut threshold_digits);
+    assert_eq!(*threshold_top.as_ref_v2(), 0);
     assert_eq!(
-        LOOKUP_SOUNDNESS_FORMULA_V2,
-        b"191679039/(p-32768)<2^-228.48"
-    );
-    assert_eq!(CROSS_BASIS_STATISTICAL_HVZK_BITS_V2, 245);
-    assert_eq!(
-        CROSS_BASIS_HVZK_FORMULA_V2,
-        b"64-byte-modular-reduction-vector-mask:distance-from-ideal<2^-245"
-    );
-    assert_eq!(
-        STATIC_EVIDENCE_FORMULA_V2,
-        b"planning-only:no-proof:no-authority:no-RSS:no-release"
-    );
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TinyRadix {
-    low: [u8; 3],
-    top: u8,
-}
-fn tiny_decompose_v2(mut value: u16) -> TinyRadix {
-    let low = core::array::from_fn(|_| {
-        let digit = (value % 4) as u8;
-        value /= 4;
-        digit
-    });
-    TinyRadix {
-        low,
-        top: value as u8,
-    }
-}
-fn tiny_reconstruct_v2(radix: TinyRadix) -> Option<u16> {
-    if radix.top > 1 || radix.low.iter().any(|digit| *digit >= 4) {
-        return None;
-    }
-    Some(
-        u16::from(radix.low[0])
-            + 4 * u16::from(radix.low[1])
-            + 16 * u16::from(radix.low[2])
-            + 64 * u16::from(radix.top),
-    )
-}
-fn tiny_canonical_relation_v2(value: u16, d: TinyRadix, s: TinyRadix) -> bool {
-    match (tiny_reconstruct_v2(d), tiny_reconstruct_v2(s)) {
-        (Some(d_value), Some(s_value)) => {
-            value < 113 && d_value % 113 == value && d_value + s_value == 112 && d.top * s.top == 0
-        }
-        _ => false,
-    }
-}
-#[test]
-fn independent_tiny_canonical_radix_kat_rejects_overflow_high_bits() {
-    let kats = [
-        (
-            0,
-            TinyRadix {
-                low: [0, 0, 0],
-                top: 0,
-            },
-            TinyRadix {
-                low: [0, 0, 3],
-                top: 1,
-            },
-        ),
-        (
-            1,
-            TinyRadix {
-                low: [1, 0, 0],
-                top: 0,
-            },
-            TinyRadix {
-                low: [3, 3, 2],
-                top: 1,
-            },
-        ),
-        (
-            56,
-            TinyRadix {
-                low: [0, 2, 3],
-                top: 0,
-            },
-            TinyRadix {
-                low: [0, 2, 3],
-                top: 0,
-            },
-        ),
-        (
-            57,
-            TinyRadix {
-                low: [1, 2, 3],
-                top: 0,
-            },
-            TinyRadix {
-                low: [3, 1, 3],
-                top: 0,
-            },
-        ),
-        (
-            112,
-            TinyRadix {
-                low: [0, 0, 3],
-                top: 1,
-            },
-            TinyRadix {
-                low: [0, 0, 0],
-                top: 0,
-            },
-        ),
-    ];
-    for (value, expected_d, expected_s) in kats {
-        assert_eq!(tiny_decompose_v2(value), expected_d);
-        assert_eq!(tiny_decompose_v2(112 - value), expected_s);
-        assert!(tiny_canonical_relation_v2(value, expected_d, expected_s));
-    }
-    assert!(!tiny_canonical_relation_v2(
-        0,
-        TinyRadix {
-            low: [0, 0, 0],
-            top: 2
-        },
-        TinyRadix {
-            low: [0, 0, 3],
-            top: 1
-        }
-    ));
-    assert!(!tiny_canonical_relation_v2(
-        0,
-        TinyRadix {
-            low: [4, 0, 0],
-            top: 0
-        },
-        TinyRadix {
-            low: [0, 0, 3],
-            top: 1
-        }
-    ));
-    assert!(!tiny_canonical_relation_v2(
-        113,
-        tiny_decompose_v2(113),
-        tiny_decompose_v2(112)
-    ));
-}
-fn tiny_mod_pow_v2(mut base: u16, mut exponent: u16) -> u16 {
-    let mut result = 1_u16;
-    while exponent != 0 {
-        if exponent & 1 == 1 {
-            result = (result * base) % 113;
-        }
-        base = (base * base) % 113;
-        exponent >>= 1;
-    }
-    result
-}
-fn tiny_lookup_side_v2(values: &[u16], z: u16) -> u16 {
-    values.iter().fold(0_u16, |sum, value| {
-        (sum + tiny_mod_pow_v2((z + 113 - value) % 113, 111)) % 113
-    })
-}
-fn tiny_table_side_v2(multiplicities: &[u16; 4], z: u16) -> u16 {
-    multiplicities
-        .iter()
-        .enumerate()
-        .fold(0_u16, |sum, (table, multiplicity)| {
-            let inverse = tiny_mod_pow_v2((z + 113 - table as u16) % 113, 111);
-            (sum + multiplicity * inverse) % 113
-        })
-}
-#[test]
-fn independent_log_derivative_lookup_kat_detects_a_replacement() {
-    let table_side = tiny_table_side_v2(&[1, 2, 0, 1], 7);
-    assert_eq!(table_side, 107);
-    assert_eq!(tiny_lookup_side_v2(&[0, 3, 1, 1], 7), 107);
-    assert_eq!(tiny_lookup_side_v2(&[0, 3, 1, 4], 7), 13);
-    assert_ne!(tiny_lookup_side_v2(&[0, 3, 1, 4], 7), table_side);
-}
-fn tiny_packing_transpose_v2(source: &[u16], blocks: usize, width: usize) -> Vec<u16> {
-    let mut packed = Vec::with_capacity(source.len());
-    for coefficient in 0..width {
-        for block in 0..blocks {
-            packed.push(source[block * width + coefficient]);
-        }
-    }
-    packed
-}
-#[test]
-fn independent_packing_transpose_oracle_detects_coordinate_and_order_mutations() {
-    let source = [0_u16, 1, 2, 3, 4, 5];
-    assert_eq!(tiny_packing_transpose_v2(&source, 2, 3), [0, 3, 1, 4, 2, 5]);
-    assert_ne!(tiny_packing_transpose_v2(&source, 3, 2), [0, 3, 1, 4, 2, 5]);
-    let exact = source_coordinate_v2(0, 0, 1, 2).unwrap();
-    let swapped_coordinate = source_coordinate_v2(0, 0, 2, 1).unwrap();
-    assert_ne!(exact.source_index, swapped_coordinate.source_index);
-    assert_ne!(exact.packing_index, swapped_coordinate.packing_index);
-    let next_group = source_coordinate_v2(0, 1, 1, 2).unwrap();
-    assert_eq!(next_group.source_index - exact.source_index, 16_384);
-    assert_eq!(next_group.packing_index - exact.packing_index, 16_384);
-    let order = core::array::from_fn(|index| index as u16);
-    let exact_digest = topology_digest_for_record_order_v2(&order).unwrap();
-    let mut reordered = order;
-    reordered.swap(16, 17);
-    assert_ne!(
-        topology_digest_for_record_order_v2(&reordered).unwrap(),
-        exact_digest
-    );
-}
-#[test]
-fn transcript_manifest_rejects_splice_missing_extra_noncanonical_and_trailing_frames() {
-    let exact = exact_transcript_manifest_v2();
-    let digest = require_exact_transcript_manifest_v2(&exact).unwrap();
-    assert_ne!(digest, [0; 32]);
-    let mut spliced_frames = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
-    spliced_frames.swap(14, 15);
-    assert!(
-        require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&spliced_frames))
-            .is_err()
-    );
-    let missing = encode_transcript_frames_v2(&RADIX_RANGE_TRANSCRIPT_FRAMES_V2[..31]);
-    assert!(require_exact_transcript_manifest_v2(&missing).is_err());
-    let mut extra_frames = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
-    extra_frames.push(b"extra");
-    assert!(
-        require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&extra_frames)).is_err()
-    );
-    let mut noncanonical_ordinal = exact.clone();
-    noncanonical_ordinal[1] = 1;
-    assert!(require_exact_transcript_manifest_v2(&noncanonical_ordinal).is_err());
-    let mut noncanonical_length = exact.clone();
-    noncanonical_length[3] += 1;
-    assert!(require_exact_transcript_manifest_v2(&noncanonical_length).is_err());
-    let mut trailing = exact;
-    trailing.push(0);
-    assert!(require_exact_transcript_manifest_v2(&trailing).is_err());
-    assert_eq!(
-        &RADIX_RANGE_TRANSCRIPT_FRAMES_V2[4..12],
-        &[
-            b"terminal-commitments".as_slice(),
-            b"group-source-coefficient-commitments-344".as_slice(),
-            b"d-low-digit-commitments".as_slice(),
-            b"s-low-digit-commitments".as_slice(),
-            b"d-top-bit-commitments".as_slice(),
-            b"s-top-bit-commitments".as_slice(),
-            b"lookup-multiplicity-commitment".as_slice(),
-            b"zero-sum-mask-commitment".as_slice(),
+        threshold_digits,
+        [
+            0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 2_048, 0, 24_576, 32_767, 32_767,
         ]
     );
-    let z = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-        .iter()
-        .position(|frame| *frame == b"lookup-z-outside-digit-table")
-        .unwrap();
-    let d_inverse = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-        .iter()
-        .position(|frame| *frame == b"d-inverse-commitments")
-        .unwrap();
-    let s_inverse = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-        .iter()
-        .position(|frame| *frame == b"s-inverse-commitments")
-        .unwrap();
-    let shard = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-        .iter()
-        .position(|frame| *frame == b"shard-challenges")
-        .unwrap();
-    let constraint = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-        .iter()
-        .position(|frame| *frame == b"constraint-challenges")
-        .unwrap();
-    let binding = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-        .iter()
-        .position(|frame| *frame == b"binding-digest")
-        .unwrap();
-    let q_link = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-        .iter()
-        .position(|frame| *frame == b"future-q-l-linkage")
-        .unwrap();
-    let gamma = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-        .iter()
-        .position(|frame| *frame == b"gamma")
-        .unwrap();
-    assert_eq!(
-        (z, d_inverse, s_inverse, shard, constraint),
-        (19, 20, 21, 22, 23)
-    );
-    assert!(binding < q_link && q_link < gamma);
-    assert!(
-        !RADIX_RANGE_TRANSCRIPT_FRAMES_V2
-            .iter()
-            .any(|frame| *frame == b"lookup-U")
-    );
-    for inverse in [d_inverse, s_inverse] {
-        let mut before_z = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
-        before_z.swap(z, inverse);
-        assert!(
-            require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&before_z)).is_err()
+    let boundaries = [
+        [0_u8; 32],
+        be_from_u64_v2(1),
+        threshold_minus_one,
+        RADIX_CENTERING_THRESHOLD_BE_V2,
+        two_to_255,
+        RADIX_MODULUS_MINUS_ONE_BE_V2,
+    ];
+    for encoded in &boundaries {
+        let witness = radix_coefficient_witness_v2(encoded).unwrap();
+        let reconstructed_d = reconstruct_radix_v2(&witness.d_low, &witness.b_d).unwrap();
+        let reconstructed_s = reconstruct_radix_v2(&witness.s_low, &witness.b_s).unwrap();
+        let mut sum = RadixSecretBytesV2::zeroed_v2();
+        let sum_carry = fixed_add_be_v2(
+            reconstructed_d.as_ref_v2(),
+            reconstructed_s.as_ref_v2(),
+            sum.as_mut_v2(),
         );
-    }
-    let mut swapped_inverses = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
-    swapped_inverses.swap(d_inverse, s_inverse);
-    assert!(
-        require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&swapped_inverses))
-            .is_err()
-    );
-    for missing_inverse in [d_inverse, s_inverse] {
-        let mut missing_inverse_frames = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
-        missing_inverse_frames.remove(missing_inverse);
-        assert!(
-            require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(
-                &missing_inverse_frames
-            ))
-            .is_err()
+        assert_eq!(*sum_carry.as_ref_v2(), 0);
+        assert_eq!(
+            *fixed_equal_bytes_v2(reconstructed_d.as_ref_v2(), encoded).as_ref_v2(),
+            1
         );
+        assert_eq!(
+            *fixed_equal_bytes_v2(sum.as_ref_v2(), &RADIX_MODULUS_MINUS_ONE_BE_V2).as_ref_v2(),
+            1
+        );
+        assert!(witness.d_low.iter().all(|digit| *digit < RADIX_BASE_V2));
+        assert!(witness.s_low.iter().all(|digit| *digit < RADIX_BASE_V2));
+        assert!(witness.b_d <= 1 && witness.b_s <= 1);
+        assert_eq!(witness.b_d * witness.b_s, 0);
+        assert_eq!(
+            witness.beta[17],
+            u8::from(*encoded < RADIX_CENTERING_THRESHOLD_BE_V2)
+        );
+        assert_eq!(witness.m, witness.b_d * witness.beta[16]);
+        assert_eq!(witness.beta[17], witness.beta[16] - witness.m);
+        let mut previous_borrow = 0_i64;
+        for limb in 0..RADIX_LOW_LIMBS_V2 {
+            let d = i64::from(witness.d_low[limb]);
+            let k = i64::from(threshold_digits[limb]);
+            let borrow = i64::from(witness.beta[limb]);
+            let delta = d + i64::from(RADIX_BASE_V2) * borrow - k - previous_borrow;
+            assert!((0..i64::from(RADIX_BASE_V2)).contains(&delta));
+            assert_eq!(
+                d - k - previous_borrow,
+                delta - i64::from(RADIX_BASE_V2) * borrow
+            );
+            previous_borrow = borrow;
+        }
     }
-    let mut extra_inverse = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
-    extra_inverse.insert(shard, b"s-inverse-commitments");
-    assert!(
-        require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&extra_inverse)).is_err()
-    );
-    let mut independent_u = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
-    independent_u.insert(shard, b"lookup-U");
-    assert!(
-        require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&independent_u)).is_err()
-    );
+    assert_eq!(radix_coefficient_witness_v2(&two_to_255).unwrap().b_d, 1);
+    assert!(radix_coefficient_witness_v2(&VEGA_T256_SCALAR_MODULUS_BE_V1).is_err());
 }
-fn test_ingress_v2() -> RadixRangeIngressV2 {
-    RadixRangeIngressV2::begin_v2(
-        RadixRangeSourceSealV2::TestOnly,
-        RadixRangeReplaySealV2::TestOnly,
-        RadixRangePackingSealV2::TestOnly,
-        RadixRangeZkSealV2::TestOnly,
-    )
-}
+
 #[test]
-fn typestate_poison_error_unwind_zeroization_privacy_and_source_guards_hold() {
-    ZEROIZED_TRANSIENT_DROPS_V2.store(0, Ordering::SeqCst);
-    assert!(test_ingress_v2().check_v2(&[]).is_err());
-    assert_eq!(ZEROIZED_TRANSIENT_DROPS_V2.load(Ordering::SeqCst), 1);
-    let mut poisoned = test_ingress_v2();
-    let live = poisoned.live.take().unwrap();
-    drop(live);
-    assert!(poisoned.check_v2(&exact_transcript_manifest_v2()).is_err());
-    assert_eq!(ZEROIZED_TRANSIENT_DROPS_V2.load(Ordering::SeqCst), 2);
-    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        test_ingress_v2().force_unwind_after_take_v2()
-    }));
-    assert!(unwind.is_err());
-    assert_eq!(ZEROIZED_TRANSIENT_DROPS_V2.load(Ordering::SeqCst), 3);
-    let prerequisite = consume_phase23_radix_range_static_prerequisite_v2(
-        RadixRangeSourceSealV2::TestOnly,
-        RadixRangeReplaySealV2::TestOnly,
-        RadixRangePackingSealV2::TestOnly,
-        RadixRangeZkSealV2::TestOnly,
-        &exact_transcript_manifest_v2(),
+fn comparator_lane_mapping_zero_bits_and_transpose_are_exact() {
+    let _guard = radix_witness_test_guard_v2();
+    let witness = radix_coefficient_witness_v2(&be_from_u64_v2(7)).unwrap();
+    let packed = pack_comparator_lanes_v2(&witness).unwrap();
+    let (b_d, b_s, beta, m) = unpack_lanes_v2(packed.as_ref_v2());
+    assert_eq!(
+        (b_d, b_s, beta, m),
+        (witness.b_d, witness.b_s, witness.beta, witness.m)
+    );
+    assert_eq!(packed.as_ref_v2()[2] & 0xe0, 0);
+
+    let synthetic = RadixCoefficientWitnessV2 {
+        slack: RadixSecretBytesV2::zeroed_v2(),
+        d_low: [0; RADIX_LOW_LIMBS_V2],
+        s_low: [0; RADIX_LOW_LIMBS_V2],
+        beta: core::array::from_fn(|index| (index & 1) as u8),
+        b_d: 1,
+        b_s: 0,
+        m: 1,
+    };
+    let packed = pack_comparator_lanes_v2(&synthetic).unwrap();
+    assert_eq!(packed.as_ref_v2(), &[0xa9, 0xaa, 0x1a]);
+    assert_eq!(packed.as_ref_v2()[2] & 0xe0, 0);
+    assert_eq!(
+        unpack_lanes_v2(packed.as_ref_v2()),
+        (1, 0, synthetic.beta, 1)
+    );
+
+    let source: Vec<u16> = (0..2 * 3).collect();
+    let packed: Vec<u16> = (0..3)
+        .flat_map(|coefficient| {
+            (0..2).map({
+                let source = &source;
+                move |block| source[block * 3 + coefficient]
+            })
+        })
+        .collect();
+    assert_eq!(packed, [0, 3, 1, 4, 2, 5]);
+}
+
+fn materialization_record_v2() -> RadixWitnessMaterializationRecordV2 {
+    RadixWitnessMaterializationRecordV2 {
+        replay_record_digest: [0x11; 32],
+        source_receipt_digest: [0x22; 32],
+        mapping_digest: [0x33; 32],
+        spool_context_digest: [0x44; 32],
+        authenticated_read_schedule_root: [0x55; 32],
+        snapshot_root: [0x66; 32],
+        source_reread_blocks: RADIX_SOURCE_REREAD_BLOCKS_V2 as u32,
+        source_reread_plaintext_bytes: RADIX_SOURCE_REREAD_PLAINTEXT_BYTES_V2,
+        source_reread_authenticated_bytes: RADIX_SOURCE_REREAD_AUTHENTICATED_BYTES_V2,
+        output_slot_count: RADIX_WITNESS_SLOT_COUNT_V2 as u16,
+        output_plaintext_bytes: RADIX_WITNESS_PLAINTEXT_BYTES_V2,
+        output_authentication_tag_bytes: RADIX_WITNESS_AUTHENTICATION_TAG_BYTES_V2,
+        output_file_bytes: RADIX_WITNESS_FILE_BYTES_V2,
+        output_spool_io_bytes: RADIX_WITNESS_SPOOL_IO_BYTES_V2,
+        total_io_bytes: RADIX_WITNESS_TOTAL_IO_BYTES_V2,
+        named_live_payload_bytes: RADIX_WITNESS_NAMED_LIVE_PAYLOAD_BYTES_V2 as u32,
+        authenticated_canonical_reread_complete: true,
+        compact_radix_witness_materialized: true,
+        commitments_constructed: false,
+        transcript_bound: false,
+        final_arithmetic_plane_constructed: false,
+        radix_proof_verified: false,
+        zero_knowledge_accepted: false,
+        authority_minted: false,
+        rss_qualified: false,
+        operational_receipt_accepted: false,
+        release_ready: false,
+        release_complete: false,
+        record_digest: [0; 32],
+    }
+}
+
+#[test]
+fn binding_record_seal_and_all_downstream_gates_are_strict() {
+    let mut record = materialization_record_v2();
+    record.record_digest = radix_witness_record_digest_v2(&record).unwrap();
+    validate_radix_witness_record_v2(&record).unwrap();
+    let seal = RadixWitnessMaterializationSealV2::mint_v2(
+        record.replay_record_digest,
+        record.spool_context_digest,
+        record.snapshot_root,
+        record.record_digest,
     )
     .unwrap();
-    assert!(prerequisite.live.is_some());
-    assert!(!prerequisite.record.source_algebra_actually_verified);
-    assert!(!prerequisite.record.radix_decomposition_actually_verified);
-    assert!(!prerequisite.record.radix_canonical_range_actually_verified);
-    assert!(!prerequisite.record.radix_lookup_actually_verified);
-    assert!(!prerequisite.record.zero_knowledge_actually_verified);
-    assert!(!prerequisite.record.packing_transpose_actually_verified);
-    assert!(!prerequisite.record.packing_equality_actually_verified);
-    assert!(!prerequisite.record.hyrax_actually_verified);
-    assert!(!prerequisite.record.q_pcs_replay_actually_verified);
-    assert!(!prerequisite.record.q_pcs_handoff_actually_complete);
-    assert!(!prerequisite.record.operational_qualification_accepted);
-    assert!(!prerequisite.record.receipt_accepted);
-    assert!(!prerequisite.record.rss_qualified);
-    assert!(!prerequisite.record.proof_minted);
-    assert!(!prerequisite.record.authority_minted);
-    assert!(!prerequisite.record.release_complete);
-    drop(prerequisite);
-    assert_eq!(ZEROIZED_TRANSIENT_DROPS_V2.load(Ordering::SeqCst), 4);
-    for impossible in [
-        "source_algebra: Infallible",
-        "authenticated_replay: Infallible",
-        "packing_transpose: Infallible",
-        "packing_equality: Infallible",
-        "radix_lookup: Infallible",
-        "sumcheck: Infallible",
-        "hyrax: Infallible",
-        "statistical_hvzk: Infallible",
-    ] {
-        assert!(PRODUCTION_SOURCE_V2.contains(impossible));
+    seal.validate_for_replay_v2(record.replay_record_digest)
+        .unwrap();
+    seal.validate_for_materialized_record_v2(&record).unwrap();
+    assert!(seal.validate_for_replay_v2([0x99; 32]).is_err());
+    let seal_axis_mutations: [fn(&mut RadixWitnessMaterializationRecordV2); 3] = [
+        |record| record.replay_record_digest[0] ^= 1,
+        |record| record.spool_context_digest[0] ^= 1,
+        |record| record.snapshot_root[0] ^= 1,
+    ];
+    for mutate in seal_axis_mutations {
+        let mut changed = materialization_record_v2();
+        mutate(&mut changed);
+        changed.record_digest = radix_witness_record_digest_v2(&changed).unwrap();
+        assert!(seal.validate_for_materialized_record_v2(&changed).is_err());
     }
+    let mut changed_record_digest = record;
+    changed_record_digest.record_digest[0] ^= 1;
+    assert!(
+        seal.validate_for_materialized_record_v2(&changed_record_digest)
+            .is_err()
+    );
+    let mutations: [fn(&mut RadixWitnessMaterializationRecordV2); 5] = [
+        |record| record.source_reread_authenticated_bytes += 1,
+        |record| record.output_authentication_tag_bytes += 1,
+        |record| record.total_io_bytes += 1,
+        |record| record.commitments_constructed = true,
+        |record| record.authority_minted = true,
+    ];
+    for mutate in mutations {
+        let mut changed = materialization_record_v2();
+        mutate(&mut changed);
+        changed.record_digest = radix_witness_record_digest_v2(&changed).unwrap();
+        assert!(validate_radix_witness_record_v2(&changed).is_err());
+    }
+    assert!(AUTHENTICATED_CANONICAL_REREAD_COMPLETE_V2);
+    assert!(COMPACT_RADIX_WITNESS_MATERIALIZED_V2);
+    assert!(!COMMITMENTS_CONSTRUCTED_V2);
+    assert!(!TRANSCRIPT_BOUND_V2);
+    assert!(!FINAL_ARITHMETIC_PLANE_CONSTRUCTED_V2);
+    assert!(!RADIX_PROOF_VERIFIED_V2);
+    assert!(!ZERO_KNOWLEDGE_ACCEPTED_V2);
+    assert!(!AUTHORITY_MINTED_V2);
+    assert!(!RSS_QUALIFIED_V2);
+    assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
+    assert!(!RELEASE_READY_V2);
+    assert!(!RELEASE_COMPLETE_V2);
+}
+
+#[test]
+fn secret_scratch_zeroizes_on_success_error_and_unwind() {
+    let _guard = radix_witness_test_guard_v2();
+    RADIX_SECRET_BYTE_DROPS_V2.store(0, Ordering::SeqCst);
+    RADIX_COEFFICIENT_WITNESS_DROPS_V2.store(0, Ordering::SeqCst);
+    RADIX_PACKED_COMPARATOR_DROPS_V2.store(0, Ordering::SeqCst);
+    RADIX_SECRET_COPY_DROPS_V2.store(0, Ordering::SeqCst);
+    {
+        let witness = radix_coefficient_witness_v2(&be_from_u64_v2(9)).unwrap();
+        let _packed = pack_comparator_lanes_v2(&witness).unwrap();
+    }
+    assert!(RADIX_SECRET_BYTE_DROPS_V2.load(Ordering::SeqCst) >= 5);
+    assert_eq!(RADIX_COEFFICIENT_WITNESS_DROPS_V2.load(Ordering::SeqCst), 1);
+    assert_eq!(RADIX_PACKED_COMPARATOR_DROPS_V2.load(Ordering::SeqCst), 1);
+    assert!(RADIX_SECRET_COPY_DROPS_V2.load(Ordering::SeqCst) > 100);
+    let witness_drops = RADIX_COEFFICIENT_WITNESS_DROPS_V2.load(Ordering::SeqCst);
+    assert!(radix_coefficient_witness_v2(&VEGA_T256_SCALAR_MODULUS_BE_V1).is_err());
+    assert_eq!(
+        RADIX_COEFFICIENT_WITNESS_DROPS_V2.load(Ordering::SeqCst),
+        witness_drops + 1
+    );
+    let before = RADIX_COEFFICIENT_WITNESS_DROPS_V2.load(Ordering::SeqCst);
+    let unwind = std::panic::catch_unwind(|| {
+        let _witness = radix_coefficient_witness_v2(&be_from_u64_v2(11)).unwrap();
+        panic!("exercise radix witness scratch unwind");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(
+        RADIX_COEFFICIENT_WITNESS_DROPS_V2.load(Ordering::SeqCst),
+        before + 1
+    );
+}
+
+#[test]
+fn secret_copy_source_uses_drop_owners_for_all_named_arithmetic_scratch() {
+    for required in [
+        "trait RadixSecretCopyValueV2: Copy",
+        "fn zeroize_v2(&mut self)",
+        "struct RadixSecretCopyV2<T: RadixSecretCopyValueV2>(T);",
+        "impl<T: RadixSecretCopyValueV2> Drop for RadixSecretCopyV2<T>",
+        "let mut borrow = RadixSecretCopyV2::new(0_u16)",
+        "let left_byte = RadixSecretCopyV2::new",
+        "let right_byte = RadixSecretCopyV2::new",
+        "let next_borrow = RadixSecretCopyV2::new",
+        "let mut carry = RadixSecretCopyV2::new(0_u16)",
+        "let sum = RadixSecretCopyV2::new",
+        "let mut difference = RadixSecretCopyV2::new(0_u8)",
+        "let mut digit = RadixSecretCopyV2::new(0_u16)",
+        "let mut prior_borrow = RadixSecretCopyV2::new(0_u16)",
+        "let mut invalid = RadixSecretCopyV2::new",
+        "let right = RadixSecretCopyV2::new",
+        "let borrow = RadixSecretCopyV2::new",
+        "let delta = RadixSecretCopyV2::new",
+    ] {
+        assert!(
+            PRODUCTION_SOURCE_V2.contains(required),
+            "missing owner guard: {required}"
+        );
+    }
+    for forbidden in [
+        "let mut borrow = 0_u16",
+        "let left_byte = u16::from",
+        "let right_byte = u16::from",
+        "let mut carry = 0_u16",
+        "let sum = u16::from",
+        "let mut difference = 0_u8",
+        "let mut digit = 0_u16",
+        ".iter().copied()",
+        "for beta in witness.beta",
+        "let mut prior_borrow = 0_u16",
+        "let right = threshold_low[limb]",
+        "let borrow = u16::from(witness.d_low",
+        "let delta = witness.d_low",
+    ] {
+        assert!(
+            !PRODUCTION_SOURCE_V2.contains(forbidden),
+            "unguarded secret copy: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn cursor_materializer_and_authority_source_guards_forbid_bypass_and_escape() {
+    for required in [
+        "evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>",
+        "read_next_canonical_block_v2",
+        "read_canonical_plaintext_block_v1(record, block)?",
+        "validate_canonical_source_block_v1(source.as_mut_bytes_v1())?",
+        "complete_for_radix_materializer_v2",
+        "schedule.finish_v2()?",
+        "into_radix_witness_materialized_v2",
+    ] {
+        assert!(
+            CURSOR_SOURCE_V2.contains(required),
+            "missing cursor guard: {required}"
+        );
+    }
+    let completion_calls = [PRODUCTION_SOURCE_V2, CURSOR_SOURCE_V2, REPLAY_SOURCE_V2]
+        .into_iter()
+        .map(|source| {
+            source
+                .matches("complete_for_radix_materializer_v2()?")
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(completion_calls, 1);
+    assert!(PRODUCTION_SOURCE_V2.contains("cursor.complete_for_radix_materializer_v2()?"));
+    assert!(
+        PRODUCTION_SOURCE_V2.contains("materialization_seal: RadixWitnessMaterializationSealV2")
+    );
+    assert!(PRODUCTION_SOURCE_V2.contains("snapshot: ConfidentialSpoolSnapshotV1"));
+    assert!(PRODUCTION_SOURCE_V2.contains("confidential_spool_directory: Infallible"));
+    assert!(
+        REPLAY_SOURCE_V2.contains("materialization: Option<RadixWitnessMaterializationSealV2>")
+    );
+    assert!(REPLAY_SOURCE_V2.contains("materialization.validate_for_replay_v2"));
+    assert!(REPLAY_SOURCE_V2.contains("bind_radix_hyrax_replay_after_materialization_v2"));
+    assert!(PRODUCTION_SOURCE_V2.contains("fn bind_materialized_radix_hyrax_replay_v2"));
     assert!(
         PRODUCTION_SOURCE_V2
-            .contains("let mut live = self\n            .live\n            .take()")
+            .contains("materialized: Option<Phase23RadixWitnessMaterializedV2<K, P>>")
     );
-    let check = PRODUCTION_SOURCE_V2.split("fn check_v2").nth(1).unwrap();
     assert!(
-        check.find(".take()").unwrap()
-            < check.find("require_exact_transcript_manifest_v2").unwrap()
+        PRODUCTION_SOURCE_V2
+            .contains("let materialized = self\n            .materialized\n            .take()")
     );
-    let freeze = PRODUCTION_SOURCE_V2.split("fn freeze_v2").nth(1).unwrap();
-    assert!(freeze.find(".take()").unwrap() < freeze.find("nonzero_digest_v2").unwrap());
-    let pre_z = PRODUCTION_SOURCE_V2
-        .split("impl<'a> RadixRangePreLookupManifestV2")
+    assert!(PRODUCTION_SOURCE_V2.contains("let evidence = evidence\n            .take()"));
+    let whole_owner_binding = PRODUCTION_SOURCE_V2
+        .split("fn finish_v2")
         .nth(1)
         .unwrap()
-        .split("impl<'a> RadixRangeLookupZDerivedManifestV2")
+        .split("fn materialize_radix_group_v2")
         .next()
         .unwrap();
-    assert!(pre_z.contains("absorb_until_v2(20)"));
-    assert!(!pre_z.contains("absorb_z_dependent_inverse_planes_v2"));
-    let post_z = PRODUCTION_SOURCE_V2
-        .split("impl<'a> RadixRangeLookupZDerivedManifestV2")
-        .nth(1)
-        .unwrap()
-        .split("impl RadixRangeLookupUManifestV2")
-        .next()
+    let materialized_take = whole_owner_binding
+        .find(".materialized\n            .take()")
         .unwrap();
-    assert!(post_z.contains("absorb_z_dependent_inverse_planes_v2"));
-    assert!(post_z.contains("absorb_until_v2(22)"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("pub(crate)"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("pub fn"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("#[derive"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("VegaT256Point"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("[u8; 33]"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("Encode"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("Decode"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("into_parts"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("as_tuple"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("FnOnce"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("dyn Fn"));
-    assert!(!PRODUCTION_SOURCE_V2.contains("mem::forget"));
+    let proof_take = whole_owner_binding
+        .find(".radix_hyrax_proof\n            .take()")
+        .unwrap();
+    let evidence_take = whole_owner_binding
+        .find("evidence\n            .take()")
+        .unwrap();
+    let record_validation = whole_owner_binding
+        .find("validate_radix_witness_record_v2(&record)")
+        .unwrap();
+    let snapshot_validation = whole_owner_binding
+        .find("snapshot.slot_count_v1()")
+        .unwrap();
+    let seal_validation = whole_owner_binding
+        .find("materialization_seal.validate_for_materialized_record_v2(&record)")
+        .unwrap();
+    let replay_binding = whole_owner_binding
+        .find("bind_radix_hyrax_replay_after_materialization_v2(")
+        .unwrap();
+    assert!(
+        materialized_take < proof_take
+            && proof_take < evidence_take
+            && evidence_take < record_validation
+            && record_validation < snapshot_validation
+            && snapshot_validation < seal_validation
+            && seal_validation < replay_binding
+    );
+    assert_eq!(
+        whole_owner_binding
+            .matches("bind_radix_hyrax_replay_after_materialization_v2(")
+            .count(),
+        1
+    );
+    assert!(!REPLAY_SOURCE_V2.contains("into_radix_hyrax_bound_replay_v2"));
+    for source in [PRODUCTION_SOURCE_V2, CURSOR_SOURCE_V2] {
+        for forbidden in [
+            "derive(Clone",
+            "impl Clone",
+            "Serialize",
+            "Deserialize",
+            "Encode",
+            "Decode",
+            "FnOnce",
+            "dyn Fn",
+            "fn into_parts",
+            "fn snapshot(",
+            "fn evidence(",
+            "fn materialization_seal(",
+            "fn replay_record_digest(",
+            "fn source_receipt_digest(",
+            "mem::forget",
+        ] {
+            assert!(!source.contains(forbidden), "forbidden escape: {forbidden}");
+        }
+    }
     assert!(PARENT_SOURCE_V2.contains("mod radix_range_v2;"));
     assert!(!PARENT_SOURCE_V2.contains("pub mod radix_range_v2;"));
+    assert!(!PARENT_SOURCE_V2.contains("RadixWitnessMaterializationSealV2"));
+    let seal_scope = PRODUCTION_SOURCE_V2
+        .split("struct RadixWitnessMaterializationSealV2")
+        .nth(1)
+        .unwrap()
+        .split("fn radix_witness_seal_digest_v2")
+        .next()
+        .unwrap();
+    assert!(seal_scope.contains("fn mint_v2("));
+    assert!(!seal_scope.contains("pub fn mint_v2("));
+    assert!(!seal_scope.contains("pub(super) fn mint_v2("));
 }
+
 #[test]
-fn source_and_test_files_remain_within_the_scoped_budgets() {
-    assert!(PRODUCTION_SOURCE_V2.lines().count() <= 1_200);
-    assert!(TEST_SOURCE_V2.lines().count() <= 700);
-    assert!(PRODUCTION_SOURCE_V2.len() <= 52_000);
-    assert!(TEST_SOURCE_V2.len() <= 34_000);
+fn materializer_source_has_fixed_loops_exact_reads_and_no_final_plane_or_proof_surface() {
+    for required in [
+        "for record in 0..PHASE23_RECORD_COUNT_V1",
+        "for group in 0..RADIX_GROUPS_PER_RECORD_V2",
+        "for local_block in 0..RADIX_SOURCE_BLOCKS_PER_GROUP_V2",
+        "for coefficient in 0..RADIX_SOURCE_COEFFICIENTS_PER_BLOCK_V2",
+        "for limb in 0..RADIX_LOW_LIMBS_V2",
+        "ConfidentialSpoolLayoutV1::new_v1(",
+        "ConfidentialSpoolWriterV1::create_in_v1",
+        "writer.seal_v1()",
+        "packed.0[2] & 0xe0 != 0",
+        "authenticated_canonical_reread_complete: AUTHENTICATED_CANONICAL_REREAD_COMPLETE_V2",
+        "compact_radix_witness_materialized: COMPACT_RADIX_WITNESS_MATERIALIZED_V2",
+    ] {
+        assert!(
+            PRODUCTION_SOURCE_V2.contains(required),
+            "missing materializer guard: {required}"
+        );
+    }
+    assert_eq!(
+        PRODUCTION_SOURCE_V2
+            .matches("read_next_canonical_block_v2(")
+            .count(),
+        1
+    );
+    assert_eq!(PRODUCTION_SOURCE_V2.matches("write_slot_v1(").count(), 3);
+    for forbidden in [
+        "VegaT256PointV1",
+        "ProverTranscript",
+        "FinalArithmeticPlane",
+        "proof_minted: true",
+        "authority_minted: true",
+        "rss_qualified: true",
+        "release_complete: true",
+    ] {
+        assert!(
+            !PRODUCTION_SOURCE_V2.contains(forbidden),
+            "forbidden downstream surface: {forbidden}"
+        );
+    }
 }

@@ -545,6 +545,16 @@ trusted runtime contract, not shared production state. Production source seals
 establish the narrower structural facts—one serialized height loop, bounded
 service batches, watchdog polling, and finite `IDLE_POLL` waits—but do not turn
 host scheduling or operation latency into a code-proved proposition.
+The production source seal additionally checks the unwired lifecycle activation
+type state: fail-stop admission precedes clock arming, status projection,
+observer installation, exact ingress/status publication, and readiness release;
+CompleteTip publication consumes its retained predecessor retirement. This is
+paired with a source-sealed consuming finalization chain which closes readiness
+and both ingress gates, joins exact Kura finality to adapter/WAL retirement,
+seals the existing output handoff before refreshing Serve state, and publishes
+all-row LedgerV1 retirement through opaque coordinator-owning tokens before
+clean shutdown. This is not a new mechanized liveness theorem, and the
+serialized runner still needs to mint these states in the atomic cutover.
 
 **Lemma 7 (generation- and consumer-scoped locked-vote delivery).** Clearing a
 volatile vote pool cannot orphan the exact durable locked Commit intent.
@@ -1436,7 +1446,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 854 tests across forty Rust
+The current pre-network release inventory names 855 tests across forty Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1552,7 +1562,7 @@ Kura recovery regressions and the governance-unlock audit yield the 861-test,
 41-module checkpoint. The production-adapter activation guard and two deferred-
 canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
-yields the current 854-test, 40-module inventory. The complete source-sealed
+yields the current 855-test, 40-module inventory. The complete source-sealed
 pre-network corridor
 contains 88 legs. Six source-
 sealed command legs and the G-SCALE
@@ -1624,7 +1634,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`.
+`a40a9d7ef0dafcad2a6e3eb710d550a7f80f905c378117ef9a52b39a86d77b1e`.
 The separate source-sealed G-UNIT inventory contains 525 focused tests,
 including 319 `iroha_core` tests. Its 526-line canonical TSV has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`;
@@ -1735,8 +1745,13 @@ one exact LedgerV1 publication of Broadcast plus its independent next Sign;
 the assertion-only tail parks Broadcast, leaves Sign Ready, advances the
 adapter, retires the worker completion, and enqueues both fanouts. Cold-open
 authentication now has a frame-exact pair classifier and an affine
-frozen-roster reducer replay which must reproduce both durable children; the
-two-carrier census splice and Proposal chunk reconstruction remain pending.
+frozen-roster reducer replay which must reproduce both durable children; its
+control and phase branches splice both carriers into the complete census, and
+the control branch reconstructs Proposal chunks from the exact body-store
+owner. The initial `ProposalPrepareWal` transaction now reserves the same
+batch, preflights `PrepareIntent -> Sign(Prepare)`, fsyncs that frame, and then
+uses the same two-child LedgerV1 publication. Capacity is retryable only before
+the WAL append; every later ambiguity is restart-only.
 These are source-bound
 production-refinement contracts; the existing deductive asynchronous proof
 does not by itself prove their Rust persistence ordering. The executor then retries the
@@ -1745,7 +1760,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 854-name tree still requires a clean committed, detached,
+names; the current 855-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

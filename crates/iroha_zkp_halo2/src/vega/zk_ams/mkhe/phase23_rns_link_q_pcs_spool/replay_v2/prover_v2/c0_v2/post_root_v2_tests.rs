@@ -164,10 +164,10 @@ fn post_root_storage_context_binds_every_public_purpose() {
     let digest =
         cq_post_root_context_digest_v2(descriptor, context, [0x11; 32], [0x22; 32], [0x33; 32])
             .unwrap();
-    assert!(cq_post_root_context_digest_v2(
-        descriptor, context, [0x12; 32], [0x22; 32], [0x33; 32]
-    )
-    .is_err());
+    assert!(
+        cq_post_root_context_digest_v2(descriptor, context, [0x12; 32], [0x22; 32], [0x33; 32])
+            .is_err()
+    );
     for (root, transcript) in [([0x23; 32], [0x33; 32]), ([0x22; 32], [0x34; 32])] {
         assert_ne!(
             digest,

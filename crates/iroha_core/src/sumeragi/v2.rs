@@ -8,20 +8,25 @@
 //! acknowledged to the reducer.  Consequently a caller can never observe a
 //! signing, broadcast, view-change, or apply effect which was causally ordered
 //! after an unacknowledged safety write.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    path::PathBuf,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
-};
+#![cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "first-release recovery seams are test-sealed before cutover"
+    )
+)]
 use super::v2_core as reducer;
-use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey, Signature};
-use iroha_data_model::{account::AccountId, block::consensus_v2 as wire, peer::PeerId};
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
+#[cfg(test)]
+use super::v2_lifecycle_coordinator::{
+    AuthenticatedLifecycleRecoveryCut, DurableAuthenticatedRecoveredWalValidateLifecycleRepair,
+    InstalledRecoveredWalSignRegistryCut, OpenedRecoveredWalSignLifecycleCut,
+    RecoveredWalSignInstallError, RecoveredWalSignLifecycleOpenError,
+    RecoveredWalValidateLedgerPersistError, RecoveredWalValidateRegistryCut,
+    RecoveredWalValidateRegistryJoinError, append_same_owner_foreign_terminal_for_test,
+    substitute_recovered_control_replay_authority_for_test,
+    substitute_recovered_decision_fetch_owner_for_test,
+    substitute_recovered_decision_fetch_replay_authority_for_test,
+};
 use super::{
     safety_wal::{
         RecoveredRecord, SafetyWal, SafetyWalAppendReceipt, SafetyWalError,
@@ -69,20 +74,24 @@ use super::{
         RecoveredWalControlPendingMintPermit, RecoveredWalDecisionFetchPendingMintPermit,
     },
 };
-#[cfg(test)]
-use super::v2_lifecycle_coordinator::{
-    AuthenticatedLifecycleRecoveryCut, DurableAuthenticatedRecoveredWalValidateLifecycleRepair,
-    InstalledRecoveredWalSignRegistryCut, OpenedRecoveredWalSignLifecycleCut,
-    RecoveredWalSignInstallError, RecoveredWalSignLifecycleOpenError,
-    RecoveredWalValidateLedgerPersistError, RecoveredWalValidateRegistryCut,
-    RecoveredWalValidateRegistryJoinError, append_same_owner_foreign_terminal_for_test,
-    substitute_recovered_control_replay_authority_for_test,
-    substitute_recovered_decision_fetch_owner_for_test,
-    substitute_recovered_decision_fetch_replay_authority_for_test,
+use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey, Signature};
+use iroha_data_model::{account::AccountId, block::consensus_v2 as wire, peer::PeerId};
+use norito::codec::{Decode, Encode};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
+use thiserror::Error;
 // Keep wire admission and reducer capacity identical; mismatches fail at compile time.
 const _: [(); wire::MAX_VALIDATORS_PER_HEIGHT] = [(); reducer::MAX_VOTING_ROSTER_LEN];
-use crate::kura::{Kura, KuraInstanceIdentity, KuraSafetyWalDirectoryAuthority, KuraV2CommitReceipt};
+use crate::kura::{
+    Kura, KuraInstanceIdentity, KuraSafetyWalDirectoryAuthority, KuraV2CommitReceipt,
+};
 const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";
 const MAX_DEFERRED_INPUTS: usize = 1024;
 const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT * 2 + 3;
@@ -5752,6 +5761,7 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
     /// requires cold recovery; it is never reported as a retryable error.
     pub(in crate::sumeragi) fn append_recovered_lifecycle_proposal_prepare_wal(
         &mut self,
+        permit: super::v2_worker::RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_>,
     ) -> Result<(), AdapterError> {
         if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
             || self.prepared_prepare_wal.is_none()
@@ -5762,6 +5772,17 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             || self.adapter.fail_closed
             || self.adapter.pending_persistence_id.is_some()
         {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        if !permit.authorizes(
+            self.dispatch_key,
+            self.next_vote_body_store_identity
+                .as_ref()
+                .expect("checked Proposal body-store identity remains retained"),
+            self.next_vote_output_guard
+                .as_ref()
+                .expect("checked Proposal output guard remains retained"),
+        ) {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
         let (persist_tag, entry) = self
@@ -5800,6 +5821,7 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             .expect("checked Proposal WAL preflight remains retained");
         let persistence_id = entry.id().get();
         self.adapter.pending_persistence_id = Some(persistence_id);
+        permit.cross_wal_attempt_boundary();
         let receipt = match self.adapter.wal.append(&encoded_wal_payload) {
             Ok(receipt) => receipt,
             Err(error) => {
@@ -6761,7 +6783,7 @@ pub(in crate::sumeragi) struct PreparedInvalidBodyReportAdapterReplay<'a> {
     replay_evidence: InvalidBodyReportReplayEvidenceV1,
 }
 #[cfg_attr(not(test), allow(dead_code))]
-impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
+impl PreparedReadyDurableValidateAdapterPublication<'_> {
     /// Return only the exact closed publication discriminator.
     pub(crate) const fn kind(&self) -> ReadyDurableValidateAdapterPublicationKind {
         match &self.0 {
@@ -7649,6 +7671,15 @@ impl FinalizedV2Height {
     /// one.
     pub(crate) fn wal_retirement_warning(&self) -> Option<&str> {
         self.wal_retirement_warning.as_deref()
+    }
+
+    /// Consume the cleanup result into its retained warning.
+    ///
+    /// The lifecycle finalization type state keeps this diagnostic beside the
+    /// typed Kura receipt until output rollover has crossed its durable
+    /// handoff. It exposes no reducer, WAL, or serviced-candidate owner.
+    pub(in crate::sumeragi) fn into_wal_retirement_warning(self) -> Option<String> {
+        self.wal_retirement_warning
     }
 }
 /// Canonical consensus input whose structure and cryptography were verified.

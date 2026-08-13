@@ -23,7 +23,7 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 /// Clears one function-owned secret slot on success, error, and unwind.
 struct BorrowedZeroizingCopySlot<'a, T: Zeroize>(&'a mut T);
-impl<'a, T: Zeroize> BorrowedZeroizingCopySlot<'a, T> {
+impl<T: Zeroize> BorrowedZeroizingCopySlot<'_, T> {
     fn as_ref(&self) -> &T {
         self.0
     }
@@ -64,12 +64,19 @@ impl<T: Copy + Zeroize> Drop for SecretCopyValueV1<T> {
         self.0.zeroize();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let _ = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        let _ = SECRET_COPY_VALUE_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
     }
 }
+#[cfg(test)]
+std::thread_local! {
+    static SECRET_COPY_VALUE_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 /// Opaque owner for a private canonical scalar encoding.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct SecretEncodedScalarV1(SecretCopyValueV1<[u8; 32]>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl SecretEncodedScalarV1 {
     pub(super) fn as_ref(&self) -> &[u8; 32] {
         self.0.as_ref()
@@ -79,17 +86,33 @@ impl SecretEncodedScalarV1 {
     }
     /// Publish one canonical encoding only at an explicitly reviewed output
     /// boundary. All private branch insertions borrow instead.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) fn expose_public_copy_v1(&self) -> [u8; 32] {
         self.0.expose_copy()
     }
 }
 /// Move-only owner for a private coordinate in either cycle field.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct SecretCycleScalarV1<F: Copy + Zeroize>(SecretCopyValueV1<F>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<F: Copy + Zeroize> SecretCycleScalarV1<F> {
     pub(super) fn as_ref(&self) -> &F {
         self.0.as_ref()
+    }
+    #[cfg(test)]
+    pub(super) fn expose_ref(&self) -> &F {
+        self.as_ref()
+    }
+}
+/// Move-only owner for both private affine coordinates of a cycle point.
+///
+/// Coordinates may only be lent together to the final circuit-witness
+/// insertion boundary. Both retained `Copy` slots are erased on every exit.
+pub(super) struct SecretCycleCoordinatesV1<F: Copy + Zeroize> {
+    x: SecretCopyValueV1<F>,
+    y: SecretCopyValueV1<F>,
+}
+impl<F: Copy + Zeroize> SecretCycleCoordinatesV1<F> {
+    pub(super) fn component_refs(&self) -> (&F, &F) {
+        (self.x.as_ref(), self.y.as_ref())
     }
 }
 struct SecretU256V1(U256);
@@ -98,7 +121,16 @@ impl Drop for SecretU256V1 {
         self.0 = U256::ZERO;
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let _ = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        let _ = SECRET_U256_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
     }
+}
+#[cfg(test)]
+std::thread_local! {
+    static SECRET_U256_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 impl_modulus!(
     Field25519Modulus,
@@ -137,6 +169,10 @@ macro_rules! define_local_field {
             pub(super) fn mul_ref(&self, rhs: &Self) -> Self {
                 Self(self.0 * rhs.0)
             }
+            #[cfg_attr(
+                not(test),
+                allow(dead_code, reason = "secret-field reference seam is test-constrained")
+            )]
             pub(super) fn add_ref(&self, rhs: &Self) -> Self {
                 Self(self.0 + rhs.0)
             }
@@ -146,9 +182,17 @@ macro_rules! define_local_field {
             pub(super) fn neg_ref(&self) -> Self {
                 Self(-self.0)
             }
+            #[cfg_attr(
+                not(test),
+                allow(dead_code, reason = "secret-field parity seam is test-constrained")
+            )]
             pub(super) fn is_odd_ref(&self) -> bool {
                 self.retrieve().to_le_bytes()[0] & 1 == 1
             }
+            #[cfg_attr(
+                not(test),
+                allow(dead_code, reason = "secret-field equality seam is test-constrained")
+            )]
             pub(super) fn eq_ref(&self, rhs: &Self) -> bool {
                 self.0 == rhs.0
             }
@@ -268,13 +312,11 @@ pub(super) fn encode_helioselene(value: HelioseleneField) -> [u8; 32] {
 /// Encode a private field element while keeping the retrieved integer and
 /// encoded bytes in erasing owners. The returned bytes remain private until
 /// the caller deliberately installs them in its final witness owner.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn encode_secret_field25519_scalar_v1(value: &Field25519) -> SecretEncodedScalarV1 {
     let integer = SecretU256V1(value.retrieve());
     SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()))
 }
 /// Secret-owned counterpart of [`encode_helioselene`].
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn encode_secret_helioselene_scalar_v1(
     value: &HelioseleneField,
 ) -> SecretEncodedScalarV1 {
@@ -413,17 +455,19 @@ macro_rules! define_cycle_point {
             /// Convert a secret-derived owned projective point to the two
             /// intentional witness coordinates while erasing both the point
             /// slot and its projective inverse on every exit path.
-            pub(super) fn secret_coordinates_v1(mut self) -> Option<($field, $field)> {
+            pub(super) fn secret_coordinates_v1(
+                mut self,
+            ) -> Option<SecretCycleCoordinatesV1<$field>> {
                 let point = BorrowedZeroizingCopySlot(&mut self);
                 let (mut inverse, is_some) = point.as_ref().z.invert();
                 let inverse = BorrowedZeroizingCopySlot(&mut inverse);
                 if !bool::from(is_some) {
                     return None;
                 }
-                let coordinates = (
-                    point.as_ref().x.mul_ref(inverse.as_ref()),
-                    point.as_ref().y.mul_ref(inverse.as_ref()),
-                );
+                let coordinates = SecretCycleCoordinatesV1 {
+                    x: SecretCopyValueV1::new(point.as_ref().x.mul_ref(inverse.as_ref())),
+                    y: SecretCopyValueV1::new(point.as_ref().y.mul_ref(inverse.as_ref())),
+                };
                 drop(inverse);
                 drop(point);
                 Some(coordinates)
@@ -431,7 +475,6 @@ macro_rules! define_cycle_point {
             /// Extract a private affine x-coordinate without returning it
             /// through a raw Copy slot. The projective point and inverse are
             /// erased before this move-only coordinate owner leaves.
-            #[cfg(any(test, feature = "privacy-release-evidence"))]
             pub(super) fn secret_x_v1(mut self) -> Option<SecretCycleScalarV1<$field>> {
                 let point = BorrowedZeroizingCopySlot(&mut self);
                 let (mut inverse, is_some) = point.as_ref().z.invert();
@@ -448,7 +491,6 @@ macro_rules! define_cycle_point {
             }
             /// Encode a private projective point into a move-only owner while
             /// erasing projective, inverse, affine, and integer scratch.
-            #[cfg(any(test, feature = "privacy-release-evidence"))]
             pub(super) fn secret_encode_v1(mut self) -> Option<SecretEncodedScalarV1> {
                 let point = BorrowedZeroizingCopySlot(&mut self);
                 let (mut inverse, is_some) = point.as_ref().z.invert();
@@ -461,7 +503,9 @@ macro_rules! define_cycle_point {
                 let integer = SecretU256V1(x.as_ref().retrieve());
                 let mut encoded =
                     SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()));
-                encoded.as_mut()[31] |= u8::from(y.as_ref().is_odd_ref()) << 7;
+                let y_integer = SecretU256V1(y.as_ref().retrieve());
+                let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes());
+                encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7;
                 drop(inverse);
                 drop(point);
                 Some(encoded)
@@ -898,6 +942,119 @@ mod tests {
         assert_eq!(TRACKING_CLEARS.with(Cell::get), 1);
         drop(owned);
         assert_eq!(TRACKING_CLEARS.with(Cell::get), 2);
+    }
+    #[test]
+    fn secret_cycle_coordinates_are_move_only_borrowed_and_drop_both_slots() {
+        let point = hash_selene(&[Field25519::ONE]).expect("nonidentity Selene point");
+        let expected = point.coordinates().expect("public affine coordinates");
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        let coordinates = point
+            .secret_coordinates_v1()
+            .expect("owned secret affine coordinates");
+        let borrowed = coordinates.component_refs();
+        assert_eq!(borrowed, (&expected.0, &expected.1));
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 0);
+        drop(coordinates);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 2);
+
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        assert!(SelenePoint::identity().secret_coordinates_v1().is_none());
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 0);
+
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        let unwind = std::panic::catch_unwind(|| {
+            let coordinates = point
+                .secret_coordinates_v1()
+                .expect("coordinate owner before unwind");
+            assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 0);
+            let _ = core::hint::black_box(coordinates.component_refs());
+            panic!("exercise coordinate-owner cleanup during unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 2);
+
+        let source = include_str!("field.rs");
+        let owner = source
+            .split_once("pub(super) struct SecretCycleCoordinatesV1")
+            .expect("coordinate owner")
+            .1
+            .split_once("struct SecretU256V1")
+            .expect("coordinate owner boundary")
+            .0;
+        assert!(owner.contains("x: SecretCopyValueV1<F>"));
+        assert!(owner.contains("y: SecretCopyValueV1<F>"));
+        assert!(owner.contains("pub(super) fn component_refs(&self) -> (&F, &F)"));
+        for forbidden in [
+            "derive(Clone",
+            "derive(Copy",
+            "fn get",
+            "callback",
+            "into_parts",
+        ] {
+            assert!(
+                !owner.contains(forbidden),
+                "forbidden owner API: {forbidden}"
+            );
+        }
+    }
+    #[test]
+    fn secret_scalar_encoding_owns_integer_and_byte_scratch_on_every_exit() {
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        SECRET_U256_DROPS_V1.with(|drops| drops.set(0));
+        let encoded = encode_secret_field25519_scalar_v1(&Field25519::ONE);
+        assert_eq!(encoded.as_ref(), &encode_field25519(Field25519::ONE));
+        assert_eq!(SECRET_U256_DROPS_V1.with(Cell::get), 1);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 0);
+        drop(encoded);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 1);
+
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        SECRET_U256_DROPS_V1.with(|drops| drops.set(0));
+        let unwind = std::panic::catch_unwind(|| {
+            let encoded = encode_secret_helioselene_scalar_v1(&HelioseleneField::ONE);
+            assert_eq!(encoded.as_ref(), &encode_helioselene(HelioseleneField::ONE));
+            assert_eq!(SECRET_U256_DROPS_V1.with(Cell::get), 1);
+            assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 0);
+            let _ = core::hint::black_box(&encoded);
+            panic!("exercise secret scalar encoding unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(SECRET_U256_DROPS_V1.with(Cell::get), 1);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 1);
+    }
+    #[test]
+    fn secret_point_encoding_owns_integer_and_byte_scratch_on_every_exit() {
+        let point = hash_selene(&[Field25519::ONE]).expect("nonidentity Selene point");
+        let expected = point.encode();
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        SECRET_U256_DROPS_V1.with(|drops| drops.set(0));
+        let encoded = point.secret_encode_v1().expect("secret point encoding");
+        assert_eq!(encoded.as_ref(), &expected);
+        assert_eq!(SECRET_U256_DROPS_V1.with(Cell::get), 2);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 3);
+        drop(encoded);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 4);
+
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        SECRET_U256_DROPS_V1.with(|drops| drops.set(0));
+        assert!(SelenePoint::identity().secret_encode_v1().is_none());
+        assert_eq!(SECRET_U256_DROPS_V1.with(Cell::get), 0);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 0);
+
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        SECRET_U256_DROPS_V1.with(|drops| drops.set(0));
+        let unwind = std::panic::catch_unwind(|| {
+            let encoded = point
+                .secret_encode_v1()
+                .expect("owned encoding before unwind");
+            assert_eq!(SECRET_U256_DROPS_V1.with(Cell::get), 2);
+            assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 3);
+            let _ = core::hint::black_box(&encoded);
+            panic!("exercise secret encoding unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(SECRET_U256_DROPS_V1.with(Cell::get), 2);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 4);
     }
     #[test]
     fn private_scalar_decoders_borrow_bytes_and_own_integer_scratch() {

@@ -20,7 +20,7 @@ use curve25519_dalek::{
 };
 use rand_core_06::{CryptoRng, RngCore};
 use std::sync::OnceLock;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 const SAL_POINT_COUNT_V1: usize = 6;
 const SAL_SCALAR_COUNT_V1: usize = 6;
 const MAX_SAL_SCALAR_ATTEMPTS_V1: usize = 128;
@@ -43,6 +43,7 @@ impl<T: Copy + Zeroize> Drop for BorrowedSalCopySlotV1<'_, T> {
     }
 }
 impl<T: Copy + Zeroize> SalSecretCopyValueV1<T> {
+    #[cfg(test)]
     fn new(mut value: T) -> Self {
         Self::take(&mut value)
     }

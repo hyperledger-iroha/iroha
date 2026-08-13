@@ -3,17 +3,6 @@
 //! The ledger persists only restart-stable logical state. Readiness, leases,
 //! wait generations, physical carriers, and scheduler episodes are rebuilt
 //! from authenticated storage after restart and never appear in this format.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{ErrorKind, Read, Write},
-    path::{Path, PathBuf},
-};
-use iroha_config::parameters::actual::SumeragiV2Config;
-use iroha_crypto::{Hash, KeyPair};
-use iroha_data_model::block::consensus_v2 as wire;
-use norito::codec::{Decode, DecodeAll, Encode};
-use thiserror::Error;
 use super::projection::{AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError};
 use super::replay_authority::{
     AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
@@ -56,8 +45,7 @@ use super::{
 use crate::sumeragi::{
     v2::{
         ProductionLifecycleAdapterStartupV1, ProductionRecoveredLifecycleOwnerAssemblyPermitV1,
-        RecoveredLifecycleOwnerKuraBindingV1, RecoveredWalFrameIdentity, RecoveredWalVoteSign,
-        VerifiedHeightContext,
+        RecoveredWalFrameIdentity, RecoveredWalVoteSign, VerifiedHeightContext,
     },
     v2_body_store::{BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore},
     v2_certified_serve_payload_store::{
@@ -68,6 +56,17 @@ use crate::sumeragi::{
     v2_core::EventTag,
     v2_runtime::{PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit},
 };
+use iroha_config::parameters::actual::SumeragiV2Config;
+use iroha_crypto::{Hash, KeyPair};
+use iroha_data_model::block::consensus_v2 as wire;
+use norito::codec::{Decode, DecodeAll, Encode};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{ErrorKind, Read, Write},
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
 const LEDGER_FILE: &str = "lifecycle-ledger-v1.norito";
 const LEDGER_MAGIC: &[u8; 8] = b"SUMV2LC1";
 const LEDGER_VERSION: u16 = 1;
@@ -654,6 +653,63 @@ pub(super) struct LifecycleLedgerRecordV1 {
     replay_authority: LifecycleReplayAuthorityV1,
     continuation: PersistedDurableContinuationV1,
 }
+/// Move-only all-row finalization successor prepared from one exact frame.
+///
+/// Its fields remain private to the ledger module, so siblings cannot combine
+/// an arbitrary current frame with a caller-built terminal successor before
+/// the exact publication transaction.
+#[must_use = "staged finalization retirement must cross its exact LedgerV1 publication"]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct StagedFinalizationRetirementV1 {
+    current: LifecycleLedgerV1,
+    retired: LifecycleLedgerV1,
+}
+
+/// Move-only proof that the exact all-row finalization successor is durable.
+///
+/// The publication token retains both the pre-fsync and retired frames. Only
+/// its consuming commit may clear the concrete registry and logical
+/// coordinator, so no sibling can name a post-publication tail using raw
+/// caller-supplied ledgers.
+#[must_use = "published finalization retirement must commit its in-memory owners"]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct PublishedFinalizationRetirementV1 {
+    coordinator: LifecycleCoordinator,
+    current: LifecycleLedgerV1,
+    retired: LifecycleLedgerV1,
+}
+
+impl PublishedFinalizationRetirementV1 {
+    fn authenticates_source(&self) -> bool {
+        LifecycleLedgerV1::from_coordinator(&self.coordinator)
+            .is_ok_and(|ledger| ledger == self.current)
+    }
+
+    /// Consume the exact logical and concrete owners after durable publication.
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn consume_owners(
+        self,
+        mut registry: LifecycleWorkRegistryHolder,
+    ) {
+        assert!(self.authenticates_source());
+        assert!(
+            registry
+                .registry_mut()
+                .exactly_covers_finalization_work(&self.coordinator),
+            "published finalization must consume the preflighted concrete census",
+        );
+        assert_eq!(self.current.context(), self.retired.context());
+        assert_eq!(self.current.high_water(), self.retired.high_water());
+        assert_eq!(self.current.records().len(), self.retired.records().len());
+        assert!(self.retired.producer_debts.is_empty());
+        assert!(
+            self.retired
+                .records()
+                .iter()
+                .all(|record| record.terminal().is_some_and(|terminal| terminal.is_some()))
+        );
+        drop(registry);
+        drop(self.coordinator);
+    }
+}
+
 /// One-shot proof that decoded replay data is still enclosed by its exact
 /// opened LedgerV1 row while joining the authenticated body-store frame.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableCertifiedFetchLedgerJoinPermit {
@@ -1521,17 +1577,34 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
 }
 /// Opaque running H+1 lifecycle stack joined to its retired-H authority.
 ///
-/// TODO: The generic lifecycle-coordinator replacement must consume this
-/// complete wrapper while arming live clocks, opening authenticated ingress,
-/// activating the completion observer, and publishing typed successor status.
-/// The production restart bridge is deliberately narrower: it consumes the
-/// retired authority after reauthenticating the canonical ledger/status pair
-/// and neither launches nor credits this generic replacement.
+/// Its sole activation method consumes both halves, arms live clocks, activates
+/// the completion observer, and publishes H+1 only through the retained retired
+/// CompleteTip authority. The resulting generic activated owner contains no
+/// predecessor authority and cannot repeat that one-shot publication.
 #[must_use = "the launched CompleteTip successor must remain sealed until final activation"]
 #[allow(dead_code)]
 pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
     launched: super::launch::LaunchedProductionLifecycleV1,
     retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
+}
+
+impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+    /// Consume the sealed H/H+1 join into one exact live-height activation.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn activate(
+        self,
+        now: std::time::Instant,
+        runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+    ) -> Result<
+        super::launch::ActivatedProductionLifecycleV1,
+        super::launch::ProductionLifecycleActivationErrorV1,
+    > {
+        let Self {
+            launched,
+            retirement,
+        } = self;
+        launched.activate_recovered_complete_tip(now, runner, retirement)
+    }
 }
 // COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END
 #[cfg(test)]
@@ -1649,9 +1722,14 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             &terminal.ledger,
             refreshed_serve_payloads,
         )?;
-        let retired = terminal
+        let staged = terminal
             .ledger
-            .stage_complete_tip_all_row_retirement(serve_reconciliation)?;
+            .stage_finalized_height_all_row_retirement(serve_reconciliation)?;
+        let StagedFinalizationRetirementV1 {
+            current: staged_current,
+            retired,
+        } = staged;
+        debug_assert_eq!(staged_current, terminal.ledger);
         if !retired
             .authenticate_complete_tip_terminal_apply(&terminal.complete_tip)
             .is_ok_and(|ordinal| ordinal == terminal.apply_ordinal)

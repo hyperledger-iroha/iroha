@@ -1,6 +1,6 @@
 //! Exact zeroizing plaintext owner admitted before caller-sink release.
-use zeroize::{Zeroize, Zeroizing};
 use super::*;
+use zeroize::{Zeroize, Zeroizing};
 pub(super) struct AtomicProofQuarantinePlaintextV2 {
     bytes: Zeroizing<Vec<u8>>,
     exact_bytes: usize,
@@ -223,6 +223,7 @@ fn take_materialization_test_fault_v2(expected: MaterializationTestFaultV2) -> b
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::{
@@ -230,7 +231,6 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
-    use super::*;
     #[derive(Default)]
     struct SinkCountsV2 {
         begin: AtomicUsize,
@@ -256,7 +256,7 @@ mod tests {
         }
     }
     fn stage_bytes_v2(bytes: &[u8]) -> AtomicProofQuarantineReadyV2 {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::testing::TestDirectory::new("materialized-plaintext-quarantine");
         let sink =
             AtomicProofQuarantineSinkV2::create_in_v2(directory.path(), [0x71; 32], bytes.len())
                 .unwrap();

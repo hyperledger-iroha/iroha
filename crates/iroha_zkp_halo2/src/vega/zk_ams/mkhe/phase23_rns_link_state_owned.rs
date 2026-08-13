@@ -8,7 +8,6 @@
 //! while fresh collective ciphertext lineage now binds an opening-owned opaque
 //! nonce instead of their digest. This topology-only slice still supplies no
 //! hiding source/witness link and does not claim complete confidentiality.
-use core::ptr;
 use super::super::{
     ZkAmsMkheErrorV1,
     collective::{
@@ -33,6 +32,7 @@ use super::{
     verify_zk_ams_phase23_native_bgv_opening_v1,
 };
 use crate::vega::sponge::Keccak256;
+use core::ptr;
 const STATE_OWNED_OPENINGS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.state-owned-native-bgv-openings";
 /// Exact number of native openings in `X/U/E/rE/W/rW` chunk order.
@@ -456,12 +456,12 @@ fn require_complete_opening_count_v1(count: usize) -> Result<(), ZkAmsMkheErrorV
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         cell::Cell,
         panic::{AssertUnwindSafe, catch_unwind},
         rc::Rc,
     };
-    use super::*;
     type BeginStateOwnedOpeningsV1 =
         for<'a> fn(
             &'a ZkAmsPhase23PackedAccumulatorSetV1,

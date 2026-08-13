@@ -2,12 +2,12 @@
 //!
 //! This child freezes the exact plane inventory, axes, authenticated-snapshot
 //! layout, source-context binding, and one-shot replay purposes needed before
-//! the `s = 3, 5, 8` vector-arithmetic proofs can be implemented.  The current
-//! confidential-spool file ceiling is smaller than the exact one-snapshot
-//! payload, and no upstream owner supplies all values, blindings, and matching
-//! commitments.  Production construction is therefore deliberately
-//! uninhabited.  No proof, transcript frame, wire byte, receipt, authority,
-//! RSS claim, or release gate is added here.
+//! the `s = 3, 5, 8` vector-arithmetic proofs can be implemented.  A narrowly
+//! purpose-bound confidential-spool constructor now admits the exact snapshot,
+//! but no upstream owner supplies all values, blindings, and matching
+//! commitments. Production construction is therefore deliberately uninhabited.
+//! No proof, transcript frame, wire byte, receipt, authority, RSS claim, or
+//! release gate is added here.
 
 #![allow(
     dead_code,
@@ -17,8 +17,11 @@
 use core::convert::Infallible;
 
 use iroha_confidential_spool::{
-    CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
-    CONFIDENTIAL_SPOOL_MAX_SLOTS_V1,
+    CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1,
+    CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1,
+    CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1, CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1,
+    CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_SLOTS_V1,
+    ConfidentialSpoolLayoutV1,
 };
 
 use crate::vega::{bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, sponge::Keccak256};
@@ -39,6 +42,7 @@ const M_PLANES_V1: usize = COMPARATOR_GROUPS_V1;
 const X_PLANES_V1: usize = SIGNED_SOURCE_UNITS_V1;
 const N_PLANES_V1: usize = SIGNED_SOURCE_UNITS_V1;
 const Q_PLANES_V1: usize = QUADRATIC_STATEMENTS_V1.len();
+const COMMITMENT_MASKS_V1: usize = PLANE_COUNT_V1;
 
 const BD_START_V1: usize = 0;
 const BS_START_V1: usize = BD_START_V1 + BD_PLANES_V1;
@@ -67,6 +71,8 @@ const SNAPSHOT_PADDED_PLAINTEXT_BYTES_V1: u64 =
     SNAPSHOT_SLOT_COUNT_V1 * SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1;
 const SNAPSHOT_FILE_BYTES_V1: u64 =
     SNAPSHOT_SLOT_COUNT_V1 * (SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 + SNAPSHOT_SLOT_TAG_BYTES_V1);
+const SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1: u64 =
+    SNAPSHOT_FILE_BYTES_V1 - CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1;
 const SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1: u64 =
     SNAPSHOT_SLOT_COUNT_V1 * SNAPSHOT_SLOT_TAG_BYTES_V1;
 const SNAPSHOT_ZERO_PADDING_BYTES_V1: u64 =
@@ -93,14 +99,14 @@ const PLANE_ORDER_LANGUAGE_V1: &[u8] =
 const SNAPSHOT_LAYOUT_LANGUAGE_V1: &[u8] =
     b"one-authenticated-confidential-snapshot;plane-major;per-plane-slots=value-chunk[0..31],tail;value-chunk=512-canonical-scalars;tail=blinding32||nonidentity-commitment33||zero-padding16319;slot=plane*33+local;no-independent-snapshot-authorities";
 const COMMITMENT_LANGUAGE_V1: &[u8] =
-    b"C_plane=sum_v(value[plane,v]*G[v])+blinding[plane]*H;one-nonzero-canonical-blinding-and-one-canonical-nonidentity-33B-point-per-plane;basis=ZkAmsT256BulletproofSuiteV1:G[0..16384)+H";
+    b"commitment-mask[plane]=blinding[plane];mask-order=plane-order;C_plane=sum_v(value[plane,v]*G[v])+blinding[plane]*H;one-nonzero-canonical-blinding-and-one-canonical-nonidentity-33B-point-per-plane;basis=ZkAmsT256BulletproofSuiteV1:G[0..16384)+H";
 const SOURCE_CONTEXT_LANGUAGE_V1: &[u8] =
     b"context-order=topology,challenge-manifest,basis,mapping,source-replay-record,source-opening-record,canonical-reopen-record,radix-range-record,coefficient-residual-manifest,committed-MLE-profile";
 const PRODUCTION_BLOCKER_LANGUAGE_V1: &[u8] =
-    b"current-upstream-does-not-own-one-authenticated-snapshot-containing-all-9291-exact-values,blindings,and-matching-commitments;current-single-spool-file-cap-is-too-small;production-seal-remains-Infallible";
+    b"current-upstream-does-not-own-one-authenticated-snapshot-containing-all-9291-exact-values,blindings,and-matching-commitments;exact-purpose-specific-spool-geometry-is-available;production-seal-remains-Infallible";
 
 const CURRENT_UPSTREAM_COMPLETE_V1: bool = false;
-const CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1: bool = false;
+const CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1: bool = true;
 const PLANE_OPENING_MATERIALIZED_V1: bool = false;
 const TRANSCRIPT_FRAMES_ADDED_V1: usize = 0;
 const WIRE_BYTES_ADDED_V1: usize = 0;
@@ -117,6 +123,7 @@ const _: () = {
     assert!(COORDINATES_PER_PLANE_V1 == 16_384);
     assert!(BETA_PLANES_V1 == 6_192);
     assert!(PLANE_COUNT_V1 == 9_291);
+    assert!(COMMITMENT_MASKS_V1 == 9_291);
     assert!(
         PLANE_COUNT_V1
             == BD_PLANES_V1
@@ -137,11 +144,18 @@ const _: () = {
     assert!(SNAPSHOT_PADDED_PLAINTEXT_BYTES_V1 == 5_023_383_552);
     assert!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1 == 4_905_648);
     assert!(SNAPSHOT_FILE_BYTES_V1 == 5_028_289_200);
+    assert!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1 == 1_198_764_720);
     assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
     assert!(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1);
     assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
+    assert!(SNAPSHOT_SLOT_COUNT_V1 == CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1);
+    assert!(
+        SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1
+            == CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1
+    );
+    assert!(SNAPSHOT_FILE_BYTES_V1 == CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1);
     assert!(!CURRENT_UPSTREAM_COMPLETE_V1);
-    assert!(!CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    assert!(CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
     assert!(!PLANE_OPENING_MATERIALIZED_V1);
     assert!(TRANSCRIPT_FRAMES_ADDED_V1 == 0 && WIRE_BYTES_ADDED_V1 == 0);
     assert!(!KAT_ORDINALS_CHANGED_V1);
@@ -376,6 +390,20 @@ fn plane_context_digest_v1(
     require_nonzero_v1(hash.finalize())
 }
 
+fn approved_snapshot_layout_v1(
+    context_digest: [u8; 32],
+) -> Result<ConfidentialSpoolLayoutV1, PlaneOpeningErrorV1> {
+    let layout = ConfidentialSpoolLayoutV1::global_lookup_plane_openings_v1(context_digest)
+        .map_err(|_| PlaneOpeningErrorV1::Resource)?;
+    if layout.slot_count_v1() != SNAPSHOT_SLOT_COUNT_V1
+        || layout.plaintext_len_v1() != SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1
+        || layout.file_len_v1() != SNAPSHOT_FILE_BYTES_V1
+    {
+        return Err(PlaneOpeningErrorV1::Resource);
+    }
+    Ok(layout)
+}
+
 struct PlaneOpeningRecordV1 {
     topology_digest: [u8; 32],
     challenge_manifest_digest: [u8; 32],
@@ -420,6 +448,7 @@ fn plane_record_digest_v1(record: &PlaneOpeningRecordV1) -> Result<[u8; 32], Pla
         SNAPSHOT_SEMANTIC_BYTES_V1,
         SNAPSHOT_PADDED_PLAINTEXT_BYTES_V1,
         SNAPSHOT_FILE_BYTES_V1,
+        SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1,
         RETAINED_VALUE_BYTES_V1,
         RETAINED_BLINDING_BYTES_V1,
         RETAINED_COMMITMENT_WIRE_BYTES_V1,
@@ -504,6 +533,8 @@ impl Drop for TestAuthenticatedSnapshotHarnessV1 {
 
 #[path = "vector_arithmetic_plane_openings_v1/replay_caps_v1.rs"]
 mod replay_caps_v1;
+#[path = "vector_arithmetic_plane_openings_v1/vector_arithmetic_proof_codec_v2.rs"]
+mod vector_arithmetic_proof_codec_v2;
 
 use replay_caps_v1::PlaneOpeningReplayPermitsV1;
 

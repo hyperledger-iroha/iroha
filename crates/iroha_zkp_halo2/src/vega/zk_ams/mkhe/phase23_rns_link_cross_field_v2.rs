@@ -8,9 +8,7 @@
 //! the missing global lookup proof or same-opening qPCS writer and grants no
 //! proof, receipt, authority, or release capability.
 
-#![allow(dead_code, reason = "production entry seals are uninhabited")]
-use core::{convert::Infallible, fmt, marker::PhantomData};
-use std::sync::OnceLock;
+use super::super::manifest::RELEASE_MODULI_V1;
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite,
@@ -22,7 +20,8 @@ use crate::{
         sponge::{Keccak256, keccak256},
     },
 };
-use super::manifest::RELEASE_MODULI_V1;
+use core::{convert::Infallible, fmt, marker::PhantomData};
+use std::sync::OnceLock;
 const CROSS_FIELD_VERSION_V2: u8 = 2;
 const LIMBS_V2: usize = 38;
 const REPETITIONS_V2: usize = 5;
@@ -1074,6 +1073,8 @@ impl CrossFieldConditionalSubtotalPreflightV2 {
         Ok(())
     }
 }
+#[path = "phase23_rns_link_cross_field_v2/joint_z_binding_v3.rs"]
+mod joint_z_binding_v3;
 #[cfg(test)]
 #[path = "phase23_rns_link_cross_field_v2_tests.rs"]
 mod tests;

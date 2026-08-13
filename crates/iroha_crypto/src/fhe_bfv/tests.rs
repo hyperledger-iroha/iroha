@@ -1,4 +1,5 @@
 use super::*;
+macro_rules! assert_call { ($helper:ident; $($args:tt)*) => { $helper($($args)*) }; }
 macro_rules! assert_eq_row { ($($args:tt)*) => { assert_eq!($($args)*) }; }
 macro_rules! assert_ne_row { ($($args:tt)*) => { assert_ne!($($args)*) }; }
 macro_rules! assert_row { ($($args:tt)*) => { assert!($($args)*) }; }
@@ -303,14 +304,7 @@ fn full_bootstrap_prover_input_digest_preflight_rejects_alias_matrix() {
                 "{} must be distinct from {}",
                 labels[copied_index], labels[prior_index]
             );
-            assert_error_contains(
-                validate_bfv_full_bootstrap_digest_material_hashes(
-                    "BFV full-bootstrap execution prover input material",
-                    &aliased_entries,
-                ),
-                &expected,
-                "prover input digest preflight must reject every earlier digest alias",
-            );
+            assert_call! { assert_error_contains; validate_bfv_full_bootstrap_digest_material_hashes( "BFV full-bootstrap execution prover input material", &aliased_entries, ), &expected, "prover input digest preflight must reject every earlier digest alias", };
         }
     }
 }
@@ -342,14 +336,7 @@ fn full_bootstrap_placeholder_text_guard_rejects_separator_variants() {
             b"sample.placeholder artifact".as_slice(),
         ),
     ] {
-        assert_error_contains(
-            validate_bfv_full_bootstrap_bytes_not_placeholder_text(
-                "BFV full-bootstrap artifact",
-                bytes,
-            ),
-            "placeholder text",
-            &format!("placeholder guard must reject {label}"),
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_bytes_not_placeholder_text( "BFV full-bootstrap artifact", bytes, ), "placeholder text", &format!("placeholder guard must reject {label}"), };
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text(
         "BFV full-bootstrap artifact",
@@ -384,21 +371,10 @@ fn release_audit_reviewer_id_rejects_separator_spelled_short_placeholders() {
         " re\0place_before_production-audit-reviewer",
     ] {
         let context = format!("trusted reviewer id must reject separator-spelled `{reviewer_id}`");
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(reviewer_id),
-            "placeholder",
-            &context,
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(reviewer_id), "placeholder", &context, };
         let context =
             format!("trusted reviewer inputs must reject separator-spelled `{reviewer_id}`");
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ),
-            "placeholder",
-            &context,
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1( reviewer_id, reviewer_key_pair.public_key(), ), "placeholder", &context, };
     }
     assert_diag! { 2 => validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1("sora\0zk-audit-wg-2026") };
     assert_diag! { 3 => validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(" sora-zk-audit-wg-2026") };
@@ -421,21 +397,10 @@ fn release_audit_reviewer_id_rejects_external_review_marker_token_separators() {
     ] {
         let context =
             format!("trusted reviewer id must reject marker-token separator `{reviewer_id}`");
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(reviewer_id),
-            "marker token separators",
-            &context,
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(reviewer_id), "marker token separators", &context, };
         let context =
             format!("trusted reviewer inputs must reject marker-token separator `{reviewer_id}`");
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ),
-            "marker token separators",
-            &context,
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1( reviewer_id, reviewer_key_pair.public_key(), ), "marker token separators", &context, };
     }
 }
 #[test]
@@ -873,18 +838,7 @@ fn release_audit_key_evidence_rejects_separator_spelled_native_payload_digests()
         b"m.o.c.k BFV full-bootstrap native proof key payload".as_slice(),
     ] {
         key_evidence.native_payload_digest = sha256(sentinel);
-        assert_error_contains(
-            validate_release_key_evidence_shape_v1(
-                "BFV full-bootstrap release audit prover key",
-                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                &key_evidence,
-            ),
-            "inert native payload digest",
-            &format!(
-                "release audit key evidence must reject separator-spelled native payload digest sentinel `{}`",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_key_evidence_shape_v1( "BFV full-bootstrap release audit prover key", BfvFullBootstrapCircuitArtifactRoleV1::ProverKey, &key_evidence, ), "inert native payload digest", &format!( "release audit key evidence must reject separator-spelled native payload digest sentinel `{}`", String::from_utf8_lossy(sentinel) ), };
     }
     key_evidence.native_payload_digest = canonical_native_prover_payload_digest;
     for sentinel in [
@@ -893,18 +847,7 @@ fn release_audit_key_evidence_rejects_separator_spelled_native_payload_digests()
         b"f.i.x.t.u.r.e BFV full-bootstrap native proof key payload".as_slice(),
     ] {
         key_evidence.generated_circuit_body_digest = sha256(sentinel);
-        assert_error_contains(
-            validate_release_key_evidence_shape_v1(
-                "BFV full-bootstrap release audit prover key",
-                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                &key_evidence,
-            ),
-            "placeholder generated circuit body material",
-            &format!(
-                "release audit key evidence must reject placeholder generated-body digest sentinel `{}` before canonical mismatch",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_key_evidence_shape_v1( "BFV full-bootstrap release audit prover key", BfvFullBootstrapCircuitArtifactRoleV1::ProverKey, &key_evidence, ), "placeholder generated circuit body material", &format!( "release audit key evidence must reject placeholder generated-body digest sentinel `{}` before canonical mismatch", String::from_utf8_lossy(sentinel) ), };
     }
     key_evidence.generated_circuit_body_digest = sha256_chunks_with_optional_ascii_upper_body(
         &[
@@ -956,39 +899,15 @@ fn release_audit_archive_native_payload_hex_requires_canonical_label_and_value()
         let uppercase_label_body =
             [uppercase_label.as_slice(), b"=", payload_hex.as_bytes()].concat();
         let uppercase_label_fields = release_field_index_v1(&uppercase_label_body);
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
-                &uppercase_label_fields,
-                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
-                role,
-            ),
-            label,
-            "release-audit native payload hex labels must be canonical lowercase",
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1( &uppercase_label_fields, BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, role, ), label, "release-audit native payload hex labels must be canonical lowercase", };
         let uppercase_payload_hex = payload_hex.to_ascii_uppercase();
         let uppercase_value_body =
             [canonical_label, b"=", uppercase_payload_hex.as_bytes()].concat();
         let uppercase_value_fields = release_field_index_v1(&uppercase_value_body);
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
-                &uppercase_value_fields,
-                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
-                role,
-            ),
-            label,
-            "release-audit native payload hex values must be canonical lowercase",
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1( &uppercase_value_fields, BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, role, ), label, "release-audit native payload hex values must be canonical lowercase", };
         let raw_payload_body = [canonical_label, b"=", payload.as_slice()].concat();
         let raw_payload_fields = release_field_index_v1(&raw_payload_body);
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
-                &raw_payload_fields,
-                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
-                role,
-            ),
-            label,
-            "release-audit native payload hex fields must reject raw native bytes",
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1( &raw_payload_fields, BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, role, ), label, "release-audit native payload hex fields must reject raw native bytes", };
     }
 }
 #[test]
@@ -1055,14 +974,7 @@ fn release_audit_commitment_fields_reject_standalone_digest_tokens() {
             body.as_slice(),
         ]
         .concat();
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_report_binds_release_evidence_digest_v1(
-                &report,
-                &release_evidence_digest,
-            ),
-            "release evidence digest",
-            context,
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_report_binds_release_evidence_digest_v1( &report, &release_evidence_digest, ), "release evidence digest", context, };
     }
     let artifact_bundle_digest = Hash::new(b"release-audit-standalone-value-token-artifact");
     let artifact_bundle_digest_hex =
@@ -1120,15 +1032,7 @@ fn release_audit_commitment_fields_reject_standalone_digest_tokens() {
             "separator-alias archive artifact-bundle labels beside canonical labels",
         ),
     ] {
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
-                &release_field_index_v1(&archive_body),
-                "artifact bundle digest",
-                &artifact_bundle_digest,
-            ),
-            "artifact bundle digest",
-            context,
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1( &release_field_index_v1(&archive_body), "artifact bundle digest", &artifact_bundle_digest, ), "artifact bundle digest", context, };
     }
 }
 #[test]
@@ -1567,34 +1471,9 @@ fn release_audit_manifest_validation_binds_canonical_generated_circuit_body_dige
         } else {
             separator_spelled_manifest.audit_evidence_archive_digest = digest;
         }
-        assert_error_contains(
-            validate_release_manifest_v1(&separator_spelled_manifest),
-            "placeholder audit artifact",
-            &format!(
-                "standalone release audit manifests must reject separator-spelled {field_label} digest sentinel {}",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
-        assert_error_contains(
-            release_manifest_digest_v1(&separator_spelled_manifest),
-            "placeholder audit artifact",
-            &format!(
-                "release audit manifest digesting must reject separator-spelled {field_label} digest sentinel {}",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_manifest_trusted_reviewer_v1(
-                &separator_spelled_manifest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            ),
-            "placeholder audit artifact",
-            &format!(
-                "trusted-reviewer manifest validation must reject separator-spelled {field_label} digest sentinel {}",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_manifest_v1(&separator_spelled_manifest), "placeholder audit artifact", &format!( "standalone release audit manifests must reject separator-spelled {field_label} digest sentinel {}", String::from_utf8_lossy(sentinel) ), };
+        assert_call! { assert_error_contains; release_manifest_digest_v1(&separator_spelled_manifest), "placeholder audit artifact", &format!( "release audit manifest digesting must reject separator-spelled {field_label} digest sentinel {}", String::from_utf8_lossy(sentinel) ), };
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_manifest_trusted_reviewer_v1( &separator_spelled_manifest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ), "placeholder audit artifact", &format!( "trusted-reviewer manifest validation must reject separator-spelled {field_label} digest sentinel {}", String::from_utf8_lossy(sentinel) ), };
     }
 }
 #[test]
@@ -1748,14 +1627,7 @@ fn release_audit_signoff_payload_validation_binds_canonical_generated_circuit_bo
         } else {
             separator_spelled_payload.audit_evidence_archive_digest = digest;
         }
-        assert_error_contains(
-            validate_release_signoff_payload_v1(&separator_spelled_payload),
-            "placeholder audit artifact",
-            &format!(
-                "standalone release audit signoff payloads must reject separator-spelled {field_label} digest sentinel {}",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_signoff_payload_v1(&separator_spelled_payload), "placeholder audit artifact", &format!( "standalone release audit signoff payloads must reject separator-spelled {field_label} digest sentinel {}", String::from_utf8_lossy(sentinel) ), };
         let separator_spelled_signature =
             SignatureOf::try_new(reviewer_key_pair.private_key(), &separator_spelled_payload)
                 .expect("fixture reviewer signs separator-spelled digest signoff payload");
@@ -1765,26 +1637,8 @@ fn release_audit_signoff_payload_validation_binds_canonical_generated_circuit_bo
             payload: separator_spelled_payload,
             signature: separator_spelled_signature,
         };
-        assert_error_contains(
-            validate_release_signoff_v1(&separator_spelled_signoff),
-            "placeholder audit artifact",
-            &format!(
-                "standalone release audit signoffs must reject well-signed separator-spelled {field_label} digest sentinel {}",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_signoff_trusted_reviewer_v1(
-                &separator_spelled_signoff,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            ),
-            "placeholder audit artifact",
-            &format!(
-                "trusted-reviewer signoff validation must reject well-signed separator-spelled {field_label} digest sentinel {}",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_signoff_v1(&separator_spelled_signoff), "placeholder audit artifact", &format!( "standalone release audit signoffs must reject well-signed separator-spelled {field_label} digest sentinel {}", String::from_utf8_lossy(sentinel) ), };
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_signoff_trusted_reviewer_v1( &separator_spelled_signoff, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ), "placeholder audit artifact", &format!( "trusted-reviewer signoff validation must reject well-signed separator-spelled {field_label} digest sentinel {}", String::from_utf8_lossy(sentinel) ), };
     }
     let mut placeholder_generated_body_payload = payload;
     placeholder_generated_body_payload.generated_circuit_body_digest =
@@ -1872,13 +1726,7 @@ fn release_audit_signoff_rejects_malformed_ed25519_signature_before_backend() {
         let mut malformed = signoff.clone();
         malformed.signature =
             SignatureOf::from_signature(crate::Signature::from_bytes(&signature_payload));
-        assert_error_contains(
-            validate_release_signoff_v1(&malformed),
-            "failed admission",
-            &format!(
-                "{label} release audit signoff signature must fail before backend verification"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_signoff_v1(&malformed), "failed admission", &format!( "{label} release audit signoff signature must fail before backend verification" ), };
     }
 }
 fn bounded_noise_packed_params() -> BfvParameters {
@@ -2734,16 +2582,7 @@ fn release_audit_machine_generated_package_bytes_rejected_by_raw_byte_production
         norito::to_bytes(&artifacts).expect("encode deterministic artifact bundle");
     let package_bytes =
         norito::to_bytes(&package).expect("encode deterministic machine-generated package");
-    assert_machine_generated_package_bytes_rejected_by_production_admission(
-        &params,
-        &material,
-        &artifacts,
-        &artifact_bundle_bytes,
-        &package_bytes,
-        package_digest,
-        reviewer_id,
-        reviewer_key_pair.public_key(),
-    );
+    assert_call! { assert_machine_generated_package_bytes_rejected_by_production_admission; &params, &material, &artifacts, &artifact_bundle_bytes, &package_bytes, package_digest, reviewer_id, reviewer_key_pair.public_key(), };
 }
 #[test]
 #[expect(
@@ -2810,19 +2649,7 @@ fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
         ),
     ];
     for (digest, expected) in generated_body_package_digest_aliases {
-        assert_error_contains(
-            validate_release_package_for_artifacts_trusted_reviewer_and_digest_v1(
-                &params,
-                &material,
-                &artifacts,
-                &package,
-                digest,
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ),
-            diagnostics.dynamic_expected_at(1, expected),
-            diagnostics.static_context_at(1),
-        );
+        assert_call! { assert_error_contains; validate_release_package_for_artifacts_trusted_reviewer_and_digest_v1( &params, &material, &artifacts, &package, digest, reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(1, expected), diagnostics.static_context_at(1), };
     }
     let mut stale_package_with_generated_body_commitment_alias = package.clone();
     stale_package_with_generated_body_commitment_alias.manifest_digest =
@@ -4018,62 +3845,12 @@ fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
             "archive",
         ),
     ] {
-        assert_error_contains(bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1(
-                tampered_package_bytes,
-            ), diagnostics.dynamic_expected_at(470, expected), diagnostics.dynamic_context_at(470, &format!(
-                "package-byte digests helper must reject post-signature {label} byte tamper before hashing",
-            )));
-        assert_error_contains(validate_release_package_bytes_for_artifacts_trusted_reviewer_v1(
-                &params,
-                &material,
-                &artifacts,
-                tampered_package_bytes,
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ), diagnostics.dynamic_expected_at(471, expected), diagnostics.dynamic_context_at(471, &format!(
-                "byte-derived production package admission must reject post-signature {label} byte tamper",
-            )));
-        assert_error_contains(validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
-                &params,
-                &material,
-                &artifact_bundle_bytes,
-                tampered_package_bytes,
-                package_digest,
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ), diagnostics.dynamic_expected_at(472, expected), diagnostics.dynamic_context_at(472, &format!(
-                "combined byte-level production admission must reject post-signature {label} byte tamper with a pinned package digest",
-            )));
-        assert_error_contains(validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
-                &params,
-                &material,
-                &artifact_bundle_bytes,
-                tampered_package_bytes,
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ), diagnostics.dynamic_expected_at(473, expected), diagnostics.dynamic_context_at(473, &format!(
-                "derived-digest combined admission must reject post-signature {label} byte tamper",
-            )));
-        assert_error_contains(validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1(
-                &params,
-                &material,
-                &artifact_bundle_bytes,
-                tampered_package_bytes,
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ), diagnostics.dynamic_expected_at(474, expected), diagnostics.dynamic_context_at(474, &format!(
-                "combined byte-level production admission with digests must reject post-signature {label} byte tamper",
-            )));
-        assert_error_contains(validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
-                &params,
-                &material,
-                &artifact_bundle_bytes,
-                tampered_package_bytes,
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ), diagnostics.dynamic_expected_at(475, expected), diagnostics.dynamic_context_at(475, &format!(
-                "combined byte-level production admission with all digests must reject post-signature {label} byte tamper",
-            )));
+        assert_call! { assert_error_contains; bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1( tampered_package_bytes, ), diagnostics.dynamic_expected_at(470, expected), diagnostics.dynamic_context_at(470, &format!( "package-byte digests helper must reject post-signature {label} byte tamper before hashing", )) };
+        assert_call! { assert_error_contains; validate_release_package_bytes_for_artifacts_trusted_reviewer_v1( &params, &material, &artifacts, tampered_package_bytes, reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(471, expected), diagnostics.dynamic_context_at(471, &format!( "byte-derived production package admission must reject post-signature {label} byte tamper", )) };
+        assert_call! { assert_error_contains; validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1( &params, &material, &artifact_bundle_bytes, tampered_package_bytes, package_digest, reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(472, expected), diagnostics.dynamic_context_at(472, &format!( "combined byte-level production admission must reject post-signature {label} byte tamper with a pinned package digest", )) };
+        assert_call! { assert_error_contains; validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1( &params, &material, &artifact_bundle_bytes, tampered_package_bytes, reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(473, expected), diagnostics.dynamic_context_at(473, &format!( "derived-digest combined admission must reject post-signature {label} byte tamper", )) };
+        assert_call! { assert_error_contains; validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1( &params, &material, &artifact_bundle_bytes, tampered_package_bytes, reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(474, expected), diagnostics.dynamic_context_at(474, &format!( "combined byte-level production admission with digests must reject post-signature {label} byte tamper", )) };
+        assert_call! { assert_error_contains; validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1( &params, &material, &artifact_bundle_bytes, tampered_package_bytes, reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(475, expected), diagnostics.dynamic_context_at(475, &format!( "combined byte-level production admission with all digests must reject post-signature {label} byte tamper", )) };
     }
     assert_error_matrix!(diagnostics, 476, [
     (validate_release_package_for_artifacts_trusted_reviewer_and_digest_v1( &params, &material, &artifacts, &package, Hash::new(b"stale external-review package digest"), reviewer_id, reviewer_key_pair.public_key(), )),
@@ -4103,32 +3880,8 @@ fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
         ),
     ];
     for (alias_digest, expected) in byte_level_package_digest_aliases {
-        assert_error_contains(
-            validate_release_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1(
-                &params,
-                &material,
-                &artifacts,
-                &package_bytes,
-                *alias_digest,
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ),
-            diagnostics.dynamic_expected_at(479, expected),
-            diagnostics.static_context_at(479),
-        );
-        assert_error_contains(
-            validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
-                &params,
-                &material,
-                &artifact_bundle_bytes,
-                &package_bytes,
-                *alias_digest,
-                reviewer_id,
-                reviewer_key_pair.public_key(),
-            ),
-            diagnostics.dynamic_expected_at(480, expected),
-            diagnostics.static_context_at(480),
-        );
+        assert_call! { assert_error_contains; validate_release_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1( &params, &material, &artifacts, &package_bytes, *alias_digest, reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(479, expected), diagnostics.static_context_at(479), };
+        assert_call! { assert_error_contains; validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1( &params, &material, &artifact_bundle_bytes, &package_bytes, *alias_digest, reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(480, expected), diagnostics.static_context_at(480), };
     }
 }
 fn sample_full_bootstrap_artifact_payload(
@@ -4181,6 +3934,16 @@ fn sample_full_bootstrap_proof_key_pair(
         &verifier_key_material,
     )
     .expect("build sample full-bootstrap proof-key pair")
+}
+/// Clone a canonical prover key while overriding only its advertised material commitment.
+fn sample_full_bootstrap_prover_key_with_material_commitment(
+    canonical_prover_key: &BfvFullBootstrapProofKeyV1,
+    key_material_commitment: Hash,
+) -> BfvFullBootstrapProofKeyV1 {
+    BfvFullBootstrapProofKeyV1 {
+        key_material_commitment,
+        ..canonical_prover_key.clone()
+    }
 }
 fn sample_full_bootstrap_proof_key_artifact_payloads(
     params: &BfvParameters,
@@ -4592,28 +4355,14 @@ fn full_bootstrap_native_generated_circuit_body_rejects_profile_drift() {
                 sha256(&verifier_payload.generated_circuit_body);
             let verifier_payload = norito::to_bytes(&verifier_payload)
                 .expect("encode verifier payload with generated-body profile drift");
-            assert_error_contains(
-                encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                    circuit_id,
-                    &verifier_payload,
-                ),
-                $needle,
-                $verifier_context,
-            );
+            assert_call! { assert_error_contains; encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1( circuit_id, &verifier_payload, ), $needle, $verifier_context, };
             let mut prover_payload = decoded_prover_payload.clone();
             prover_payload.generated_circuit_body = generated_circuit_body;
             prover_payload.generated_circuit_body_digest =
                 sha256(&prover_payload.generated_circuit_body);
             let prover_payload = norito::to_bytes(&prover_payload)
                 .expect("encode prover payload with generated-body profile drift");
-            assert_error_contains(
-                validate_native_stark_fri_transparent_prover_payload_v1(
-                    circuit_id,
-                    &prover_payload,
-                ),
-                $needle,
-                $prover_context,
-            );
+            assert_call! { assert_error_contains; validate_native_stark_fri_transparent_prover_payload_v1( circuit_id, &prover_payload, ), $needle, $prover_context, };
         }};
     }
     let mut wrong_version = decoded_generated_body.clone();
@@ -4893,35 +4642,14 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
         verifier_payload.generated_circuit_body_digest = generated_body_digest;
         let verifier_payload = norito::to_bytes(&verifier_payload)
             .expect("encode verifier payload with malformed generated-body digest");
-        assert_error_contains(
-            validate_native_stark_fri_verifier_payload_v1(circuit_id, &verifier_payload),
-            expected,
-            &format!(
-                "native verifier payload validation must reject {case_label} generated-body digests before all-zero generated-body bytes"
-            ),
-        );
-        assert_error_contains(
-            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                circuit_id,
-                &verifier_payload,
-            ),
-            expected,
-            &format!(
-                "native verifier material construction must reject {case_label} generated-body digests before all-zero generated-body bytes"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_native_stark_fri_verifier_payload_v1(circuit_id, &verifier_payload), expected, &format!( "native verifier payload validation must reject {case_label} generated-body digests before all-zero generated-body bytes" ), };
+        assert_call! { assert_error_contains; encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1( circuit_id, &verifier_payload, ), expected, &format!( "native verifier material construction must reject {case_label} generated-body digests before all-zero generated-body bytes" ), };
         let mut prover_payload = decoded_prover_payload.clone();
         prover_payload.generated_circuit_body = all_zero_generated_body;
         prover_payload.generated_circuit_body_digest = generated_body_digest;
         let prover_payload = norito::to_bytes(&prover_payload)
             .expect("encode prover payload with malformed generated-body digest");
-        assert_error_contains(
-            validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &prover_payload),
-            expected,
-            &format!(
-                "native prover payload validation must reject {case_label} generated-body digests before all-zero generated-body bytes"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &prover_payload), expected, &format!( "native prover payload validation must reject {case_label} generated-body digests before all-zero generated-body bytes" ), };
     }
     let decoded_generated_body: BfvFullBootstrapNativeGeneratedCircuitBodyV1 =
         norito::decode_from_bytes(&decoded_verifier_payload.generated_circuit_body)
@@ -5095,14 +4823,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
                 sha256(&stale_payload.generated_circuit_body);
             let stale_payload = norito::to_bytes(&stale_payload)
                 .expect("encode stale generated-body verifier payload");
-            assert_error_contains(
-                encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                    circuit_id,
-                    &stale_payload,
-                ),
-                "generated circuit body must advertise",
-                $context,
-            );
+            assert_call! { assert_error_contains; encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1( circuit_id, &stale_payload, ), "generated circuit body must advertise", $context, };
         }};
     }
     expect_generated_body_policy_bound!(
@@ -5180,11 +4901,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
                 sha256(&stale_payload.generated_circuit_body);
             let stale_payload = norito::to_bytes(&stale_payload)
                 .expect("encode stale generated-body prover payload");
-            assert_error_contains(
-                validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &stale_payload),
-                "generated circuit body must advertise",
-                $context,
-            );
+            assert_call! { assert_error_contains; validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &stale_payload), "generated circuit body must advertise", $context, };
         }};
     }
     expect_prover_generated_body_policy_bound!(
@@ -5286,28 +5003,14 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
                 sha256(&verifier_payload.generated_circuit_body);
             let verifier_payload = norito::to_bytes(&verifier_payload)
                 .expect("encode verifier payload with generated body drift");
-            assert_error_contains(
-                encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                    circuit_id,
-                    &verifier_payload,
-                ),
-                $needle,
-                $verifier_context,
-            );
+            assert_call! { assert_error_contains; encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1( circuit_id, &verifier_payload, ), $needle, $verifier_context, };
             let mut prover_payload = decoded_prover_payload.clone();
             prover_payload.generated_circuit_body = generated_circuit_body;
             prover_payload.generated_circuit_body_digest =
                 sha256(&prover_payload.generated_circuit_body);
             let prover_payload = norito::to_bytes(&prover_payload)
                 .expect("encode prover payload with generated body drift");
-            assert_error_contains(
-                validate_native_stark_fri_transparent_prover_payload_v1(
-                    circuit_id,
-                    &prover_payload,
-                ),
-                $needle,
-                $prover_context,
-            );
+            assert_call! { assert_error_contains; validate_native_stark_fri_transparent_prover_payload_v1( circuit_id, &prover_payload, ), $needle, $prover_context, };
         }};
     }
     let compressed_embedded_air_body = norito::to_compressed_bytes(
@@ -5373,28 +5076,14 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
                 sha256(&verifier_payload.generated_circuit_body);
             let verifier_payload = norito::to_bytes(&verifier_payload)
                 .expect("encode verifier payload with malformed generated body");
-            assert_error_contains(
-                encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                    circuit_id,
-                    &verifier_payload,
-                ),
-                $needle,
-                $verifier_context,
-            );
+            assert_call! { assert_error_contains; encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1( circuit_id, &verifier_payload, ), $needle, $verifier_context, };
             let mut prover_payload = decoded_prover_payload.clone();
             prover_payload.generated_circuit_body = generated_circuit_body;
             prover_payload.generated_circuit_body_digest =
                 sha256(&prover_payload.generated_circuit_body);
             let prover_payload = norito::to_bytes(&prover_payload)
                 .expect("encode prover payload with malformed generated body");
-            assert_error_contains(
-                validate_native_stark_fri_transparent_prover_payload_v1(
-                    circuit_id,
-                    &prover_payload,
-                ),
-                $needle,
-                $prover_context,
-            );
+            assert_call! { assert_error_contains; validate_native_stark_fri_transparent_prover_payload_v1( circuit_id, &prover_payload, ), $needle, $prover_context, };
         }};
     }
     let compressed_generated_circuit_body = norito::to_compressed_bytes(
@@ -5562,13 +5251,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
             let mut payload = decoded_verifier_payload.clone();
             payload.$field = $value.to_owned();
             let payload = norito::to_bytes(&payload).expect("encode drifted verifier text payload");
-            assert_error_contains(
-                encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                    circuit_id, &payload,
-                ),
-                "canonical",
-                $context,
-            );
+            assert_call! { assert_error_contains; encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1( circuit_id, &payload, ), "canonical", $context, };
         }};
     }
     expect_verifier_payload_text_rejection!(
@@ -5592,11 +5275,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
             let mut payload = decoded_prover_payload.clone();
             payload.$field = $value.to_owned();
             let payload = norito::to_bytes(&payload).expect("encode drifted prover text payload");
-            assert_error_contains(
-                validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &payload),
-                "canonical",
-                $context,
-            );
+            assert_call! { assert_error_contains; validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &payload), "canonical", $context, };
         }};
     }
     expect_prover_payload_text_rejection!(
@@ -5654,13 +5333,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
     ] {
         let payload =
             norito::to_bytes(&payload).expect("encode placeholder prover payload metadata");
-        assert_error_contains(
-            validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &payload),
-            "placeholder text",
-            &format!(
-                "native prover payload {field} must reject placeholder labels before mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &payload), "placeholder text", &format!( "native prover payload {field} must reject placeholder labels before mismatch" ), };
     }
     for (field, payload) in [
         (
@@ -5701,13 +5374,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
     ] {
         let payload = norito::to_bytes(&payload)
             .expect("encode binary-decorated placeholder prover payload metadata");
-        assert_error_contains(
-            validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &payload),
-            "placeholder text",
-            &format!(
-                "native prover payload {field} must reject binary-decorated placeholder labels before mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_native_stark_fri_transparent_prover_payload_v1(circuit_id, &payload), "placeholder text", &format!( "native prover payload {field} must reject binary-decorated placeholder labels before mismatch" ), };
     }
     for (field, payload) in [
         (
@@ -5748,15 +5415,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
     ] {
         let payload =
             norito::to_bytes(&payload).expect("encode placeholder verifier payload metadata");
-        assert_error_contains(
-            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                circuit_id, &payload,
-            ),
-            "placeholder text",
-            &format!(
-                "native verifier payload {field} must reject placeholder labels before mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1( circuit_id, &payload, ), "placeholder text", &format!( "native verifier payload {field} must reject placeholder labels before mismatch" ), };
     }
     for (field, payload) in [
         (
@@ -5797,15 +5456,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
     ] {
         let payload = norito::to_bytes(&payload)
             .expect("encode binary-decorated placeholder verifier payload metadata");
-        assert_error_contains(
-            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
-                circuit_id, &payload,
-            ),
-            "placeholder text",
-            &format!(
-                "native verifier payload {field} must reject binary-decorated placeholder labels before mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1( circuit_id, &payload, ), "placeholder text", &format!( "native verifier payload {field} must reject binary-decorated placeholder labels before mismatch" ), };
     }
     for (field, material) in [
         (
@@ -5845,11 +5496,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
         ),
     ] {
         let material = norito::to_bytes(&material).expect("encode wrong native material metadata");
-        assert_error_contains(
-            decode_bfv_full_bootstrap_native_proof_key_material_v1(&material),
-            "canonical",
-            &format!("native proof-key material {field} must reject wrong labels"),
-        );
+        assert_call! { assert_error_contains; decode_bfv_full_bootstrap_native_proof_key_material_v1(&material), "canonical", &format!("native proof-key material {field} must reject wrong labels"), };
     }
     for (field, material) in [
         (
@@ -5890,13 +5537,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
     ] {
         let material =
             norito::to_bytes(&material).expect("encode placeholder native material metadata");
-        assert_error_contains(
-            decode_bfv_full_bootstrap_native_proof_key_material_v1(&material),
-            "placeholder text",
-            &format!(
-                "native proof-key material {field} must reject placeholder labels before mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; decode_bfv_full_bootstrap_native_proof_key_material_v1(&material), "placeholder text", &format!( "native proof-key material {field} must reject placeholder labels before mismatch" ), };
     }
     for (field, material) in [
         (
@@ -5944,13 +5585,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
     ] {
         let material = norito::to_bytes(&material)
             .expect("encode binary-decorated placeholder native material metadata");
-        assert_error_contains(
-            decode_bfv_full_bootstrap_native_proof_key_material_v1(&material),
-            "placeholder text",
-            &format!(
-                "native proof-key material {field} must reject binary-decorated placeholder labels before mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; decode_bfv_full_bootstrap_native_proof_key_material_v1(&material), "placeholder text", &format!( "native proof-key material {field} must reject binary-decorated placeholder labels before mismatch" ), };
     }
     let mut binary_decorated_generated_body = decoded_generated_body.clone();
     binary_decorated_generated_body.backend =
@@ -6001,13 +5636,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
         malformed_payload_material.native_payload_digest = native_payload_digest;
         let malformed_payload_material = norito::to_bytes(&malformed_payload_material)
             .expect("encode malformed native payload material");
-        assert_error_contains(
-            decode_bfv_full_bootstrap_native_proof_key_material_v1(&malformed_payload_material),
-            expected,
-            &format!(
-                "native material must reject {case_label} payload digests before all-zero native payload bytes"
-            ),
-        );
+        assert_call! { assert_error_contains; decode_bfv_full_bootstrap_native_proof_key_material_v1(&malformed_payload_material), expected, &format!( "native material must reject {case_label} payload digests before all-zero native payload bytes" ), };
     }
     let mut inert_payload_material = decoded_verifier.clone();
     inert_payload_material.native_payload = b"not-production-ready".to_vec();
@@ -6247,12 +5876,6 @@ fn encrypt_decrypt_roundtrip() {
 }
 #[test]
 fn decrypt_diagnostics_preflight_ciphertext_shape_before_secret_key_shape() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let params = params();
     let malformed_secret_key = BfvSecretKey { s: Vec::new() };
     let malformed_ciphertext = BfvCiphertext {
@@ -6429,109 +6052,37 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
     };
     assert_diag! { 219 => bootstrap_ciphertext_bounded_noise_round( &insufficient, &round_request_bootstrap, &malformed_ciphertext, 1, ) };
     assert_diag! { 220 => bootstrap_ciphertext_bounded_noise_rounds( &insufficient, &round_request_bootstrap, &malformed_ciphertext, 2, ) };
-    assert_fresh_capacity_error(
-        validate_rotation_key_bounded_noise_zero_refresh_transcript(
-            &insufficient,
-            &malformed_public_key,
-            &malformed_rotation_key,
-            b"bfv-rounded-narrow-rotation-transcript",
-        ),
-        "bounded rotation refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes",
-    );
-    assert_fresh_capacity_error(
-        validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
-            &insufficient,
-            &malformed_public_key,
-            &malformed_bootstrap_transcript_key,
-            b"bfv-rounded-narrow-bootstrap-transcript",
-        ),
-        "bounded bootstrap refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; validate_rotation_key_bounded_noise_zero_refresh_transcript( &insufficient, &malformed_public_key, &malformed_rotation_key, b"bfv-rounded-narrow-rotation-transcript", ), "bounded rotation refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes", };
+    assert_call! { assert_fresh_capacity_error; validate_bootstrap_key_bounded_noise_zero_refresh_transcript( &insufficient, &malformed_public_key, &malformed_bootstrap_transcript_key, b"bfv-rounded-narrow-bootstrap-transcript", ), "bounded bootstrap refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes", };
     let malformed_relinearization_key = BfvRelinearizationKey {
         entries: Vec::new(),
     };
     let malformed_rns_chain = BfvRnsModulusChain { moduli: Vec::new() };
-    assert_fresh_capacity_error(
-        multiply_ciphertexts_bounded_noise(
-            &insufficient,
-            &malformed_relinearization_key,
-            &malformed_ciphertext,
-            &malformed_ciphertext,
-        ),
-        "bounded multiply must reject too-narrow profiles before operand/key shapes",
-    );
-    assert_fresh_capacity_error(
-        multiply_ciphertexts_bounded_noise_rns_exact(
-            &insufficient,
-            &malformed_rns_chain,
-            &malformed_relinearization_key,
-            &malformed_ciphertext,
-            &malformed_ciphertext,
-        ),
-        "bounded RNS multiply must reject too-narrow profiles before chain, operand, or key shapes",
-    );
-    assert_fresh_capacity_error(
-        multiply_ciphertexts_bounded_noise_rns_basis_extension_exact(
-            &insufficient,
-            &malformed_rns_chain,
-            &malformed_rns_chain,
-            &malformed_relinearization_key,
-            &malformed_ciphertext,
-            &malformed_ciphertext,
-        ),
-        "bounded basis-extension multiply must reject too-narrow profiles before chain, operand, or key shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; multiply_ciphertexts_bounded_noise( &insufficient, &malformed_relinearization_key, &malformed_ciphertext, &malformed_ciphertext, ), "bounded multiply must reject too-narrow profiles before operand/key shapes", };
+    assert_call! { assert_fresh_capacity_error; multiply_ciphertexts_bounded_noise_rns_exact( &insufficient, &malformed_rns_chain, &malformed_relinearization_key, &malformed_ciphertext, &malformed_ciphertext, ), "bounded RNS multiply must reject too-narrow profiles before chain, operand, or key shapes", };
+    assert_call! { assert_fresh_capacity_error; multiply_ciphertexts_bounded_noise_rns_basis_extension_exact( &insufficient, &malformed_rns_chain, &malformed_rns_chain, &malformed_relinearization_key, &malformed_ciphertext, &malformed_ciphertext, ), "bounded basis-extension multiply must reject too-narrow profiles before chain, operand, or key shapes", };
     let malformed_bundle = BfvEvaluationKeyBundle {
         relinearization_key: malformed_relinearization_key,
         rotation_keys: Vec::new(),
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_fresh_capacity_error(
-        malformed_bundle.validate_bounded_noise_refresh_transcripts(
-            &insufficient,
-            &public_key,
-            &[],
-            None,
-        ),
-        "bounded refresh transcript validation must reject too-narrow profiles before bundle key shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; malformed_bundle.validate_bounded_noise_refresh_transcripts( &insufficient, &public_key, &[], None, ), "bounded refresh transcript validation must reject too-narrow profiles before bundle key shapes", };
     let malformed_secret_key = BfvSecretKey { s: Vec::new() };
     let err = decrypt_bounded_noise(&insufficient, &malformed_secret_key, &malformed_ciphertext)
         .expect_err("bounded decrypt must keep ciphertext-shape preflight before capacity");
     assert_row! { err.to_string().contains("ciphertext c0 length"), "unexpected error: {err}" };
-    assert_fresh_capacity_error(
-        decrypt_bounded_noise(&insufficient, &malformed_secret_key, &zero_refresh),
-        "bounded decrypt must reject too-narrow profiles before secret-key shapes",
-    );
-    assert_fresh_capacity_error(
-        decrypt_with_bounded_noise_profile(&insufficient, &malformed_secret_key, &zero_refresh),
-        "bounded noise profile must reject too-narrow profiles before secret-key shapes",
-    );
-    assert_fresh_capacity_error(
-        validate_ciphertext_bounded_noise(
-            &insufficient,
-            &malformed_secret_key,
-            &zero_refresh,
-            0,
-            "narrow rounded ciphertext",
-        ),
-        "bounded ciphertext diagnostics must reject too-narrow profiles before secret-key shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; decrypt_bounded_noise(&insufficient, &malformed_secret_key, &zero_refresh), "bounded decrypt must reject too-narrow profiles before secret-key shapes", };
+    assert_call! { assert_fresh_capacity_error; decrypt_with_bounded_noise_profile(&insufficient, &malformed_secret_key, &zero_refresh), "bounded noise profile must reject too-narrow profiles before secret-key shapes", };
+    assert_call! { assert_fresh_capacity_error; validate_ciphertext_bounded_noise( &insufficient, &malformed_secret_key, &zero_refresh, 0, "narrow rounded ciphertext", ), "bounded ciphertext diagnostics must reject too-narrow profiles before secret-key shapes", };
     let bundle = BfvEvaluationKeyBundle {
         relinearization_key: relinearization_key.clone(),
         rotation_keys: Vec::new(),
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_fresh_capacity_error(
-        bundle.validate_bounded_noise_zero_refreshes(&insufficient, &malformed_secret_key),
-        "bounded zero-refresh diagnostics must reject too-narrow profiles before secret-key shapes",
-    );
-    assert_fresh_capacity_error(
-        bundle.validate_bounded_noise_secret_key_consistency(&insufficient, &malformed_secret_key),
-        "bounded bundle consistency diagnostics must reject too-narrow profiles before secret-key shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; bundle.validate_bounded_noise_zero_refreshes(&insufficient, &malformed_secret_key), "bounded zero-refresh diagnostics must reject too-narrow profiles before secret-key shapes", };
+    assert_call! { assert_fresh_capacity_error; bundle.validate_bounded_noise_secret_key_consistency(&insufficient, &malformed_secret_key), "bounded bundle consistency diagnostics must reject too-narrow profiles before secret-key shapes", };
     let galois_key = BfvGaloisKey {
         automorphism_power: 3,
         entries: vec![key_switch_entry.clone()],
@@ -6570,14 +6121,7 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
     assert_diag! { 235 => rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise( &insufficient, &duplicate_galois_keys, &malformed_ciphertext, 1, ) };
     assert_diag! { 236 => rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_exact( &insufficient, &malformed_rns_chain, &duplicate_galois_keys, &malformed_ciphertext, 1, ) };
     assert_diag! { 237 => rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_basis_extension_exact( &insufficient, &malformed_rns_chain, &malformed_rns_chain, &duplicate_galois_keys, &malformed_ciphertext, 1, ) };
-    assert_fresh_capacity_error(
-        apply_galois_automorphism_ciphertext_bounded_noise(
-            &insufficient,
-            &galois_key,
-            &malformed_ciphertext,
-        ),
-        "bounded Galois switch must reject too-narrow profiles before ciphertext or key-entry shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; apply_galois_automorphism_ciphertext_bounded_noise( &insufficient, &galois_key, &malformed_ciphertext, ), "bounded Galois switch must reject too-narrow profiles before ciphertext or key-entry shapes", };
     let rotation_key = BfvRotationKey {
         rotation_steps: 1,
         zero_refresh: zero_refresh.clone(),
@@ -6585,14 +6129,7 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
     assert_diag! { 238 => rotate_ciphertext_slots_left_bounded_noise( &insufficient, &rotation_key, std::slice::from_ref(&malformed_ciphertext), ) };
     assert_diag! { 239 => rotate_ciphertext_slots_left_bounded_noise_rns_exact( &insufficient, &malformed_rns_chain, &rotation_key, std::slice::from_ref(&malformed_ciphertext), ) };
     assert_diag! { 240 => bfv_rotate_slots_left_bounded_noise_output_bounds(&insufficient, &rotation_key, &[0]) };
-    assert_fresh_capacity_error(
-        rotate_ciphertext_slots_left_bounded_noise(
-            &insufficient,
-            &rotation_key,
-            &[malformed_ciphertext.clone(), malformed_ciphertext.clone()],
-        ),
-        "bounded outer RotateLeft must reject too-narrow profiles before key or ciphertext shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; rotate_ciphertext_slots_left_bounded_noise( &insufficient, &rotation_key, &[malformed_ciphertext.clone(), malformed_ciphertext.clone()], ), "bounded outer RotateLeft must reject too-narrow profiles before key or ciphertext shapes", };
     let bootstrap_key = BfvBootstrapKey {
         mode: BfvBootstrapKeyMode::RefreshOnlyV1,
         key_id: "bounded-noise-capacity-bootstrap".to_string(),
@@ -6616,22 +6153,8 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
     };
     assert_diag! { 242 => bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1( &insufficient, &bootstrap_key, &malformed_full_bootstrap_artifacts, &[], 0, ) };
     assert_diag! { 243 => apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1( &insufficient, &bootstrap_key, &malformed_full_bootstrap_artifacts, &[], &malformed_ciphertext, ) };
-    assert_fresh_capacity_error(
-        validate_rotation_key_bounded_noise_zero_refresh(
-            &insufficient,
-            &malformed_secret_key,
-            &rotation_key,
-        ),
-        "bounded rotation zero-refresh diagnostics must reject too-narrow profiles before secret-key shapes",
-    );
-    assert_fresh_capacity_error(
-        validate_bootstrap_key_bounded_noise_zero_refreshes(
-            &insufficient,
-            &malformed_secret_key,
-            &bootstrap_key,
-        ),
-        "bounded bootstrap zero-refresh diagnostics must reject too-narrow profiles before secret-key shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; validate_rotation_key_bounded_noise_zero_refresh( &insufficient, &malformed_secret_key, &rotation_key, ), "bounded rotation zero-refresh diagnostics must reject too-narrow profiles before secret-key shapes", };
+    assert_call! { assert_fresh_capacity_error; validate_bootstrap_key_bounded_noise_zero_refreshes( &insufficient, &malformed_secret_key, &bootstrap_key, ), "bounded bootstrap zero-refresh diagnostics must reject too-narrow profiles before secret-key shapes", };
     let full_bootstrap_material = BfvFullBootstrapCircuitMaterialV1 {
         circuit_id: "wrong-bfv-full-bootstrap-circuit".to_owned(),
         parameter_digest: Hash::new(b"bounded-full-bootstrap-parameter-digest"),
@@ -6703,15 +6226,7 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
             .expect("encode narrow packed full-bootstrap diagonal"),
         }],
     };
-    assert_fresh_capacity_error(
-        bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
-            &insufficient,
-            &[],
-            &valid_full_bootstrap_transform,
-            0,
-        ),
-        "valid bounded full-bootstrap linear-transform bounds must still reject too-narrow profiles",
-    );
+    assert_call! { assert_fresh_capacity_error; bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1( &insufficient, &[], &valid_full_bootstrap_transform, 0, ), "valid bounded full-bootstrap linear-transform bounds must still reject too-narrow profiles", };
     let invalid_full_bootstrap_sample = BfvFullBootstrapSampleExtractionV1 {
         source_slot_count: insufficient.polynomial_degree,
         source_ciphertext_component_count: BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1,
@@ -6729,14 +6244,7 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
         extracted_coefficient_index: 0,
         ..invalid_full_bootstrap_sample
     };
-    assert_fresh_capacity_error(
-        apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
-            &insufficient,
-            &malformed_ciphertext,
-            valid_full_bootstrap_sample,
-        ),
-        "valid bounded full-bootstrap raw-sample execution metadata must still reject too-narrow profiles before ciphertext shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1( &insufficient, &malformed_ciphertext, valid_full_bootstrap_sample, ), "valid bounded full-bootstrap raw-sample execution metadata must still reject too-narrow profiles before ciphertext shapes", };
     let metadata_only_full_bootstrap_switch_key = BfvFullBootstrapSampleExtractionSwitchKeyV1 {
         sample_extraction: valid_full_bootstrap_sample,
         coefficient_entries: (0..insufficient.degree())
@@ -6748,14 +6256,7 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
             )
             .collect(),
     };
-    assert_fresh_capacity_error(
-        bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
-            &insufficient,
-            &metadata_only_full_bootstrap_switch_key,
-            0,
-        ),
-        "valid bounded full-bootstrap sample-switch metadata must still reject too-narrow profiles before key-entry shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1( &insufficient, &metadata_only_full_bootstrap_switch_key, 0, ), "valid bounded full-bootstrap sample-switch metadata must still reject too-narrow profiles before key-entry shapes", };
     let invalid_full_bootstrap_raw_sample = BfvFullBootstrapRawExtractedSampleV1 {
         source_coefficient_index: insufficient.polynomial_degree,
         constant_term: 1,
@@ -6774,85 +6275,22 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
         ..valid_full_bootstrap_raw_sample.clone()
     };
     assert_diag! { 259 => apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1( &insufficient, &metadata_only_full_bootstrap_switch_key, &mismatched_full_bootstrap_raw_sample, ) };
-    assert_fresh_capacity_error(
-        repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
-            &insufficient,
-            &valid_full_bootstrap_raw_sample,
-        ),
-        "valid bounded full-bootstrap raw-sample repack metadata must still reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1(
-            &insufficient,
-            &valid_full_bootstrap_raw_sample,
-            0,
-        ),
-        "valid bounded full-bootstrap raw-sample repack bounds metadata must still reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profile_v1(
-            &insufficient,
-            &malformed_secret_key,
-            &valid_full_bootstrap_raw_sample,
-        ),
-        "valid bounded full-bootstrap raw-sample diagnostics must still reject too-narrow profiles before secret-key shapes",
-    );
-    assert_fresh_capacity_error(
-        apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
-            &insufficient,
-            &metadata_only_full_bootstrap_switch_key,
-            &valid_full_bootstrap_raw_sample,
-        ),
-        "valid bounded full-bootstrap sample-switch execution metadata must still reject too-narrow profiles before key-entry shapes",
-    );
-    assert_fresh_capacity_error(
-        bfv_add_bounded_noise_output_bound(&insufficient, &[0, 0]),
-        "bounded add bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_subtract_bounded_noise_output_bound(&insufficient, 0, 0),
-        "bounded subtract bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_add_plain_bounded_noise_output_bound(&insufficient, 0),
-        "bounded add-plain bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_multiply_plain_scalar_bounded_noise_output_bound(&insufficient, 0, 1),
-        "bounded scalar-multiply bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(&insufficient, 0, &[1]),
-        "bounded plaintext-polynomial bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_multiply_bounded_noise_output_bound(&insufficient, &relinearization_key, 0, 0),
-        "bounded multiply bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_galois_key_switch_bounded_noise_output_bound(&insufficient, &galois_key, 0),
-        "bounded Galois bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_packed_rotate_left_bounded_noise_output_bound(&insufficient, &[galois_key], 0, 1),
-        "bounded packed RotateLeft bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_affine_circuit_bounded_noise_output_bounds(&insufficient, &affine, &[0]),
-        "bounded affine bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_rotate_slots_left_bounded_noise_output_bounds(&insufficient, &rotation_key, &[0, 0]),
-        "bounded outer RotateLeft bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_bootstrap_refresh_bounded_noise_output_bound(&insufficient, 0, 1),
-        "bounded bootstrap bounds must reject too-narrow profiles",
-    );
-    assert_fresh_capacity_error(
-        bfv_bootstrap_key_refresh_bounded_noise_output_bound(&insufficient, &bootstrap_key, 0, 1),
-        "key-authorized bounded bootstrap bounds must reject too-narrow profiles",
-    );
+    assert_call! { assert_fresh_capacity_error; repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1( &insufficient, &valid_full_bootstrap_raw_sample, ), "valid bounded full-bootstrap raw-sample repack metadata must still reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1( &insufficient, &valid_full_bootstrap_raw_sample, 0, ), "valid bounded full-bootstrap raw-sample repack bounds metadata must still reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profile_v1( &insufficient, &malformed_secret_key, &valid_full_bootstrap_raw_sample, ), "valid bounded full-bootstrap raw-sample diagnostics must still reject too-narrow profiles before secret-key shapes", };
+    assert_call! { assert_fresh_capacity_error; apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1( &insufficient, &metadata_only_full_bootstrap_switch_key, &valid_full_bootstrap_raw_sample, ), "valid bounded full-bootstrap sample-switch execution metadata must still reject too-narrow profiles before key-entry shapes", };
+    assert_call! { assert_fresh_capacity_error; bfv_add_bounded_noise_output_bound(&insufficient, &[0, 0]), "bounded add bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_subtract_bounded_noise_output_bound(&insufficient, 0, 0), "bounded subtract bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_add_plain_bounded_noise_output_bound(&insufficient, 0), "bounded add-plain bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_multiply_plain_scalar_bounded_noise_output_bound(&insufficient, 0, 1), "bounded scalar-multiply bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(&insufficient, 0, &[1]), "bounded plaintext-polynomial bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_multiply_bounded_noise_output_bound(&insufficient, &relinearization_key, 0, 0), "bounded multiply bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_galois_key_switch_bounded_noise_output_bound(&insufficient, &galois_key, 0), "bounded Galois bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_packed_rotate_left_bounded_noise_output_bound(&insufficient, &[galois_key], 0, 1), "bounded packed RotateLeft bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_affine_circuit_bounded_noise_output_bounds(&insufficient, &affine, &[0]), "bounded affine bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_rotate_slots_left_bounded_noise_output_bounds(&insufficient, &rotation_key, &[0, 0]), "bounded outer RotateLeft bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_bootstrap_refresh_bounded_noise_output_bound(&insufficient, 0, 1), "bounded bootstrap bounds must reject too-narrow profiles", };
+    assert_call! { assert_fresh_capacity_error; bfv_bootstrap_key_refresh_bounded_noise_output_bound(&insufficient, &bootstrap_key, 0, 1), "key-authorized bounded bootstrap bounds must reject too-narrow profiles", };
     let malformed_bootstrap_key = BfvBootstrapKey {
         mode: BfvBootstrapKeyMode::RefreshOnlyV1,
         key_id: "malformed-bounded-noise-capacity-bootstrap".to_string(),
@@ -6865,15 +6303,7 @@ fn bounded_noise_bfv_rejects_too_narrow_profiles() {
         round_refreshes: Vec::new(),
         full_bootstrap_material: None,
     };
-    assert_fresh_capacity_error(
-        bfv_bootstrap_key_refresh_bounded_noise_output_bound(
-            &insufficient,
-            &malformed_bootstrap_key,
-            0,
-            1,
-        ),
-        "key-authorized bounded bootstrap bounds must reject too-narrow profiles before bootstrap-key shapes",
-    );
+    assert_call! { assert_fresh_capacity_error; bfv_bootstrap_key_refresh_bounded_noise_output_bound( &insufficient, &malformed_bootstrap_key, 0, 1, ), "key-authorized bounded bootstrap bounds must reject too-narrow profiles before bootstrap-key shapes", };
 }
 #[test]
 fn bounded_noise_bfv_addition_tracks_noise_bound() {
@@ -8115,15 +7545,7 @@ fn seeded_encryption_rejects_insufficient_residual_capacity() {
     )
     .expect_err("exact rotation refresh diagnostics must keep shape preflight before capacity");
     assert_row! { err.to_string().contains("ciphertext c0 length"), "unexpected error: {err}" };
-    assert_seeded_capacity_error(
-        validate_rotation_key_zero_refresh_transcript(
-            &insufficient,
-            &malformed_public_key,
-            &malformed_rotation_key,
-            b"bfv-insufficient-capacity-rotation-transcript",
-        ),
-        "exact rotation refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes",
-    );
+    assert_call! { assert_seeded_capacity_error; validate_rotation_key_zero_refresh_transcript( &insufficient, &malformed_public_key, &malformed_rotation_key, b"bfv-insufficient-capacity-rotation-transcript", ), "exact rotation refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes", };
     let malformed_bootstrap_key = BfvBootstrapKey {
         mode: BfvBootstrapKeyMode::RefreshOnlyV1,
         key_id: "seeded-capacity-malformed-bootstrap".to_string(),
@@ -8133,15 +7555,7 @@ fn seeded_encryption_rejects_insufficient_residual_capacity() {
         round_refreshes: vec![malformed_refresh],
         full_bootstrap_material: None,
     };
-    assert_seeded_capacity_error(
-        validate_bootstrap_key_zero_refresh_transcript(
-            &insufficient,
-            &malformed_public_key,
-            &malformed_bootstrap_key,
-            b"bfv-insufficient-capacity-bootstrap-transcript",
-        ),
-        "exact bootstrap refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes",
-    );
+    assert_call! { assert_seeded_capacity_error; validate_bootstrap_key_zero_refresh_transcript( &insufficient, &malformed_public_key, &malformed_bootstrap_key, b"bfv-insufficient-capacity-bootstrap-transcript", ), "exact bootstrap refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes", };
     let malformed_bundle = BfvEvaluationKeyBundle {
         relinearization_key: BfvRelinearizationKey {
             entries: Vec::new(),
@@ -8159,24 +7573,8 @@ fn seeded_encryption_rejects_insufficient_residual_capacity() {
         max_refresh_rounds: 1,
         seed: b"bfv-insufficient-capacity-bundle-bootstrap",
     });
-    assert_seeded_capacity_error(
-        malformed_bundle.validate_refresh_transcripts(
-            &insufficient,
-            &malformed_public_key,
-            &rotation_transcripts,
-            bootstrap_transcript,
-        ),
-        "exact bundle refresh transcript validation must reject too-narrow profiles before public-key or bundle shapes",
-    );
-    assert_seeded_capacity_error(
-        malformed_bundle.refresh_transcript_digest(
-            &insufficient,
-            &malformed_public_key,
-            &rotation_transcripts,
-            bootstrap_transcript,
-        ),
-        "exact bundle refresh transcript digest must reject too-narrow profiles before public-key or bundle shapes",
-    );
+    assert_call! { assert_seeded_capacity_error; malformed_bundle.validate_refresh_transcripts( &insufficient, &malformed_public_key, &rotation_transcripts, bootstrap_transcript, ), "exact bundle refresh transcript validation must reject too-narrow profiles before public-key or bundle shapes", };
+    assert_call! { assert_seeded_capacity_error; malformed_bundle.refresh_transcript_digest( &insufficient, &malformed_public_key, &rotation_transcripts, bootstrap_transcript, ), "exact bundle refresh transcript digest must reject too-narrow profiles before public-key or bundle shapes", };
     let zero_refresh = BfvCiphertext {
         c0: zero_poly(&insufficient),
         c1: zero_poly(&insufficient),
@@ -8185,10 +7583,7 @@ fn seeded_encryption_rejects_insufficient_residual_capacity() {
         rotation_steps: 1,
         zero_refresh: zero_refresh.clone(),
     };
-    assert_seeded_capacity_error(
-        validate_rotation_key_zero_refresh(&insufficient, &malformed_secret_key, &rotation_key),
-        "exact rotation refresh diagnostics must reject too-narrow profiles before secret-key shapes",
-    );
+    assert_call! { assert_seeded_capacity_error; validate_rotation_key_zero_refresh(&insufficient, &malformed_secret_key, &rotation_key), "exact rotation refresh diagnostics must reject too-narrow profiles before secret-key shapes", };
     let bootstrap_key = BfvBootstrapKey {
         mode: BfvBootstrapKeyMode::RefreshOnlyV1,
         key_id: "seeded-capacity-bootstrap".to_string(),
@@ -8198,39 +7593,12 @@ fn seeded_encryption_rejects_insufficient_residual_capacity() {
         round_refreshes: vec![zero_refresh.clone()],
         full_bootstrap_material: None,
     };
-    assert_seeded_capacity_error(
-        bootstrap_ciphertext_round(&insufficient, &bootstrap_key, &zero_refresh, 0),
-        "exact bootstrap execution must reject too-narrow profiles before key/ciphertext use",
-    );
-    assert_seeded_capacity_error(
-        bootstrap_ciphertext_rounds(&insufficient, &bootstrap_key, &zero_refresh, 1),
-        "exact multi-round bootstrap execution must reject too-narrow profiles before key/ciphertext use",
-    );
+    assert_call! { assert_seeded_capacity_error; bootstrap_ciphertext_round(&insufficient, &bootstrap_key, &zero_refresh, 0), "exact bootstrap execution must reject too-narrow profiles before key/ciphertext use", };
+    assert_call! { assert_seeded_capacity_error; bootstrap_ciphertext_rounds(&insufficient, &bootstrap_key, &zero_refresh, 1), "exact multi-round bootstrap execution must reject too-narrow profiles before key/ciphertext use", };
     let rns_chain = rns_exact_chain();
-    assert_seeded_capacity_error(
-        bootstrap_ciphertext_rns_exact_round(
-            &insufficient,
-            &rns_chain,
-            &bootstrap_key,
-            &zero_refresh,
-            0,
-        ),
-        "exact RNS bootstrap execution must reject too-narrow profiles before key/ciphertext use",
-    );
-    assert_seeded_capacity_error(
-        bootstrap_ciphertext_rns_exact_rounds(
-            &insufficient,
-            &rns_chain,
-            &bootstrap_key,
-            &zero_refresh,
-            1,
-        ),
-        "exact multi-round RNS bootstrap execution must reject too-narrow profiles before key/ciphertext use",
-    );
-    assert_seeded_capacity_error(
-        validate_bootstrap_key_zero_refreshes(&insufficient, &malformed_secret_key, &bootstrap_key),
-        "exact bootstrap refresh diagnostics must reject too-narrow profiles before secret-key shapes",
-    );
+    assert_call! { assert_seeded_capacity_error; bootstrap_ciphertext_rns_exact_round( &insufficient, &rns_chain, &bootstrap_key, &zero_refresh, 0, ), "exact RNS bootstrap execution must reject too-narrow profiles before key/ciphertext use", };
+    assert_call! { assert_seeded_capacity_error; bootstrap_ciphertext_rns_exact_rounds( &insufficient, &rns_chain, &bootstrap_key, &zero_refresh, 1, ), "exact multi-round RNS bootstrap execution must reject too-narrow profiles before key/ciphertext use", };
+    assert_call! { assert_seeded_capacity_error; validate_bootstrap_key_zero_refreshes(&insufficient, &malformed_secret_key, &bootstrap_key), "exact bootstrap refresh diagnostics must reject too-narrow profiles before secret-key shapes", };
     let key_switch_entry = BfvRelinearizationKeyEntry {
         b: zero_poly(&insufficient),
         a: zero_poly(&insufficient),
@@ -8249,10 +7617,7 @@ fn seeded_encryption_rejects_insufficient_residual_capacity() {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_seeded_capacity_error(
-        bundle.validate_zero_refreshes(&insufficient, &malformed_secret_key),
-        "exact bundle refresh diagnostics must reject too-narrow profiles before secret-key shapes",
-    );
+    assert_call! { assert_seeded_capacity_error; bundle.validate_zero_refreshes(&insufficient, &malformed_secret_key), "exact bundle refresh diagnostics must reject too-narrow profiles before secret-key shapes", };
 }
 #[test]
 fn bootstrap_refresh_key_constructors_reject_all_zero_public_key_material() {
@@ -8513,12 +7878,6 @@ fn deterministic_bfv_seeded_helpers_reject_empty_or_oversized_seeds() {
 }
 #[test]
 fn seeded_encryption_preflights_public_input_and_seed_before_public_key_shape() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let malformed_public_key = BfvPublicKey {
         b: Vec::new(),
         a: Vec::new(),
@@ -8569,12 +7928,6 @@ fn seeded_encryption_preflights_public_input_and_seed_before_public_key_shape() 
 }
 #[test]
 fn galois_keygen_preflights_public_metadata_before_secret_key_shape() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let params = params();
     let malformed_secret_key = BfvSecretKey { s: Vec::new() };
     assert_diag! { 300 => galois_key_from_seed( &params, &malformed_secret_key, 0, b"bfv-galois-invalid-power-before-secret", ) };
@@ -8584,12 +7937,6 @@ fn galois_keygen_preflights_public_metadata_before_secret_key_shape() {
 }
 #[test]
 fn public_key_consistency_preflights_public_key_shape_before_secret_key_shape() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let params = params();
     let malformed_secret_key = BfvSecretKey { s: Vec::new() };
     let malformed_public_key = BfvPublicKey {
@@ -8601,12 +7948,6 @@ fn public_key_consistency_preflights_public_key_shape_before_secret_key_shape() 
 }
 #[test]
 fn evaluation_key_consistency_preflights_public_key_shape_before_secret_key_shape() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let params = params();
     let malformed_secret_key = BfvSecretKey { s: Vec::new() };
     let malformed_relinearization_key = BfvRelinearizationKey {
@@ -9193,13 +8534,7 @@ fn exact_residual_ciphertext_proof_input_material_binds_witness_and_statement() 
     ] {
         let mut aliased_statement = material.clone();
         aliased_statement.statement_hash = alias_digest;
-        assert_error_contains(
-            validate_exact_ciphertext_proof_input_material_v1(&aliased_statement),
-            expected,
-            &format!(
-                "exact ciphertext proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_exact_ciphertext_proof_input_material_v1(&aliased_statement), expected, &format!( "exact ciphertext proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks" ), };
     }
     let mut aliased_public_ciphertext_digest = material.clone();
     aliased_public_ciphertext_digest.public_key_digest =
@@ -9331,13 +8666,7 @@ fn bounded_noise_ciphertext_proof_input_material_binds_witness_noise_and_stateme
     ] {
         let mut aliased_statement = material.clone();
         aliased_statement.statement_hash = alias_digest;
-        assert_error_contains(
-            validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&aliased_statement),
-            expected,
-            &format!(
-                "bounded ciphertext proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&aliased_statement), expected, &format!( "bounded ciphertext proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks" ), };
     }
     let mut aliased_public_ciphertext_digest = material.clone();
     aliased_public_ciphertext_digest.public_key_digest =
@@ -9506,73 +8835,13 @@ fn admission_proof_input_material_digests_hash_self_describing_material() {
                     " must carry the same typed material"
                 )
             );
-            assert_error_contains(
-                $decode(&compressed_bytes),
-                diagnostics.static_expected_at(0),
-                diagnostics.dynamic_context_at(
-                    0,
-                    concat!(
-                        $context,
-                        " byte admission must reject compressed Norito framing"
-                    ),
-                ),
-            );
-            assert_error_contains(
-                $digest_from_bytes(&compressed_bytes),
-                diagnostics.static_expected_at(1),
-                diagnostics.dynamic_context_at(
-                    1,
-                    concat!(
-                        $context,
-                        " byte digesting must reject compressed Norito framing"
-                    ),
-                ),
-            );
-            assert_error_contains(
-                $and_digest_from_bytes(&compressed_bytes),
-                diagnostics.static_expected_at(2),
-                diagnostics.dynamic_context_at(
-                    2,
-                    concat!(
-                        $context,
-                        " byte decode-and-digest must reject compressed Norito framing"
-                    ),
-                ),
-            );
+            assert_call! { assert_error_contains; $decode(&compressed_bytes), diagnostics.static_expected_at(0), diagnostics.dynamic_context_at( 0, concat!( $context, " byte admission must reject compressed Norito framing" ), ), };
+            assert_call! { assert_error_contains; $digest_from_bytes(&compressed_bytes), diagnostics.static_expected_at(1), diagnostics.dynamic_context_at( 1, concat!( $context, " byte digesting must reject compressed Norito framing" ), ), };
+            assert_call! { assert_error_contains; $and_digest_from_bytes(&compressed_bytes), diagnostics.static_expected_at(2), diagnostics.dynamic_context_at( 2, concat!( $context, " byte decode-and-digest must reject compressed Norito framing" ), ), };
             let binary_split_placeholder_bytes = $placeholder_bytes.to_vec();
-            assert_error_contains(
-                $decode(&binary_split_placeholder_bytes),
-                diagnostics.static_expected_at(3),
-                diagnostics.dynamic_context_at(
-                    3,
-                    concat!(
-                        $context,
-                        " byte admission must reject non-Norito placeholder-looking bytes"
-                    ),
-                ),
-            );
-            assert_error_contains(
-                $digest_from_bytes(&binary_split_placeholder_bytes),
-                diagnostics.static_expected_at(4),
-                diagnostics.dynamic_context_at(
-                    4,
-                    concat!(
-                        $context,
-                        " byte digesting must reject non-Norito placeholder-looking bytes"
-                    ),
-                ),
-            );
-            assert_error_contains(
-                $and_digest_from_bytes(&binary_split_placeholder_bytes),
-                diagnostics.static_expected_at(5),
-                diagnostics.dynamic_context_at(
-                    5,
-                    concat!(
-                        $context,
-                        " byte decode-and-digest must reject non-Norito placeholder-looking bytes"
-                    ),
-                ),
-            );
+            assert_call! { assert_error_contains; $decode(&binary_split_placeholder_bytes), diagnostics.static_expected_at(3), diagnostics.dynamic_context_at( 3, concat!( $context, " byte admission must reject non-Norito placeholder-looking bytes" ), ), };
+            assert_call! { assert_error_contains; $digest_from_bytes(&binary_split_placeholder_bytes), diagnostics.static_expected_at(4), diagnostics.dynamic_context_at( 4, concat!( $context, " byte digesting must reject non-Norito placeholder-looking bytes" ), ), };
+            assert_call! { assert_error_contains; $and_digest_from_bytes(&binary_split_placeholder_bytes), diagnostics.static_expected_at(5), diagnostics.dynamic_context_at( 5, concat!( $context, " byte decode-and-digest must reject non-Norito placeholder-looking bytes" ), ), };
         }};
     }
     let exact_public_key_digest =
@@ -9861,39 +9130,9 @@ fn admission_proof_input_material_digests_hash_self_describing_material() {
     (validate_exact_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1( &params, &exact_public_key_object_bytes, &exact_ciphertext_object_bytes, exact_bound, &compressed_exact_ciphertext_material_bytes, )),
 ]);
     let compressed_exact_ciphertext_error = "BFV ciphertext bytes must use canonical v1 bytes";
-    assert_error_contains(
-        validate_exact_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
-            &params,
-            &exact_public_key_object_bytes,
-            &compressed_exact_ciphertext_object_bytes,
-            exact_bound,
-            &compressed_exact_ciphertext_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(112, compressed_exact_ciphertext_error),
-        diagnostics.static_context_at(112),
-    );
-    assert_error_contains(
-        validate_exact_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
-            &params,
-            &exact_public_key_object_bytes,
-            &compressed_exact_ciphertext_object_bytes,
-            exact_bound,
-            &compressed_exact_ciphertext_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(113, compressed_exact_ciphertext_error),
-        diagnostics.static_context_at(113),
-    );
-    assert_error_contains(
-        validate_exact_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
-            &params,
-            &exact_public_key_object_bytes,
-            &compressed_exact_ciphertext_object_bytes,
-            exact_bound,
-            &compressed_exact_ciphertext_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(114, compressed_exact_ciphertext_error),
-        diagnostics.static_context_at(114),
-    );
+    assert_call! { assert_error_contains; validate_exact_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1( &params, &exact_public_key_object_bytes, &compressed_exact_ciphertext_object_bytes, exact_bound, &compressed_exact_ciphertext_material_bytes, ), diagnostics.dynamic_expected_at(112, compressed_exact_ciphertext_error), diagnostics.static_context_at(112), };
+    assert_call! { assert_error_contains; validate_exact_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1( &params, &exact_public_key_object_bytes, &compressed_exact_ciphertext_object_bytes, exact_bound, &compressed_exact_ciphertext_material_bytes, ), diagnostics.dynamic_expected_at(113, compressed_exact_ciphertext_error), diagnostics.static_context_at(113), };
+    assert_call! { assert_error_contains; validate_exact_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1( &params, &exact_public_key_object_bytes, &compressed_exact_ciphertext_object_bytes, exact_bound, &compressed_exact_ciphertext_material_bytes, ), diagnostics.dynamic_expected_at(114, compressed_exact_ciphertext_error), diagnostics.static_context_at(114), };
     let insufficient_exact_proof_input_params = BfvParameters {
         polynomial_degree: 2,
         ciphertext_modulus: 45,
@@ -10000,31 +9239,9 @@ fn admission_proof_input_material_digests_hash_self_describing_material() {
     (validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1( &params, &bounded_public_key_object_bytes, &bounded_ciphertext_object_bytes, bounded_bound, &compressed_bounded_ciphertext_bytes, )),
 ]);
     let compressed_bounded_ciphertext_error = "BFV ciphertext bytes must use canonical v1 bytes";
-    assert_error_contains(
-        validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
-            &params,
-            &bounded_public_key_object_bytes,
-            &compressed_bounded_ciphertext_object_bytes,
-            bounded_bound,
-            &compressed_bounded_ciphertext_bytes,
-        ),
-        diagnostics.dynamic_expected_at(152, compressed_bounded_ciphertext_error),
-        diagnostics.static_context_at(152),
-    );
-    assert_error_contains(validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
-            &params,
-            &bounded_public_key_object_bytes,
-            &compressed_bounded_ciphertext_object_bytes,
-            bounded_bound,
-            &compressed_bounded_ciphertext_bytes,
-        ), diagnostics.dynamic_expected_at(153, compressed_bounded_ciphertext_error), diagnostics.static_context_at(153));
-    assert_error_contains(validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
-            &params,
-            &bounded_public_key_object_bytes,
-            &compressed_bounded_ciphertext_object_bytes,
-            bounded_bound,
-            &compressed_bounded_ciphertext_bytes,
-        ), diagnostics.dynamic_expected_at(154, compressed_bounded_ciphertext_error), diagnostics.static_context_at(154));
+    assert_call! { assert_error_contains; validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1( &params, &bounded_public_key_object_bytes, &compressed_bounded_ciphertext_object_bytes, bounded_bound, &compressed_bounded_ciphertext_bytes, ), diagnostics.dynamic_expected_at(152, compressed_bounded_ciphertext_error), diagnostics.static_context_at(152), };
+    assert_call! { assert_error_contains; validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1( &params, &bounded_public_key_object_bytes, &compressed_bounded_ciphertext_object_bytes, bounded_bound, &compressed_bounded_ciphertext_bytes, ), diagnostics.dynamic_expected_at(153, compressed_bounded_ciphertext_error), diagnostics.static_context_at(153) };
+    assert_call! { assert_error_contains; validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1( &params, &bounded_public_key_object_bytes, &compressed_bounded_ciphertext_object_bytes, bounded_bound, &compressed_bounded_ciphertext_bytes, ), diagnostics.dynamic_expected_at(154, compressed_bounded_ciphertext_error), diagnostics.static_context_at(154) };
     let insufficient_bounded_proof_input_params = BfvParameters {
         polynomial_degree: 2,
         ciphertext_modulus: 45,
@@ -10755,25 +9972,13 @@ fn full_bootstrap_circuit_material_validation_binds_registered_profile() {
             &mut zero_profile_digest,
             Hash::prehashed([0_u8; Hash::LENGTH]),
         );
-        assert_error_contains(
-            validate_circuit_material_v1(&params, &zero_profile_digest),
-            "zero hash",
-            &format!(
-                "full-bootstrap material must reject zero {label} before registered-profile mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_circuit_material_v1(&params, &zero_profile_digest), "zero hash", &format!( "full-bootstrap material must reject zero {label} before registered-profile mismatch" ), };
         let mut placeholder_profile_digest = material.clone();
         set_digest(
             &mut placeholder_profile_digest,
             Hash::new(b"replace before production"),
         );
-        assert_error_contains(
-            validate_circuit_material_v1(&params, &placeholder_profile_digest),
-            "placeholder",
-            &format!(
-                "full-bootstrap material must reject placeholder {label} before registered-profile mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_circuit_material_v1(&params, &placeholder_profile_digest), "placeholder", &format!( "full-bootstrap material must reject placeholder {label} before registered-profile mismatch" ), };
     }
     let mut rns_digest_copied_from_parameter = material.clone();
     rns_digest_copied_from_parameter.rns_modulus_chain_digest =
@@ -10869,11 +10074,7 @@ fn full_bootstrap_circuit_material_validation_binds_registered_profile() {
     ] {
         let mut separator_placeholder_material = material.clone();
         separator_placeholder_material.verifier_key_material_commitment = Hash::new(sentinel);
-        assert_error_contains(
-            validate_circuit_material_v1(&params, &separator_placeholder_material),
-            "placeholder",
-            &format!("full-bootstrap material must reject {label} digest sentinels"),
-        );
+        assert_call! { assert_error_contains; validate_circuit_material_v1(&params, &separator_placeholder_material), "placeholder", &format!("full-bootstrap material must reject {label} digest sentinels"), };
     }
     let mut aliased_prover_key_material = material.clone();
     aliased_prover_key_material.prover_key_material_commitment =
@@ -11202,14 +10403,7 @@ fn full_bootstrap_release_audit_external_digests_reject_non_production_body_sent
         ),
     ] {
         let digest = Hash::new_from_chunks(&[header, sentinel]);
-        assert_error_contains(
-            validate_release_external_artifact_digest_v1(label, &digest, header, min_body_bytes),
-            "placeholder audit artifact",
-            &format!(
-                "release audit signed digest validation must reject non-production audit body sentinel {}",
-                String::from_utf8_lossy(sentinel)
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_external_artifact_digest_v1(label, &digest, header, min_body_bytes), "placeholder audit artifact", &format!( "release audit signed digest validation must reject non-production audit body sentinel {}", String::from_utf8_lossy(sentinel) ), };
     }
     let delayed_nested_digest = Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
@@ -11536,11 +10730,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
             &mut placeholder_profile_digest_evidence,
             Hash::new(b"replace before production"),
         );
-        assert_error_contains(validate_release_evidence_v1(
-                &placeholder_profile_digest_evidence,
-            ), diagnostics.static_expected_at(56), diagnostics.dynamic_context_at(56, &format!(
-                "release audit evidence must reject placeholder {label} before registered-profile or cross-field mismatch"
-            )));
+        assert_call! { assert_error_contains; validate_release_evidence_v1( &placeholder_profile_digest_evidence, ), diagnostics.static_expected_at(56), diagnostics.dynamic_context_at(56, &format!( "release audit evidence must reject placeholder {label} before registered-profile or cross-field mismatch" )) };
     }
     let mut reused_artifact_digest_evidence = evidence.clone();
     reused_artifact_digest_evidence.slot_to_coefficient_key_digest =
@@ -11620,22 +10810,8 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
             &mut stale_profile_digest_evidence,
             Hash::new(format!("profile-drift-release-audit-{label}-v1").as_bytes()),
         );
-        assert_error_contains(
-            validate_release_evidence_v1(&stale_profile_digest_evidence),
-            diagnostics.dynamic_expected_at(66, expected_error),
-            diagnostics.dynamic_context_at(
-                66,
-                &format!("release audit evidence must reject BFV {label} drift"),
-            ),
-        );
-        assert_error_contains(
-            release_evidence_digest_v1(&stale_profile_digest_evidence),
-            diagnostics.dynamic_expected_at(67, expected_error),
-            diagnostics.dynamic_context_at(
-                67,
-                &format!("release audit evidence digesting must reject BFV {label} drift"),
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_evidence_v1(&stale_profile_digest_evidence), diagnostics.dynamic_expected_at(66, expected_error), diagnostics.dynamic_context_at( 66, &format!("release audit evidence must reject BFV {label} drift"), ), };
+        assert_call! { assert_error_contains; release_evidence_digest_v1(&stale_profile_digest_evidence), diagnostics.dynamic_expected_at(67, expected_error), diagnostics.dynamic_context_at( 67, &format!("release audit evidence digesting must reject BFV {label} drift"), ), };
     }
     let mut stale_schema_artifact_digest_evidence = evidence.clone();
     stale_schema_artifact_digest_evidence.proof_public_input_schema_digest =
@@ -12123,38 +11299,15 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         let context = format!(
             "release audit trusted reviewer inputs must reject placeholder reviewer id `{placeholder_reviewer_id}`"
         );
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
-                placeholder_reviewer_id,
-                reviewer_key_pair.public_key(),
-            ),
-            diagnostics.static_expected_at(143),
-            diagnostics.dynamic_context_at(143, &context),
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1( placeholder_reviewer_id, reviewer_key_pair.public_key(), ), diagnostics.static_expected_at(143), diagnostics.dynamic_context_at(143, &context), };
         let context = format!(
             "public trusted reviewer id preflight must reject placeholder reviewer id `{placeholder_reviewer_id}`"
         );
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(
-                placeholder_reviewer_id,
-            ),
-            diagnostics.static_expected_at(144),
-            diagnostics.dynamic_context_at(144, &context),
-        );
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1( placeholder_reviewer_id, ), diagnostics.static_expected_at(144), diagnostics.dynamic_context_at(144, &context), };
         let context = format!(
             "release audit signoff construction must reject placeholder reviewer id `{placeholder_reviewer_id}` before signing"
         );
-        assert_error_contains(
-            sign_bfv_full_bootstrap_release_audit_signoff_v1(
-                &evidence,
-                audit_report_digest,
-                audit_evidence_archive_digest,
-                placeholder_reviewer_id,
-                reviewer_key_pair.private_key(),
-            ),
-            diagnostics.static_expected_at(145),
-            diagnostics.dynamic_context_at(145, &context),
-        );
+        assert_call! { assert_error_contains; sign_bfv_full_bootstrap_release_audit_signoff_v1( &evidence, audit_report_digest, audit_evidence_archive_digest, placeholder_reviewer_id, reviewer_key_pair.private_key(), ), diagnostics.static_expected_at(145), diagnostics.dynamic_context_at(145, &context), };
     }
     let mut stale_signoff_fingerprint = signoff.clone();
     stale_signoff_fingerprint.payload.native_circuit_fingerprint =
@@ -12209,11 +11362,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
             set_digest(&mut placeholder_signoff, Hash::new(placeholder_preimage));
             let context =
                 format!("release audit signoffs must reject placeholder {label} commitments");
-            assert_error_contains(
-                validate_release_signoff_v1(&placeholder_signoff),
-                diagnostics.static_expected_at(149),
-                diagnostics.dynamic_context_at(149, &context),
-            );
+            assert_call! { assert_error_contains; validate_release_signoff_v1(&placeholder_signoff), diagnostics.static_expected_at(149), diagnostics.dynamic_context_at(149, &context), };
         }
         let mut delayed_placeholder_signoff = signoff.clone();
         set_digest(
@@ -12222,11 +11371,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         );
         let context =
             format!("release audit signoffs must reject delayed placeholder {label} commitments");
-        assert_error_contains(
-            validate_release_signoff_v1(&delayed_placeholder_signoff),
-            diagnostics.static_expected_at(150),
-            diagnostics.dynamic_context_at(150, &context),
-        );
+        assert_call! { assert_error_contains; validate_release_signoff_v1(&delayed_placeholder_signoff), diagnostics.static_expected_at(150), diagnostics.dynamic_context_at(150, &context), };
     }
     let evidence_bytes = norito::to_bytes(&evidence).expect("encode audit evidence");
     let signoff_bytes = norito::to_bytes(&signoff).expect("encode audit signoff");
@@ -16296,19 +15441,11 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         malformed_manifest.reviewer_public_key = reviewer_public_key;
         let context =
             format!("release audit manifests must reject {label} reviewer public-key payloads");
-        assert_error_contains(
-            validate_release_manifest_v1(&malformed_manifest),
-            diagnostics.dynamic_expected_at(433, expected_message),
-            diagnostics.dynamic_context_at(433, &context),
-        );
+        assert_call! { assert_error_contains; validate_release_manifest_v1(&malformed_manifest), diagnostics.dynamic_expected_at(433, expected_message), diagnostics.dynamic_context_at(433, &context), };
         let context = format!(
             "release audit manifest digesting must reject {label} reviewer public-key payloads"
         );
-        assert_error_contains(
-            release_manifest_digest_v1(&malformed_manifest),
-            diagnostics.dynamic_expected_at(434, expected_message),
-            diagnostics.dynamic_context_at(434, &context),
-        );
+        assert_call! { assert_error_contains; release_manifest_digest_v1(&malformed_manifest), diagnostics.dynamic_expected_at(434, expected_message), diagnostics.dynamic_context_at(434, &context), };
     }
     let mut placeholder_manifest_commitment = manifest.clone();
     placeholder_manifest_commitment.prover_key_digest =
@@ -16355,19 +15492,11 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
             set_digest(&mut placeholder_manifest, Hash::new(placeholder_preimage));
             let context =
                 format!("release audit manifests must reject placeholder {label} commitments");
-            assert_error_contains(
-                validate_release_manifest_v1(&placeholder_manifest),
-                diagnostics.static_expected_at(436),
-                diagnostics.dynamic_context_at(436, &context),
-            );
+            assert_call! { assert_error_contains; validate_release_manifest_v1(&placeholder_manifest), diagnostics.static_expected_at(436), diagnostics.dynamic_context_at(436, &context), };
             let context = format!(
                 "release audit manifest digesting must reject placeholder {label} commitments"
             );
-            assert_error_contains(
-                release_manifest_digest_v1(&placeholder_manifest),
-                diagnostics.static_expected_at(437),
-                diagnostics.dynamic_context_at(437, &context),
-            );
+            assert_call! { assert_error_contains; release_manifest_digest_v1(&placeholder_manifest), diagnostics.static_expected_at(437), diagnostics.dynamic_context_at(437, &context), };
         }
         let mut delayed_placeholder_manifest = manifest.clone();
         set_digest(
@@ -16376,19 +15505,11 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         );
         let context =
             format!("release audit manifests must reject delayed placeholder {label} commitments");
-        assert_error_contains(
-            validate_release_manifest_v1(&delayed_placeholder_manifest),
-            diagnostics.static_expected_at(438),
-            diagnostics.dynamic_context_at(438, &context),
-        );
+        assert_call! { assert_error_contains; validate_release_manifest_v1(&delayed_placeholder_manifest), diagnostics.static_expected_at(438), diagnostics.dynamic_context_at(438, &context), };
         let context = format!(
             "release audit manifest digesting must reject delayed placeholder {label} commitments"
         );
-        assert_error_contains(
-            release_manifest_digest_v1(&delayed_placeholder_manifest),
-            diagnostics.static_expected_at(439),
-            diagnostics.dynamic_context_at(439, &context),
-        );
+        assert_call! { assert_error_contains; release_manifest_digest_v1(&delayed_placeholder_manifest), diagnostics.static_expected_at(439), diagnostics.dynamic_context_at(439, &context), };
     }
     let manifest_digest =
         release_manifest_digest_v1(&manifest).expect("release audit manifest digest");
@@ -16902,19 +16023,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         ),
     ];
     for (digest, expected) in signed_commitment_package_digest_aliases {
-        assert_error_contains(
-            validate_release_package_for_artifacts_trusted_reviewer_and_digest_v1(
-                &params,
-                &material,
-                &artifacts,
-                &package,
-                *digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.public_key(),
-            ),
-            diagnostics.dynamic_expected_at(518, expected),
-            diagnostics.static_context_at(518),
-        );
+        assert_call! { assert_error_contains; validate_release_package_for_artifacts_trusted_reviewer_and_digest_v1( &params, &material, &artifacts, &package, *digest, "sora-zk-audit-wg-2026", reviewer_key_pair.public_key(), ), diagnostics.dynamic_expected_at(518, expected), diagnostics.static_context_at(518), };
     }
     let mut stale_package_with_signed_commitment_alias = package.clone();
     stale_package_with_signed_commitment_alias.manifest_digest =
@@ -17276,37 +16385,21 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         let expected = format!("audit report digest must be distinct from {label}");
         let context =
             format!("release audit manifests must reject report digest aliasing with {label}");
-        assert_error_contains(
-            validate_release_manifest_v1(&aliased_report_digest),
-            diagnostics.dynamic_expected_at(574, &expected),
-            diagnostics.dynamic_context_at(574, &context),
-        );
+        assert_call! { assert_error_contains; validate_release_manifest_v1(&aliased_report_digest), diagnostics.dynamic_expected_at(574, &expected), diagnostics.dynamic_context_at(574, &context), };
         let context = format!(
             "release audit manifest digesting must reject report digest aliasing with {label}"
         );
-        assert_error_contains(
-            release_manifest_digest_v1(&aliased_report_digest),
-            diagnostics.dynamic_expected_at(575, &expected),
-            diagnostics.dynamic_context_at(575, &context),
-        );
+        assert_call! { assert_error_contains; release_manifest_digest_v1(&aliased_report_digest), diagnostics.dynamic_expected_at(575, &expected), diagnostics.dynamic_context_at(575, &context), };
         let mut aliased_archive_digest = manifest.clone();
         aliased_archive_digest.audit_evidence_archive_digest = *alias_digest;
         let expected = format!("evidence archive digest must be distinct from {label}");
         let context =
             format!("release audit manifests must reject archive digest aliasing with {label}");
-        assert_error_contains(
-            validate_release_manifest_v1(&aliased_archive_digest),
-            diagnostics.dynamic_expected_at(576, &expected),
-            diagnostics.dynamic_context_at(576, &context),
-        );
+        assert_call! { assert_error_contains; validate_release_manifest_v1(&aliased_archive_digest), diagnostics.dynamic_expected_at(576, &expected), diagnostics.dynamic_context_at(576, &context), };
         let context = format!(
             "release audit manifest digesting must reject archive digest aliasing with {label}"
         );
-        assert_error_contains(
-            release_manifest_digest_v1(&aliased_archive_digest),
-            diagnostics.dynamic_expected_at(577, &expected),
-            diagnostics.dynamic_context_at(577, &context),
-        );
+        assert_call! { assert_error_contains; release_manifest_digest_v1(&aliased_archive_digest), diagnostics.dynamic_expected_at(577, &expected), diagnostics.dynamic_context_at(577, &context), };
     }
     let mut stale_manifest_reviewer_id_package = package.clone();
     stale_manifest_reviewer_id_package.manifest.reviewer_id =
@@ -17433,21 +16526,13 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         let expected = format!("audit report digest must be distinct from {label}");
         let context =
             format!("release audit signoffs must reject report digest aliasing with {label}");
-        assert_error_contains(
-            validate_release_signoff_v1(&aliased_report_digest),
-            diagnostics.dynamic_expected_at(589, &expected),
-            diagnostics.dynamic_context_at(589, &context),
-        );
+        assert_call! { assert_error_contains; validate_release_signoff_v1(&aliased_report_digest), diagnostics.dynamic_expected_at(589, &expected), diagnostics.dynamic_context_at(589, &context), };
         let mut aliased_archive_digest = signoff.clone();
         aliased_archive_digest.payload.audit_evidence_archive_digest = *alias_digest;
         let expected = format!("evidence archive digest must be distinct from {label}");
         let context =
             format!("release audit signoffs must reject archive digest aliasing with {label}");
-        assert_error_contains(
-            validate_release_signoff_v1(&aliased_archive_digest),
-            diagnostics.dynamic_expected_at(590, &expected),
-            diagnostics.dynamic_context_at(590, &context),
-        );
+        assert_call! { assert_error_contains; validate_release_signoff_v1(&aliased_archive_digest), diagnostics.dynamic_expected_at(590, &expected), diagnostics.dynamic_context_at(590, &context), };
     }
     let record_external_digest_aliases = [
         ("release evidence digest", &digest),
@@ -17494,19 +16579,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         };
         let context =
             format!("release audit records must reject report digest aliasing with {label}");
-        assert_error_contains(
-            release_record_v1(
-                &params,
-                &material,
-                &artifacts,
-                *alias_digest,
-                audit_evidence_archive_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.private_key(),
-            ),
-            diagnostics.dynamic_expected_at(591, &expected),
-            diagnostics.dynamic_context_at(591, &context),
-        );
+        assert_call! { assert_error_contains; release_record_v1( &params, &material, &artifacts, *alias_digest, audit_evidence_archive_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.private_key(), ), diagnostics.dynamic_expected_at(591, &expected), diagnostics.dynamic_context_at(591, &context), };
         let expected = if label == "release evidence digest" {
             "evidence archive digest must be distinct from release evidence digest".to_owned()
         } else {
@@ -17514,19 +16587,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         };
         let context =
             format!("release audit records must reject archive digest aliasing with {label}");
-        assert_error_contains(
-            release_record_v1(
-                &params,
-                &material,
-                &artifacts,
-                audit_report_digest,
-                *alias_digest,
-                "sora-zk-audit-wg-2026",
-                reviewer_key_pair.private_key(),
-            ),
-            diagnostics.dynamic_expected_at(592, &expected),
-            diagnostics.dynamic_context_at(592, &context),
-        );
+        assert_call! { assert_error_contains; release_record_v1( &params, &material, &artifacts, audit_report_digest, *alias_digest, "sora-zk-audit-wg-2026", reviewer_key_pair.private_key(), ), diagnostics.dynamic_expected_at(592, &expected), diagnostics.dynamic_context_at(592, &context), };
     }
     assert_error_matrix!(
         diagnostics,
@@ -18830,38 +17891,10 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
             &mut stale_profile_material,
             Hash::new(format!("profile-drift-release-audit-material-{label}-v1").as_bytes()),
         );
-        assert_error_contains(
-            release_evidence_v1(&params, &stale_profile_material, &artifacts),
-            diagnostics.static_expected_at(744),
-            diagnostics.dynamic_context_at(
-                744,
-                &format!("release audit evidence must reject governed material {label} drift"),
-            ),
-        );
-        assert_error_contains(validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1(
-                &params,
-                &stale_profile_material,
-                &artifacts,
-                &signoff,
-            ), diagnostics.static_expected_at(745), diagnostics.dynamic_context_at(745, &format!(
-                "release audit signoff artifact validation must reject governed material {label} drift"
-            )));
-        assert_error_contains(validate_bfv_full_bootstrap_release_audit_record_for_artifacts_v1(
-                &params,
-                &stale_profile_material,
-                &artifacts,
-                &record,
-            ), diagnostics.static_expected_at(746), diagnostics.dynamic_context_at(746, &format!(
-                "release audit record artifact validation must reject governed material {label} drift"
-            )));
-        assert_error_contains(validate_release_package_for_artifacts_v1(
-                &params,
-                &stale_profile_material,
-                &artifacts,
-                &package,
-            ), diagnostics.static_expected_at(747), diagnostics.dynamic_context_at(747, &format!(
-                "release audit package artifact validation must reject governed material {label} drift"
-            )));
+        assert_call! { assert_error_contains; release_evidence_v1(&params, &stale_profile_material, &artifacts), diagnostics.static_expected_at(744), diagnostics.dynamic_context_at( 744, &format!("release audit evidence must reject governed material {label} drift"), ), };
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1( &params, &stale_profile_material, &artifacts, &signoff, ), diagnostics.static_expected_at(745), diagnostics.dynamic_context_at(745, &format!( "release audit signoff artifact validation must reject governed material {label} drift" )) };
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_audit_record_for_artifacts_v1( &params, &stale_profile_material, &artifacts, &record, ), diagnostics.static_expected_at(746), diagnostics.dynamic_context_at(746, &format!( "release audit record artifact validation must reject governed material {label} drift" )) };
+        assert_call! { assert_error_contains; validate_release_package_for_artifacts_v1( &params, &stale_profile_material, &artifacts, &package, ), diagnostics.static_expected_at(747), diagnostics.dynamic_context_at(747, &format!( "release audit package artifact validation must reject governed material {label} drift" )) };
     }
     let mut stale_artifacts = artifacts.clone();
     stale_artifacts.accumulator = b"stale-release-audit-accumulator-artifact".to_vec();
@@ -18957,11 +17990,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
                 "release audit evidence validation must reject proof profile {} downgrades",
                 $label
             );
-            assert_error_contains(
-                validate_release_evidence_v1(&downgraded_replay_policy_evidence),
-                diagnostics.static_expected_at(763),
-                diagnostics.dynamic_context_at(763, &context),
-            );
+            assert_call! { assert_error_contains; validate_release_evidence_v1(&downgraded_replay_policy_evidence), diagnostics.static_expected_at(763), diagnostics.dynamic_context_at(763, &context), };
         }};
     }
     expect_replay_policy_profile_downgrade_rejected!(
@@ -18984,11 +18013,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
                 "release audit evidence validation must reject proof profile {} downgrades",
                 $label
             );
-            assert_error_contains(
-                validate_release_evidence_v1(&downgraded_opening_policy_evidence),
-                diagnostics.static_expected_at(764),
-                diagnostics.dynamic_context_at(764, &context),
-            );
+            assert_call! { assert_error_contains; validate_release_evidence_v1(&downgraded_opening_policy_evidence), diagnostics.static_expected_at(764), diagnostics.dynamic_context_at(764, &context), };
         }};
     }
     expect_opening_policy_profile_downgrade_rejected!(
@@ -19027,11 +18052,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
                 "release audit evidence validation must reject proof profile {} downgrades",
                 $label
             );
-            assert_error_contains(
-                validate_release_evidence_v1(&downgraded_native_profile_evidence),
-                diagnostics.static_expected_at(765),
-                diagnostics.dynamic_context_at(765, &context),
-            );
+            assert_call! { assert_error_contains; validate_release_evidence_v1(&downgraded_native_profile_evidence), diagnostics.static_expected_at(765), diagnostics.dynamic_context_at(765, &context), };
         }};
     }
     expect_native_envelope_policy_profile_downgrade_rejected!(
@@ -19062,11 +18083,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
                 "release audit evidence validation must reject proof profile {} downgrades",
                 $label
             );
-            assert_error_contains(
-                validate_release_evidence_v1(&downgraded_air_profile_evidence),
-                diagnostics.static_expected_at(766),
-                diagnostics.dynamic_context_at(766, &context),
-            );
+            assert_call! { assert_error_contains; validate_release_evidence_v1(&downgraded_air_profile_evidence), diagnostics.static_expected_at(766), diagnostics.dynamic_context_at(766, &context), };
         }};
     }
     expect_air_evaluation_policy_profile_downgrade_rejected!(
@@ -19172,11 +18189,7 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         short_zero_payload_digest_evidence
             .prover_key
             .native_payload_digest = sha256(vec![0_u8; len]);
-        assert_error_contains(validate_release_evidence_v1(
-                &short_zero_payload_digest_evidence,
-            ), diagnostics.static_expected_at(783), diagnostics.dynamic_context_at(783, &format!(
-                "release audit evidence validation must reject {len}-byte all-zero native-payload digest sentinels"
-            )));
+        assert_call! { assert_error_contains; validate_release_evidence_v1( &short_zero_payload_digest_evidence, ), diagnostics.static_expected_at(783), diagnostics.dynamic_context_at(783, &format!( "release audit evidence validation must reject {len}-byte all-zero native-payload digest sentinels" )) };
     }
     let mut placeholder_payload_digest_evidence = evidence.clone();
     placeholder_payload_digest_evidence
@@ -19368,13 +18381,7 @@ fn full_bootstrap_release_audit_string_metadata_rejects_placeholders() {
             evidence
         }),
     ] {
-        assert_error_contains(
-            validate_release_evidence_v1(&placeholder_evidence),
-            "placeholder text",
-            &format!(
-                "release audit evidence must reject placeholder {field} before mismatch checks"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_release_evidence_v1(&placeholder_evidence), "placeholder text", &format!( "release audit evidence must reject placeholder {field} before mismatch checks" ), };
     }
     for (field, wrong_evidence) in [
         ("proof profile backend", {
@@ -19404,11 +18411,7 @@ fn full_bootstrap_release_audit_string_metadata_rejects_placeholders() {
             evidence
         }),
     ] {
-        assert_error_contains(
-            validate_release_evidence_v1(&wrong_evidence),
-            "canonical",
-            &format!("release audit evidence must reject wrong {field} before mismatch checks"),
-        );
+        assert_call! { assert_error_contains; validate_release_evidence_v1(&wrong_evidence), "canonical", &format!("release audit evidence must reject wrong {field} before mismatch checks"), };
     }
     let reviewer_key_pair =
         crate::KeyPair::try_from_seed(vec![0xA7; 32], crate::Algorithm::Ed25519)
@@ -19717,20 +18720,8 @@ fn full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_prefl
         placeholder_profile_artifacts.coefficient_to_slot_key =
             norito::to_bytes(&placeholder_profile_artifact)
                 .expect("encode placeholder profile artifact envelope");
-        assert_error_contains(
-            validate_circuit_artifact_bundle_v1(&params, &material, &placeholder_profile_artifacts),
-            "placeholder",
-            &format!(
-                "artifact bundles must reject placeholder envelope {label} before governed or registered-profile mismatch"
-            ),
-        );
-        assert_error_contains(
-            circuit_material_from_artifacts_v1(&params, 1, &placeholder_profile_artifacts),
-            "placeholder",
-            &format!(
-                "artifact-derived material must reject placeholder envelope {label} before hashing"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_circuit_artifact_bundle_v1(&params, &material, &placeholder_profile_artifacts), "placeholder", &format!( "artifact bundles must reject placeholder envelope {label} before governed or registered-profile mismatch" ), };
+        assert_call! { assert_error_contains; circuit_material_from_artifacts_v1(&params, 1, &placeholder_profile_artifacts), "placeholder", &format!( "artifact-derived material must reject placeholder envelope {label} before hashing" ), };
     }
     assert_diag! { 553 => encode_bfv_full_bootstrap_circuit_artifact_payload_v1( &params, 1, BfvFullBootstrapCircuitArtifactRoleV1::Accumulator, &[0_u8; 16], ) };
     assert_diag! { 554 => full_evaluator_artifact_set_digest_v1( &params, 1, &[0_u8; 16], &artifacts.slot_to_coefficient_key, &artifacts.blind_rotation_key, &artifacts.sample_extraction_key, &artifacts.accumulator, &artifacts.proof_public_input_schema, &artifacts.arithmetic_air_constraint_system, ) };
@@ -19923,10 +18914,7 @@ fn full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_prefl
                 )
                 .expect("encode drifted coefficient-to-slot artifact");
         };
-    assert_valid_artifact_drift_changes_digest(
-        "coefficient-to-slot",
-        &mut drift_coefficient_to_slot,
-    );
+    assert_call! { assert_valid_artifact_drift_changes_digest; "coefficient-to-slot", &mut drift_coefficient_to_slot, };
     let mut drift_slot_to_coefficient =
         |drifted_artifacts: &mut BfvFullBootstrapCircuitArtifactBundleV1| {
             let mut transform = sample_identity_full_bootstrap_linear_transform(&params);
@@ -19942,10 +18930,7 @@ fn full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_prefl
                 )
                 .expect("encode drifted slot-to-coefficient artifact");
         };
-    assert_valid_artifact_drift_changes_digest(
-        "slot-to-coefficient",
-        &mut drift_slot_to_coefficient,
-    );
+    assert_call! { assert_valid_artifact_drift_changes_digest; "slot-to-coefficient", &mut drift_slot_to_coefficient, };
     let mut drift_blind_rotation =
         |drifted_artifacts: &mut BfvFullBootstrapCircuitArtifactBundleV1| {
             let blind_rotation = full_blind_rotation_key_for_packed_left_rotation_v1(
@@ -20339,67 +19324,10 @@ fn full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound() {
         ..sample_full_bootstrap_circuit_material(&params)
     };
     assert_diag! { 595 => decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1( &params, &binary_split_schema_material, &binary_split_schema_artifact, ) };
-    let prover_key = BfvFullBootstrapProofKeyV1 {
-        key_role: BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-        backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
-        key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
-        circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-        parameter_digest: registered_bfv_parameter_digest(&params)
-            .expect("registered parameter digest"),
-        rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(&params)
-            .expect("registered RNS digest"),
-        key_switch_decomposition_chain_digest:
-            registered_bfv_key_switch_decomposition_chain_digest(&params)
-                .expect("registered decomposition digest"),
-        centered_scale_round_source_chain_digest:
-            registered_bfv_centered_scale_round_source_chain_digest(&params)
-                .expect("registered centered scale-round source digest"),
-        max_bootstrap_depth: 1,
-        public_input_schema_digest: schema_digest,
-        evaluator_artifact_set_digest,
-        proof_key_pair_commitment,
-        statement_material_version:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
-        statement_material_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
-        claim_version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1,
-        claim_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1,
-        witness_digest_domain: BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN.to_vec(),
-        witness_digest_material_version:
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1,
-        witness_digest_material_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1,
-        witness_trace_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1,
-        witness_trace_bounds_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1,
-        public_input_hash_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1,
-        public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
-        supports_exact_residual_multiple: true,
-        supports_bounded_noise: true,
-        derives_opening_schedule_from_statement_hash: true,
-        derives_opening_schedule_from_trace_material_digest: true,
-        bounds_opening_schedule_rejection_sampling: true,
-        validates_transcript_public_padding_openings: true,
-        validates_transcript_public_opening_material: true,
-        requires_verifier_owned_trace_material_digest: true,
-        validates_merkle_path_shape: true,
-        validates_merkle_path_roots: true,
-        validates_fri_query_chain: true,
-        binds_first_fri_values_to_opened_air_values: true,
-        binds_fri_queries_to_air_commitment_roots: true,
-        requires_canonical_base_transcript_label: true,
-        rejects_suffixed_transcript_label_aliases: true,
-        validates_artifact_bound_prover_input: true,
-        rejects_stale_galois_key_set_replay: true,
-        rejects_stale_proof_key_artifacts: true,
-        key_material_commitment: Hash::new(b"placeholder full-bootstrap prover-key commitment"),
-        key_material: sample_full_bootstrap_proof_key_material_envelope(
-            &params,
-            schema_digest,
-            evaluator_artifact_set_digest,
-            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-        ),
-    };
+    let prover_key = sample_full_bootstrap_prover_key_with_material_commitment(
+        &canonical_prover_key,
+        Hash::new(b"placeholder full-bootstrap prover-key commitment"),
+    );
     let prover_key = BfvFullBootstrapProofKeyV1 {
         key_material_commitment: proof_key_material_commitment_v1(&prover_key)
             .expect("prover-key commitment"),
@@ -20761,15 +19689,7 @@ fn full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound() {
             },
         ),
     ] {
-        assert_error_contains(
-            validate_proof_key_v1(
-                &material,
-                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                &placeholder_key,
-            ),
-            "placeholder text",
-            &format!("proof-key {field} must reject placeholder labels before canonical mismatch"),
-        );
+        assert_call! { assert_error_contains; validate_proof_key_v1( &material, BfvFullBootstrapCircuitArtifactRoleV1::ProverKey, &placeholder_key, ), "placeholder text", &format!("proof-key {field} must reject placeholder labels before canonical mismatch"), };
     }
     for (field, placeholder_key) in [
         (
@@ -20794,17 +19714,7 @@ fn full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound() {
             },
         ),
     ] {
-        assert_error_contains(
-            validate_proof_key_v1(
-                &material,
-                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                &placeholder_key,
-            ),
-            "placeholder text",
-            &format!(
-                "proof-key {field} must reject binary-decorated placeholder labels before canonical mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_proof_key_v1( &material, BfvFullBootstrapCircuitArtifactRoleV1::ProverKey, &placeholder_key, ), "placeholder text", &format!( "proof-key {field} must reject binary-decorated placeholder labels before canonical mismatch" ), };
     }
     let binary_decorated_witness_domain_key = BfvFullBootstrapProofKeyV1 {
         witness_digest_domain: [
@@ -21114,70 +20024,10 @@ fn full_bootstrap_proof_key_artifact_commitment_helper_rejects_adversarial_envel
         sample_full_bootstrap_evaluator_artifact_set_digest(&params);
     let (canonical_prover_key, _) =
         sample_full_bootstrap_proof_key_pair(&params, schema_digest, evaluator_artifact_set_digest);
-    let proof_key_pair_commitment = canonical_prover_key.proof_key_pair_commitment;
-    let prover_key = BfvFullBootstrapProofKeyV1 {
-        key_role: BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-        backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
-        key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
-        circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-        parameter_digest: registered_bfv_parameter_digest(&params)
-            .expect("registered parameter digest"),
-        rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(&params)
-            .expect("registered RNS digest"),
-        key_switch_decomposition_chain_digest:
-            registered_bfv_key_switch_decomposition_chain_digest(&params)
-                .expect("registered decomposition digest"),
-        centered_scale_round_source_chain_digest:
-            registered_bfv_centered_scale_round_source_chain_digest(&params)
-                .expect("registered centered scale-round source digest"),
-        max_bootstrap_depth: 1,
-        public_input_schema_digest: schema_digest,
-        evaluator_artifact_set_digest,
-        proof_key_pair_commitment,
-        statement_material_version:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
-        statement_material_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
-        claim_version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1,
-        claim_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1,
-        witness_digest_domain: BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN.to_vec(),
-        witness_digest_material_version:
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1,
-        witness_digest_material_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1,
-        witness_trace_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1,
-        witness_trace_bounds_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1,
-        public_input_hash_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1,
-        public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
-        supports_exact_residual_multiple: true,
-        supports_bounded_noise: true,
-        derives_opening_schedule_from_statement_hash: true,
-        derives_opening_schedule_from_trace_material_digest: true,
-        bounds_opening_schedule_rejection_sampling: true,
-        validates_transcript_public_padding_openings: true,
-        validates_transcript_public_opening_material: true,
-        requires_verifier_owned_trace_material_digest: true,
-        validates_merkle_path_shape: true,
-        validates_merkle_path_roots: true,
-        validates_fri_query_chain: true,
-        binds_first_fri_values_to_opened_air_values: true,
-        binds_fri_queries_to_air_commitment_roots: true,
-        requires_canonical_base_transcript_label: true,
-        rejects_suffixed_transcript_label_aliases: true,
-        validates_artifact_bound_prover_input: true,
-        rejects_stale_galois_key_set_replay: true,
-        rejects_stale_proof_key_artifacts: true,
-        key_material_commitment: Hash::new(
-            b"placeholder full-bootstrap artifact-helper proof-key commitment",
-        ),
-        key_material: sample_full_bootstrap_proof_key_material_envelope(
-            &params,
-            schema_digest,
-            evaluator_artifact_set_digest,
-            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-        ),
-    };
+    let prover_key = sample_full_bootstrap_prover_key_with_material_commitment(
+        &canonical_prover_key,
+        Hash::new(b"placeholder full-bootstrap artifact-helper proof-key commitment"),
+    );
     let prover_key = BfvFullBootstrapProofKeyV1 {
         key_material_commitment: proof_key_material_commitment_v1(&prover_key)
             .expect("prover-key commitment"),
@@ -21279,18 +20129,7 @@ fn full_bootstrap_proof_key_artifact_commitment_helper_rejects_adversarial_envel
         );
         let placeholder_profile_artifact = norito::to_bytes(&placeholder_profile_artifact)
             .expect("encode placeholder-profile prover-key artifact envelope");
-        assert_error_contains(
-            proof_key_material_commitment_from_artifact_v1(
-                &params,
-                1,
-                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                &placeholder_profile_artifact,
-            ),
-            "placeholder",
-            &format!(
-                "artifact-derived proof-key commitments must reject placeholder artifact envelope {label} before registered-profile mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; proof_key_material_commitment_from_artifact_v1( &params, 1, BfvFullBootstrapCircuitArtifactRoleV1::ProverKey, &placeholder_profile_artifact, ), "placeholder", &format!( "artifact-derived proof-key commitments must reject placeholder artifact envelope {label} before registered-profile mismatch" ), };
     }
     assert_diag! { 679 => proof_key_material_commitment_from_artifact_v1( &params, 1, BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey, &prover_artifact, ) };
     assert_diag! { 680 => proof_key_material_commitment_from_artifact_v1( &params, 0, BfvFullBootstrapCircuitArtifactRoleV1::ProverKey, &prover_artifact, ) };
@@ -21447,18 +20286,8 @@ fn full_bootstrap_arithmetic_air_contract_material_is_typed_and_adversarially_bo
         ($field:ident: $value:expr, $expected:literal, $context:literal) => {{
             let mut drifted = material.clone();
             drifted.$field = $value;
-            assert_error_contains(
-                validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&drifted),
-                $expected,
-                $context,
-            );
-            assert_error_contains(
-                bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(
-                    &drifted,
-                ),
-                $expected,
-                $context,
-            );
+            assert_call! { assert_error_contains; validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&drifted), $expected, $context, };
+            assert_call! { assert_error_contains; bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1( &drifted, ), $expected, $context, };
         }};
     }
     expect_air_material_rejection!(
@@ -21708,11 +20537,7 @@ fn full_bootstrap_release_prover_contract_material_binds_public_opening_obligati
         ($field:ident: $value:expr, $expected:literal, $context:literal) => {{
             let mut drifted = material.clone();
             drifted.$field = $value;
-            assert_error_contains(
-                validate_bfv_full_bootstrap_release_prover_contract_material_v1(&drifted),
-                $expected,
-                $context,
-            );
+            assert_call! { assert_error_contains; validate_bfv_full_bootstrap_release_prover_contract_material_v1(&drifted), $expected, $context, };
         }};
     }
     expect_release_contract_rejection!(
@@ -22403,11 +21228,7 @@ fn full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift() {
         ($field:ident, $expected:literal, $context:literal) => {{
             let mut drifted = schema.clone();
             drifted.$field = false;
-            assert_error_contains(
-                validate_proof_public_input_schema_v1(&drifted),
-                $expected,
-                $context,
-            );
+            assert_call! { assert_error_contains; validate_proof_public_input_schema_v1(&drifted), $expected, $context, };
         }};
     }
     let release_prover_digest_domains = [
@@ -22950,74 +21771,14 @@ fn full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift() {
         sample_full_bootstrap_evaluator_artifact_set_digest(&params);
     let (canonical_prover_key, canonical_verifier_key) =
         sample_full_bootstrap_proof_key_pair(&params, schema_digest, evaluator_artifact_set_digest);
-    let proof_key_pair_commitment = canonical_prover_key.proof_key_pair_commitment;
     let material = BfvFullBootstrapCircuitMaterialV1 {
         proof_public_input_schema_digest: schema_digest,
         ..sample_full_bootstrap_circuit_material(&params)
     };
-    let prover_key = BfvFullBootstrapProofKeyV1 {
-        key_role: BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-        backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
-        key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
-        circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-        parameter_digest: registered_bfv_parameter_digest(&params)
-            .expect("registered parameter digest"),
-        rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(&params)
-            .expect("registered RNS digest"),
-        key_switch_decomposition_chain_digest:
-            registered_bfv_key_switch_decomposition_chain_digest(&params)
-                .expect("registered decomposition digest"),
-        centered_scale_round_source_chain_digest:
-            registered_bfv_centered_scale_round_source_chain_digest(&params)
-                .expect("registered centered scale-round source digest"),
-        max_bootstrap_depth: 1,
-        public_input_schema_digest: schema_digest,
-        evaluator_artifact_set_digest,
-        proof_key_pair_commitment,
-        statement_material_version:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
-        statement_material_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
-        claim_version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1,
-        claim_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1,
-        witness_digest_domain: BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN.to_vec(),
-        witness_digest_material_version:
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1,
-        witness_digest_material_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1,
-        witness_trace_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1,
-        witness_trace_bounds_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1,
-        public_input_hash_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1,
-        public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
-        supports_exact_residual_multiple: true,
-        supports_bounded_noise: true,
-        derives_opening_schedule_from_statement_hash: true,
-        derives_opening_schedule_from_trace_material_digest: true,
-        bounds_opening_schedule_rejection_sampling: true,
-        validates_transcript_public_padding_openings: true,
-        validates_transcript_public_opening_material: true,
-        requires_verifier_owned_trace_material_digest: true,
-        validates_merkle_path_shape: true,
-        validates_merkle_path_roots: true,
-        validates_fri_query_chain: true,
-        binds_first_fri_values_to_opened_air_values: true,
-        binds_fri_queries_to_air_commitment_roots: true,
-        requires_canonical_base_transcript_label: true,
-        rejects_suffixed_transcript_label_aliases: true,
-        validates_artifact_bound_prover_input: true,
-        rejects_stale_galois_key_set_replay: true,
-        rejects_stale_proof_key_artifacts: true,
-        key_material_commitment: Hash::new(
-            b"placeholder full-bootstrap adversarial proof-key commitment",
-        ),
-        key_material: sample_full_bootstrap_proof_key_material_envelope(
-            &params,
-            schema_digest,
-            evaluator_artifact_set_digest,
-            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-        ),
-    };
+    let prover_key = sample_full_bootstrap_prover_key_with_material_commitment(
+        &canonical_prover_key,
+        Hash::new(b"placeholder full-bootstrap adversarial proof-key commitment"),
+    );
     let prover_key = BfvFullBootstrapProofKeyV1 {
         key_material_commitment: proof_key_material_commitment_v1(&prover_key)
             .expect("prover commitment"),
@@ -23210,13 +21971,7 @@ fn full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift() {
                 .expect("encode wrong-label proof-key envelope"),
             ..prover_key.clone()
         };
-        assert_error_contains(
-            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&envelope_key),
-            "canonical",
-            &format!(
-                "proof-key material envelope validation must reject wrong {field} labels before key metadata mismatch"
-            ),
-        );
+        assert_call! { assert_error_contains; decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&envelope_key), "canonical", &format!( "proof-key material envelope validation must reject wrong {field} labels before key metadata mismatch" ), };
     }
     let mut binary_decorated_placeholder_text_envelope =
         decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
@@ -23271,15 +22026,7 @@ fn full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift() {
                 ..prover_key.clone()
             };
             assert_diag! { 854 => proof_key_material_commitment_v1(&drifted_key) };
-            assert_error_contains(
-                validate_proof_key_v1(
-                    &material,
-                    BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                    &drifted_key,
-                ),
-                $expected,
-                $context,
-            );
+            assert_call! { assert_error_contains; validate_proof_key_v1( &material, BfvFullBootstrapCircuitArtifactRoleV1::ProverKey, &drifted_key, ), $expected, $context, };
         }};
     }
     expect_key_layout_rejection!(
@@ -23564,69 +22311,10 @@ fn full_bootstrap_proof_schema_artifact_digest_is_stable() {
     let pair_native_verifier_obligation_flags =
         bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(&canonical_prover_key);
     assert_eq_row! { proof_key_pair_commitment, Hash::new_from_chunks(&[ BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN, canonical_prover_key.backend.as_bytes(), canonical_prover_key.key_format.as_bytes(), canonical_prover_key.circuit_id.as_bytes(), pair_parameter_digest.as_slice(), pair_rns_modulus_chain_digest.as_slice(), pair_key_switch_decomposition_chain_digest.as_slice(), pair_centered_scale_round_source_chain_digest.as_slice(), pair_max_bootstrap_depth.as_slice(), pair_schema_digest.as_slice(), pair_evaluator_artifact_set_digest.as_slice(), pair_statement_material_version.as_slice(), pair_statement_material_field_count.as_slice(), pair_claim_version.as_slice(), pair_claim_field_count.as_slice(), canonical_prover_key.witness_digest_domain.as_slice(), pair_witness_digest_material_version.as_slice(), pair_witness_digest_material_field_count.as_slice(), pair_witness_trace_field_count.as_slice(), pair_witness_trace_bounds_field_count.as_slice(), pair_public_input_hash_count.as_slice(), pair_public_input_hash_bytes.as_slice(), pair_supports_exact_residual_multiple.as_slice(), pair_supports_bounded_noise.as_slice(), pair_native_verifier_obligation_flags.as_slice(), b"prover-key", canonical_prover_key.key_material.as_slice(), b"verifier-key", canonical_verifier_key.key_material.as_slice(), ]), "proof-key pair commitment must hash its dedicated profile/key-material transcript" };
-    let prover_key = BfvFullBootstrapProofKeyV1 {
-        key_role: BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-        backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
-        key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
-        circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-        parameter_digest: registered_bfv_parameter_digest(&params)
-            .expect("registered parameter digest"),
-        rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(&params)
-            .expect("registered RNS digest"),
-        key_switch_decomposition_chain_digest:
-            registered_bfv_key_switch_decomposition_chain_digest(&params)
-                .expect("registered decomposition digest"),
-        centered_scale_round_source_chain_digest:
-            registered_bfv_centered_scale_round_source_chain_digest(&params)
-                .expect("registered centered scale-round source digest"),
-        max_bootstrap_depth: 1,
-        public_input_schema_digest: schema_digest,
-        evaluator_artifact_set_digest,
-        proof_key_pair_commitment,
-        statement_material_version:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
-        statement_material_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
-        claim_version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1,
-        claim_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1,
-        witness_digest_domain: BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN.to_vec(),
-        witness_digest_material_version:
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1,
-        witness_digest_material_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1,
-        witness_trace_field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1,
-        witness_trace_bounds_field_count:
-            BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1,
-        public_input_hash_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1,
-        public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
-        supports_exact_residual_multiple: true,
-        supports_bounded_noise: true,
-        derives_opening_schedule_from_statement_hash: true,
-        derives_opening_schedule_from_trace_material_digest: true,
-        bounds_opening_schedule_rejection_sampling: true,
-        validates_transcript_public_padding_openings: true,
-        validates_transcript_public_opening_material: true,
-        requires_verifier_owned_trace_material_digest: true,
-        validates_merkle_path_shape: true,
-        validates_merkle_path_roots: true,
-        validates_fri_query_chain: true,
-        binds_first_fri_values_to_opened_air_values: true,
-        binds_fri_queries_to_air_commitment_roots: true,
-        requires_canonical_base_transcript_label: true,
-        rejects_suffixed_transcript_label_aliases: true,
-        validates_artifact_bound_prover_input: true,
-        rejects_stale_galois_key_set_replay: true,
-        rejects_stale_proof_key_artifacts: true,
-        key_material_commitment: Hash::new(
-            b"sentinel full-bootstrap proof-key commitment for stable digest test",
-        ),
-        key_material: sample_full_bootstrap_proof_key_material_envelope(
-            &params,
-            schema_digest,
-            evaluator_artifact_set_digest,
-            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-        ),
-    };
+    let prover_key = sample_full_bootstrap_prover_key_with_material_commitment(
+        &canonical_prover_key,
+        Hash::new(b"sentinel full-bootstrap proof-key commitment for stable digest test"),
+    );
     let prover_commitment = proof_key_material_commitment_v1(&prover_key)
         .expect("derive canonical prover-key material commitment");
     assert_eq_row! { prover_commitment.to_string(), "9d719e7217868f8a74adc155a3b6126a60e5b9a9a9b6c8ead528f4a0f59c8685", "canonical prover-key material commitment drifted" };
@@ -23829,26 +22517,8 @@ fn full_bootstrap_blind_rotation_artifact_is_typed_and_profile_bound() {
     )
     .expect("blind-rotation output fits governed residual bound");
     let missing_power = key.steps[0].automorphism_power;
-    assert_error_contains(
-        apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
-            &params,
-            &galois_keys[1..],
-            &ciphertext,
-            &key,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "blind rotation must reject missing Galois keys",
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
-            &params,
-            &galois_keys[1..],
-            &key,
-            input_bound,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "blind-rotation bounds must reject missing Galois keys",
-    );
+    assert_call! { assert_error_contains; apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1( &params, &galois_keys[1..], &ciphertext, &key, ), &format!("automorphism power {missing_power}"), "blind rotation must reject missing Galois keys", };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1( &params, &galois_keys[1..], &key, input_bound, ), &format!("automorphism power {missing_power}"), "blind-rotation bounds must reject missing Galois keys", };
     let (bounded_secret_key, bounded_public_key) = keygen_bounded_noise_from_seed(
         &params,
         b"bfv-full-bootstrap-blind-rotation-bounded-exec-keygen",
@@ -23920,16 +22590,7 @@ fn full_bootstrap_blind_rotation_artifact_is_typed_and_profile_bound() {
         "bounded full-bootstrap blind rotation output",
     )
     .expect("bounded blind-rotation output fits governed noise bound");
-    assert_error_contains(
-        bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
-            &params,
-            &bounded_galois_keys[1..],
-            &key,
-            input_noise_bound,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "bounded blind-rotation bounds must reject missing Galois keys",
-    );
+    assert_call! { assert_error_contains; bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1( &params, &bounded_galois_keys[1..], &key, input_noise_bound, ), &format!("automorphism power {missing_power}"), "bounded blind-rotation bounds must reject missing Galois keys", };
     let opaque_payload = sample_full_bootstrap_artifact_payload(
         &params,
         BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey,
@@ -24909,39 +23570,9 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
     assert_diag! { 934 => full_with_release_audited_artifacts_output_residual_multiple_bound_v1( &params, &bootstrap_key, &artifacts, &galois_keys[1..], input_bound, &release_audit_package, release_audit_package_digest, "sora-zk-audit-wg-2026-alt", reviewer_key_pair.public_key(), ) };
     assert_diag! { 935 => full_with_release_audited_artifacts_output_residual_multiple_bound_v1( &params, &bootstrap_key, &artifacts, &galois_keys, u128::MAX, &release_audit_package, release_audit_package_digest, "sora-zk-audit-wg-2026-alt", reviewer_key_pair.public_key(), ) };
     let missing_power = blind_rotation.steps[0].automorphism_power;
-    assert_error_contains(
-        apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
-            &params,
-            &bootstrap_key,
-            &artifacts,
-            &galois_keys[1..],
-            &ciphertext,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "exact full-bootstrap prefix trace must reject missing Galois keys",
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
-            &params,
-            &bootstrap_key,
-            &artifacts,
-            &galois_keys[1..],
-            input_bound,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "exact full-bootstrap prefix bounds must reject missing Galois keys",
-    );
-    assert_error_contains(
-        full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
-            &params,
-            &bootstrap_key,
-            &artifacts,
-            &galois_keys[1..],
-            &ciphertext,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "artifact-aware exact full bootstrap must reject missing Galois keys before final output",
-    );
+    assert_call! { assert_error_contains; apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1( &params, &bootstrap_key, &artifacts, &galois_keys[1..], &ciphertext, ), &format!("automorphism power {missing_power}"), "exact full-bootstrap prefix trace must reject missing Galois keys", };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1( &params, &bootstrap_key, &artifacts, &galois_keys[1..], input_bound, ), &format!("automorphism power {missing_power}"), "exact full-bootstrap prefix bounds must reject missing Galois keys", };
+    assert_call! { assert_error_contains; full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1( &params, &bootstrap_key, &artifacts, &galois_keys[1..], &ciphertext, ), &format!("automorphism power {missing_power}"), "artifact-aware exact full bootstrap must reject missing Galois keys before final output", };
     let mut malformed_entry_galois_keys = galois_keys.clone();
     malformed_entry_galois_keys[0].entries[0]
         .b
@@ -24969,32 +23600,8 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
         )
         .expect("extra exact Galois key"),
     );
-    assert_error_contains(
-        apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
-            &params,
-            &bootstrap_key,
-            &artifacts,
-            &extra_galois_keys,
-            &ciphertext,
-        ),
-        &format!(
-            "unexpected BFV Galois key for full-bootstrap execution automorphism power {extra_power}"
-        ),
-        "exact full-bootstrap prefix trace must reject unused Galois keys",
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
-            &params,
-            &bootstrap_key,
-            &artifacts,
-            &extra_galois_keys,
-            input_bound,
-        ),
-        &format!(
-            "unexpected BFV Galois key for full-bootstrap execution automorphism power {extra_power}"
-        ),
-        "exact full-bootstrap prefix bounds must reject unused Galois keys",
-    );
+    assert_call! { assert_error_contains; apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1( &params, &bootstrap_key, &artifacts, &extra_galois_keys, &ciphertext, ), &format!( "unexpected BFV Galois key for full-bootstrap execution automorphism power {extra_power}" ), "exact full-bootstrap prefix trace must reject unused Galois keys", };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1( &params, &bootstrap_key, &artifacts, &extra_galois_keys, input_bound, ), &format!( "unexpected BFV Galois key for full-bootstrap execution automorphism power {extra_power}" ), "exact full-bootstrap prefix bounds must reject unused Galois keys", };
     let (bounded_secret_key, bounded_public_key) =
         keygen_bounded_noise_from_seed(&params, b"bfv-full-bootstrap-bounded-prefix-keygen")
             .expect("bounded keygen");
@@ -25243,39 +23850,9 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
     assert_diag! { 958 => full_with_release_audited_artifacts_bounded_noise_output_bound_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys, input_noise_bound, &bounded_release_audit_package, bounded_release_audit_package_digest, "sora-zk-audit-wg-2026-alt", reviewer_key_pair.public_key(), ) };
     assert_diag! { 959 => full_with_release_audited_artifacts_bounded_noise_output_bound_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys[1..], input_noise_bound, &bounded_release_audit_package, bounded_release_audit_package_digest, "sora-zk-audit-wg-2026-alt", reviewer_key_pair.public_key(), ) };
     assert_diag! { 960 => full_with_release_audited_artifacts_bounded_noise_output_bound_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys, u128::MAX, &bounded_release_audit_package, bounded_release_audit_package_digest, "sora-zk-audit-wg-2026-alt", reviewer_key_pair.public_key(), ) };
-    assert_error_contains(
-        apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
-            &params,
-            &bounded_bootstrap_key,
-            &bounded_artifacts,
-            &bounded_galois_keys[1..],
-            &bounded_ciphertext,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "bounded full-bootstrap prefix trace must reject missing Galois keys",
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
-            &params,
-            &bounded_bootstrap_key,
-            &bounded_artifacts,
-            &bounded_galois_keys[1..],
-            input_noise_bound,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "bounded full-bootstrap prefix bounds must reject missing Galois keys",
-    );
-    assert_error_contains(
-        full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
-            &params,
-            &bounded_bootstrap_key,
-            &bounded_artifacts,
-            &bounded_galois_keys[1..],
-            &bounded_ciphertext,
-        ),
-        &format!("automorphism power {missing_power}"),
-        "artifact-aware bounded full bootstrap must reject missing Galois keys before final output",
-    );
+    assert_call! { assert_error_contains; apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys[1..], &bounded_ciphertext, ), &format!("automorphism power {missing_power}"), "bounded full-bootstrap prefix trace must reject missing Galois keys", };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys[1..], input_noise_bound, ), &format!("automorphism power {missing_power}"), "bounded full-bootstrap prefix bounds must reject missing Galois keys", };
+    assert_call! { assert_error_contains; full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys[1..], &bounded_ciphertext, ), &format!("automorphism power {missing_power}"), "artifact-aware bounded full bootstrap must reject missing Galois keys before final output", };
     let mut malformed_entry_bounded_galois_keys = bounded_galois_keys.clone();
     malformed_entry_bounded_galois_keys[0].entries[0]
         .a
@@ -25303,30 +23880,8 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
         )
         .expect("extra bounded Galois key"),
     );
-    assert_error_contains(
-        apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
-            &params,
-            &bounded_bootstrap_key,
-            &bounded_artifacts,
-            &bounded_extra_galois_keys,
-            &bounded_ciphertext,
-        ),
-        &format!("unexpected BFV Galois key for full-bootstrap execution automorphism power {bounded_extra_power}"),
-        "bounded full-bootstrap prefix trace must reject unused Galois keys",
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
-            &params,
-            &bounded_bootstrap_key,
-            &bounded_artifacts,
-            &bounded_extra_galois_keys,
-            input_noise_bound,
-        ),
-        &format!(
-            "unexpected BFV Galois key for full-bootstrap execution automorphism power {bounded_extra_power}"
-        ),
-        "bounded full-bootstrap prefix bounds must reject unused Galois keys",
-    );
+    assert_call! { assert_error_contains; apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_extra_galois_keys, &bounded_ciphertext, ), &format!("unexpected BFV Galois key for full-bootstrap execution automorphism power {bounded_extra_power}"), "bounded full-bootstrap prefix trace must reject unused Galois keys", };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_extra_galois_keys, input_noise_bound, ), &format!( "unexpected BFV Galois key for full-bootstrap execution automorphism power {bounded_extra_power}" ), "bounded full-bootstrap prefix bounds must reject unused Galois keys", };
 }
 #[test]
 fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
@@ -25703,61 +24258,11 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     let missing_full_bootstrap_material_error = "bootstrapping circuit material";
     let mut malformed_witness_material = witness_material.clone();
     malformed_witness_material.version = malformed_witness_material.version.saturating_add(1);
-    assert_error_contains(
-        validate_execution_witness_digest_material_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &malformed_witness_material,
-        ),
-        diagnostics.dynamic_expected_at(74, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(74),
-    );
-    assert_error_contains(
-        execution_witness_digest_from_material_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &malformed_witness_material,
-        ),
-        diagnostics.dynamic_expected_at(75, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(75),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_witness_digest_from_material_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_witness_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(76, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(76),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_witness_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(77, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(77),
-    );
-    assert_error_contains(
-        validate_bfv_full_bootstrap_execution_witness_digest_material_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_witness_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(78, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(78),
-    );
+    assert_call! { assert_error_contains; validate_execution_witness_digest_material_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &malformed_witness_material, ), diagnostics.dynamic_expected_at(74, missing_full_bootstrap_material_error), diagnostics.static_context_at(74), };
+    assert_call! { assert_error_contains; execution_witness_digest_from_material_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &malformed_witness_material, ), diagnostics.dynamic_expected_at(75, missing_full_bootstrap_material_error), diagnostics.static_context_at(75), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_witness_digest_from_material_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_witness_material_bytes, ), diagnostics.dynamic_expected_at(76, missing_full_bootstrap_material_error), diagnostics.static_context_at(76), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_witness_material_bytes, ), diagnostics.dynamic_expected_at(77, missing_full_bootstrap_material_error), diagnostics.static_context_at(77), };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_witness_digest_material_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_witness_material_bytes, ), diagnostics.dynamic_expected_at(78, missing_full_bootstrap_material_error), diagnostics.static_context_at(78), };
     let binary_split_placeholder_witness_material_bytes =
         b"t\xffo\xffd\xffo pending BFV full-bootstrap execution witness material bytes".to_vec();
     assert_error_matrix!(diagnostics, 79, [
@@ -25821,25 +24326,13 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     ] {
         let mut placeholder_material_digest = witness_material.clone();
         placeholder_material_digest.full_bootstrap_material_digest = digest;
-        assert_error_contains(execution_witness_digest_from_material_v1(
-                &placeholder_material_digest,
-            ), diagnostics.static_expected_at(95), diagnostics.dynamic_context_at(95, &format!(
-                "public witness material hashing must reject {label} placeholder governed material digests"
-            )));
+        assert_call! { assert_error_contains; execution_witness_digest_from_material_v1( &placeholder_material_digest, ), diagnostics.static_expected_at(95), diagnostics.dynamic_context_at(95, &format!( "public witness material hashing must reject {label} placeholder governed material digests" )) };
         let mut placeholder_artifact_digest = witness_material.clone();
         placeholder_artifact_digest.artifact_bundle_digest = digest;
-        assert_error_contains(execution_witness_digest_from_material_v1(
-                &placeholder_artifact_digest,
-            ), diagnostics.static_expected_at(96), diagnostics.dynamic_context_at(96, &format!(
-                "public witness material hashing must reject {label} placeholder artifact-bundle digests"
-            )));
+        assert_call! { assert_error_contains; execution_witness_digest_from_material_v1( &placeholder_artifact_digest, ), diagnostics.static_expected_at(96), diagnostics.dynamic_context_at(96, &format!( "public witness material hashing must reject {label} placeholder artifact-bundle digests" )) };
         let mut placeholder_galois_digest = witness_material.clone();
         placeholder_galois_digest.galois_key_set_digest = digest;
-        assert_error_contains(execution_witness_digest_from_material_v1(
-                &placeholder_galois_digest,
-            ), diagnostics.static_expected_at(97), diagnostics.dynamic_context_at(97, &format!(
-                "public witness material hashing must reject {label} placeholder Galois key-set digests"
-            )));
+        assert_call! { assert_error_contains; execution_witness_digest_from_material_v1( &placeholder_galois_digest, ), diagnostics.static_expected_at(97), diagnostics.dynamic_context_at(97, &format!( "public witness material hashing must reject {label} placeholder Galois key-set digests" )) };
     }
     let mut zero_galois_digest_material = witness_material.clone();
     zero_galois_digest_material.galois_key_set_digest = Hash::prehashed([0_u8; Hash::LENGTH]);
@@ -26331,161 +24824,24 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
 ]);
     let mut malformed_proof_input = proof_input.clone();
     malformed_proof_input.version = malformed_proof_input.version.saturating_add(1);
-    assert_error_contains(
-        validate_execution_proof_input_material_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &malformed_proof_input,
-        ),
-        diagnostics.dynamic_expected_at(205, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(205),
-    );
-    assert_error_contains(
-        execution_proof_input_material_digest_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &malformed_proof_input,
-        ),
-        diagnostics.dynamic_expected_at(206, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(206),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(207, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(207),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(208, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(208),
-    );
-    assert_error_contains(
-        validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(209, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(209),
-    );
-    assert_error_contains(bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_public_key_and_artifacts_v1(
-            &params,
-            &public_key,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(210, missing_full_bootstrap_material_error), diagnostics.static_context_at(210));
-    assert_error_contains(bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
-            &params,
-            &public_key,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(211, missing_full_bootstrap_material_error), diagnostics.static_context_at(211));
-    assert_error_contains(validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_and_artifacts_v1(
-            &params,
-            &public_key,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(212, missing_full_bootstrap_material_error), diagnostics.static_context_at(212));
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &malformed_proof_input, ), diagnostics.dynamic_expected_at(205, missing_full_bootstrap_material_error), diagnostics.static_context_at(205), };
+    assert_call! { assert_error_contains; execution_proof_input_material_digest_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &malformed_proof_input, ), diagnostics.dynamic_expected_at(206, missing_full_bootstrap_material_error), diagnostics.static_context_at(206), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(207, missing_full_bootstrap_material_error), diagnostics.static_context_at(207), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(208, missing_full_bootstrap_material_error), diagnostics.static_context_at(208), };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(209, missing_full_bootstrap_material_error), diagnostics.static_context_at(209), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_public_key_and_artifacts_v1( &params, &public_key, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(210, missing_full_bootstrap_material_error), diagnostics.static_context_at(210) };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1( &params, &public_key, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(211, missing_full_bootstrap_material_error), diagnostics.static_context_at(211) };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_and_artifacts_v1( &params, &public_key, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(212, missing_full_bootstrap_material_error), diagnostics.static_context_at(212) };
     let compressed_artifact_bundle_error =
         "BFV full-bootstrap circuit artifact bundle bytes must use canonical v1 bytes";
     let compressed_galois_key_set_error =
         "BFV full-bootstrap Galois key set bytes must use canonical v1 bytes";
-    assert_error_contains(
-        validate_execution_proof_input_material_bytes_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &canonical_galois_key_set_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(213, compressed_artifact_bundle_error),
-        diagnostics.static_context_at(213),
-    );
-    assert_error_contains(
-        validate_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &canonical_galois_key_set_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(214, compressed_artifact_bundle_error),
-        diagnostics.static_context_at(214),
-    );
-    assert_error_contains(
-        validate_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &canonical_galois_key_set_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(215, compressed_artifact_bundle_error),
-        diagnostics.static_context_at(215),
-    );
-    assert_error_contains(
-        validate_execution_proof_input_material_bytes_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &artifact_bundle_bytes,
-            &compressed_galois_key_set_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(216, compressed_galois_key_set_error),
-        diagnostics.static_context_at(216),
-    );
-    assert_error_contains(
-        validate_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &artifact_bundle_bytes,
-            &compressed_galois_key_set_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(217, compressed_galois_key_set_error),
-        diagnostics.static_context_at(217),
-    );
-    assert_error_contains(
-        validate_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &artifact_bundle_bytes,
-            &compressed_galois_key_set_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(218, compressed_galois_key_set_error),
-        diagnostics.static_context_at(218),
-    );
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_bytes_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &canonical_galois_key_set_bytes, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(213, compressed_artifact_bundle_error), diagnostics.static_context_at(213), };
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &canonical_galois_key_set_bytes, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(214, compressed_artifact_bundle_error), diagnostics.static_context_at(214), };
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &canonical_galois_key_set_bytes, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(215, compressed_artifact_bundle_error), diagnostics.static_context_at(215), };
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_bytes_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &artifact_bundle_bytes, &compressed_galois_key_set_bytes, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(216, compressed_galois_key_set_error), diagnostics.static_context_at(216), };
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &artifact_bundle_bytes, &compressed_galois_key_set_bytes, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(217, compressed_galois_key_set_error), diagnostics.static_context_at(217), };
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &artifact_bundle_bytes, &compressed_galois_key_set_bytes, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(218, compressed_galois_key_set_error), diagnostics.static_context_at(218), };
     let compressed_public_key_bytes =
         norito::to_compressed_bytes(&public_key, Some(norito::CompressionConfig::default()))
             .expect("encode compressed public key");
@@ -26493,30 +24849,9 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     (validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &bootstrap_key, &artifacts, &galois_keys, &proof_input_material_bytes, )),
     (validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &bootstrap_key, &artifacts, &galois_keys, &proof_input_material_bytes, )),
 ]);
-    assert_error_contains(validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
-            &params,
-            &compressed_public_key_bytes,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(221, missing_full_bootstrap_material_error), diagnostics.static_context_at(221));
-    assert_error_contains(validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1(
-            &params,
-            &compressed_public_key_bytes,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(222, missing_full_bootstrap_material_error), diagnostics.static_context_at(222));
-    assert_error_contains(validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digests_for_public_key_bytes_and_artifacts_v1(
-            &params,
-            &compressed_public_key_bytes,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_proof_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(223, missing_full_bootstrap_material_error), diagnostics.static_context_at(223));
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(221, missing_full_bootstrap_material_error), diagnostics.static_context_at(221) };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(222, missing_full_bootstrap_material_error), diagnostics.static_context_at(222) };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digests_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_proof_input_material_bytes, ), diagnostics.dynamic_expected_at(223, missing_full_bootstrap_material_error), diagnostics.static_context_at(223) };
     assert_error_matrix!(
         diagnostics,
         224,
@@ -26755,9 +25090,7 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     ] {
         let mut aliased_statement_input = proof_input.clone();
         aliased_statement_input.statement_hash = alias_digest;
-        assert_error_contains(validate_execution_proof_input_material_v1(&aliased_statement_input), diagnostics.dynamic_expected_at(248, expected), diagnostics.dynamic_context_at(248, &format!(
-                "proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks"
-            )));
+        assert_call! { assert_error_contains; validate_execution_proof_input_material_v1(&aliased_statement_input), diagnostics.dynamic_expected_at(248, expected), diagnostics.dynamic_context_at(248, &format!( "proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks" )) };
     }
     let proof_input_input_ciphertext_digest =
         bfv_ciphertext_digest(&params, &proof_input.witness_material.input_ciphertext)
@@ -26779,12 +25112,8 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     ] {
         let mut aliased_statement_input = proof_input.clone();
         aliased_statement_input.statement_hash = alias_digest;
-        assert_error_contains(validate_execution_proof_input_material_v1(&aliased_statement_input), diagnostics.dynamic_expected_at(249, expected), diagnostics.dynamic_context_at(249, &format!(
-                "proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks"
-            )));
-        assert_error_contains(execution_proof_input_material_digest_v1(&aliased_statement_input), diagnostics.dynamic_expected_at(250, expected), diagnostics.dynamic_context_at(250, &format!(
-                "proof input material digesting must reject statement hashes copied from {alias_label} digests before hashing"
-            )));
+        assert_call! { assert_error_contains; validate_execution_proof_input_material_v1(&aliased_statement_input), diagnostics.dynamic_expected_at(249, expected), diagnostics.dynamic_context_at(249, &format!( "proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks" )) };
+        assert_call! { assert_error_contains; execution_proof_input_material_digest_v1(&aliased_statement_input), diagnostics.dynamic_expected_at(250, expected), diagnostics.dynamic_context_at(250, &format!( "proof input material digesting must reject statement hashes copied from {alias_label} digests before hashing" )) };
     }
     let mut statement_input_ciphertext_alias_input = proof_input.clone();
     statement_input_ciphertext_alias_input.statement_hash = proof_input_input_ciphertext_digest;
@@ -26806,62 +25135,22 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     let mut statement_witness_alias_input = proof_input.clone();
     statement_witness_alias_input.statement_hash = claim.execution_witness_digest;
     let statement_witness_alias_expected = "BFV full-bootstrap execution proof input material statement hash must be distinct from execution witness digest";
-    assert_error_contains(
-        validate_execution_proof_input_material_v1(&statement_witness_alias_input),
-        diagnostics.dynamic_expected_at(253, statement_witness_alias_expected),
-        diagnostics.static_context_at(253),
-    );
-    assert_error_contains(
-        execution_proof_input_material_digest_v1(&statement_witness_alias_input),
-        diagnostics.dynamic_expected_at(254, statement_witness_alias_expected),
-        diagnostics.static_context_at(254),
-    );
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_v1(&statement_witness_alias_input), diagnostics.dynamic_expected_at(253, statement_witness_alias_expected), diagnostics.static_context_at(253), };
+    assert_call! { assert_error_contains; execution_proof_input_material_digest_v1(&statement_witness_alias_input), diagnostics.dynamic_expected_at(254, statement_witness_alias_expected), diagnostics.static_context_at(254), };
     let statement_witness_alias_bytes = norito::to_bytes(&statement_witness_alias_input)
         .expect("encode proof input with statement/witness alias");
-    assert_error_contains(
-        decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
-            &statement_witness_alias_bytes,
-        ),
-        diagnostics.dynamic_expected_at(255, statement_witness_alias_expected),
-        diagnostics.static_context_at(255),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1(
-            &statement_witness_alias_bytes,
-        ),
-        diagnostics.dynamic_expected_at(256, statement_witness_alias_expected),
-        diagnostics.static_context_at(256),
-    );
+    assert_call! { assert_error_contains; decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1( &statement_witness_alias_bytes, ), diagnostics.dynamic_expected_at(255, statement_witness_alias_expected), diagnostics.static_context_at(255), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1( &statement_witness_alias_bytes, ), diagnostics.dynamic_expected_at(256, statement_witness_alias_expected), diagnostics.static_context_at(256), };
     let mut statement_proof_key_pair_alias_input = proof_input.clone();
     statement_proof_key_pair_alias_input.statement_hash = material.proof_key_pair_commitment;
     let statement_proof_key_pair_alias_expected = "BFV full-bootstrap execution proof input material statement hash must be distinct from proof-key pair commitment";
-    assert_error_contains(
-        validate_execution_proof_input_material_v1(&statement_proof_key_pair_alias_input),
-        diagnostics.dynamic_expected_at(257, statement_proof_key_pair_alias_expected),
-        diagnostics.static_context_at(257),
-    );
-    assert_error_contains(
-        execution_proof_input_material_digest_v1(&statement_proof_key_pair_alias_input),
-        diagnostics.dynamic_expected_at(258, statement_proof_key_pair_alias_expected),
-        diagnostics.static_context_at(258),
-    );
+    assert_call! { assert_error_contains; validate_execution_proof_input_material_v1(&statement_proof_key_pair_alias_input), diagnostics.dynamic_expected_at(257, statement_proof_key_pair_alias_expected), diagnostics.static_context_at(257), };
+    assert_call! { assert_error_contains; execution_proof_input_material_digest_v1(&statement_proof_key_pair_alias_input), diagnostics.dynamic_expected_at(258, statement_proof_key_pair_alias_expected), diagnostics.static_context_at(258), };
     let statement_proof_key_pair_alias_bytes =
         norito::to_bytes(&statement_proof_key_pair_alias_input)
             .expect("encode proof input with statement/proof-key-pair alias");
-    assert_error_contains(
-        decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
-            &statement_proof_key_pair_alias_bytes,
-        ),
-        diagnostics.dynamic_expected_at(259, statement_proof_key_pair_alias_expected),
-        diagnostics.static_context_at(259),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1(
-            &statement_proof_key_pair_alias_bytes,
-        ),
-        diagnostics.dynamic_expected_at(260, statement_proof_key_pair_alias_expected),
-        diagnostics.static_context_at(260),
-    );
+    assert_call! { assert_error_contains; decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1( &statement_proof_key_pair_alias_bytes, ), diagnostics.dynamic_expected_at(259, statement_proof_key_pair_alias_expected), diagnostics.static_context_at(259), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1( &statement_proof_key_pair_alias_bytes, ), diagnostics.dynamic_expected_at(260, statement_proof_key_pair_alias_expected), diagnostics.static_context_at(260), };
     let mut zero_statement_input = proof_input.clone();
     zero_statement_input.statement_hash = Hash::prehashed([0_u8; Hash::LENGTH]);
     assert_local_diag! { diagnostics; 261 => validate_execution_proof_input_material_v1(&zero_statement_input) };
@@ -27082,30 +25371,9 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     stale_trace_proof_input_context.version =
         stale_trace_proof_input_context.version.saturating_add(1);
     let stale_trace_proof_input_error = "proof input material version";
-    assert_error_contains(
-        bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_for_proof_input_v1(
-            &stale_trace_proof_input_context,
-            &compressed_trace_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(333, stale_trace_proof_input_error),
-        diagnostics.static_context_at(333),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_for_proof_input_v1(
-            &stale_trace_proof_input_context,
-            &compressed_trace_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(334, stale_trace_proof_input_error),
-        diagnostics.static_context_at(334),
-    );
-    assert_error_contains(
-        validate_bfv_full_bootstrap_arithmetic_trace_material_bytes_for_proof_input_v1(
-            &stale_trace_proof_input_context,
-            &compressed_trace_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(335, stale_trace_proof_input_error),
-        diagnostics.static_context_at(335),
-    );
+    assert_call! { assert_error_contains; bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_for_proof_input_v1( &stale_trace_proof_input_context, &compressed_trace_material_bytes, ), diagnostics.dynamic_expected_at(333, stale_trace_proof_input_error), diagnostics.static_context_at(333), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_for_proof_input_v1( &stale_trace_proof_input_context, &compressed_trace_material_bytes, ), diagnostics.dynamic_expected_at(334, stale_trace_proof_input_error), diagnostics.static_context_at(334), };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_arithmetic_trace_material_bytes_for_proof_input_v1( &stale_trace_proof_input_context, &compressed_trace_material_bytes, ), diagnostics.dynamic_expected_at(335, stale_trace_proof_input_error), diagnostics.static_context_at(335), };
     let binary_split_placeholder_trace_material_bytes =
         b"t\xffo\xffd\xffo pending BFV full-bootstrap arithmetic trace material bytes".to_vec();
     assert_error_matrix!(
@@ -27217,12 +25485,7 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     ] {
         let mut aliased_public_opening_trace_digest = public_opening_material.clone();
         aliased_public_opening_trace_digest.trace_material_digest = alias_digest;
-        assert_error_contains(validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
-                &trace_material,
-                &aliased_public_opening_trace_digest,
-            ), diagnostics.dynamic_expected_at(355, expected), diagnostics.dynamic_context_at(355, &format!(
-                "trace-bound public opening material must reject trace material digests copied from {alias_label} before transcript mismatch checks"
-            )));
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1( &trace_material, &aliased_public_opening_trace_digest, ), diagnostics.dynamic_expected_at(355, expected), diagnostics.dynamic_context_at(355, &format!( "trace-bound public opening material must reject trace material digests copied from {alias_label} before transcript mismatch checks" )) };
     }
     let compressed_public_opening_material_bytes = norito::to_compressed_bytes(
         &public_opening_material,
@@ -27238,26 +25501,9 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     let mut stale_trace_context = trace_material.clone();
     stale_trace_context.version = stale_trace_context.version.saturating_add(1);
     let stale_trace_context_error = "trace material version";
-    assert_error_contains(
-        bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
-            &stale_trace_context,
-            &compressed_public_opening_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(360, stale_trace_context_error),
-        diagnostics.static_context_at(360),
-    );
-    assert_error_contains(bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_for_trace_v1(
-            &stale_trace_context,
-            &compressed_public_opening_material_bytes,
-        ), diagnostics.dynamic_expected_at(361, stale_trace_context_error), diagnostics.static_context_at(361));
-    assert_error_contains(
-        validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_for_trace_v1(
-            &stale_trace_context,
-            &compressed_public_opening_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(362, stale_trace_context_error),
-        diagnostics.static_context_at(362),
-    );
+    assert_call! { assert_error_contains; bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1( &stale_trace_context, &compressed_public_opening_material_bytes, ), diagnostics.dynamic_expected_at(360, stale_trace_context_error), diagnostics.static_context_at(360), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_for_trace_v1( &stale_trace_context, &compressed_public_opening_material_bytes, ), diagnostics.dynamic_expected_at(361, stale_trace_context_error), diagnostics.static_context_at(361) };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_for_trace_v1( &stale_trace_context, &compressed_public_opening_material_bytes, ), diagnostics.dynamic_expected_at(362, stale_trace_context_error), diagnostics.static_context_at(362), };
     let binary_split_placeholder_public_opening_material_bytes =
         b"t\xffo\xffd\xffo pending BFV full-bootstrap arithmetic trace public opening material bytes"
             .to_vec();
@@ -27388,12 +25634,7 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     ] {
         let mut aliased_air_evaluation_trace_digest = air_evaluation_material.clone();
         aliased_air_evaluation_trace_digest.arithmetic_trace_material_digest = alias_digest;
-        assert_error_contains(validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1(
-                &trace_material,
-                &aliased_air_evaluation_trace_digest,
-            ), diagnostics.dynamic_expected_at(392, expected), diagnostics.dynamic_context_at(392, &format!(
-                "trace-bound AIR evaluation must reject trace material digests copied from {alias_label} before mismatch checks"
-            )));
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1( &trace_material, &aliased_air_evaluation_trace_digest, ), diagnostics.dynamic_expected_at(392, expected), diagnostics.dynamic_context_at(392, &format!( "trace-bound AIR evaluation must reject trace material digests copied from {alias_label} before mismatch checks" )) };
     }
     for (alias_label, alias_digest, expected) in [
         (
@@ -27439,12 +25680,7 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
         let mut aliased_air_evaluation_constraint_digest = air_evaluation_material.clone();
         aliased_air_evaluation_constraint_digest.arithmetic_air_constraint_system_digest =
             alias_digest;
-        assert_error_contains(validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1(
-                &trace_material,
-                &aliased_air_evaluation_constraint_digest,
-            ), diagnostics.dynamic_expected_at(393, expected), diagnostics.dynamic_context_at(393, &format!(
-                "trace-bound AIR evaluation must reject AIR constraint digests copied from {alias_label} before canonical mismatch checks"
-            )));
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1( &trace_material, &aliased_air_evaluation_constraint_digest, ), diagnostics.dynamic_expected_at(393, expected), diagnostics.dynamic_context_at(393, &format!( "trace-bound AIR evaluation must reject AIR constraint digests copied from {alias_label} before canonical mismatch checks" )) };
     }
     let compressed_air_evaluation_material_bytes = norito::to_compressed_bytes(
         &air_evaluation_material,
@@ -27464,30 +25700,9 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     (bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_for_trace_v1( &trace_material, &compressed_air_evaluation_material_bytes, )),
     (validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_for_trace_v1( &trace_material, &compressed_air_evaluation_material_bytes, )),
 ]);
-    assert_error_contains(
-        bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_for_trace_v1(
-            &stale_trace_context,
-            &compressed_air_evaluation_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(400, stale_trace_context_error),
-        diagnostics.static_context_at(400),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_for_trace_v1(
-            &stale_trace_context,
-            &compressed_air_evaluation_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(401, stale_trace_context_error),
-        diagnostics.static_context_at(401),
-    );
-    assert_error_contains(
-        validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_for_trace_v1(
-            &stale_trace_context,
-            &compressed_air_evaluation_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(402, stale_trace_context_error),
-        diagnostics.static_context_at(402),
-    );
+    assert_call! { assert_error_contains; bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_for_trace_v1( &stale_trace_context, &compressed_air_evaluation_material_bytes, ), diagnostics.dynamic_expected_at(400, stale_trace_context_error), diagnostics.static_context_at(400), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_for_trace_v1( &stale_trace_context, &compressed_air_evaluation_material_bytes, ), diagnostics.dynamic_expected_at(401, stale_trace_context_error), diagnostics.static_context_at(401), };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_for_trace_v1( &stale_trace_context, &compressed_air_evaluation_material_bytes, ), diagnostics.dynamic_expected_at(402, stale_trace_context_error), diagnostics.static_context_at(402), };
     let binary_split_placeholder_air_evaluation_material_bytes =
         b"t\xffo\xffd\xffo pending BFV full-bootstrap arithmetic AIR evaluation material bytes"
             .to_vec();
@@ -28464,189 +26679,31 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
 ]);
     let mut malformed_prover_input = prover_input_material.clone();
     malformed_prover_input.version = malformed_prover_input.version.saturating_add(1);
-    assert_error_contains(
-        validate_execution_prover_input_material_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &malformed_prover_input,
-        ),
-        diagnostics.dynamic_expected_at(561, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(561),
-    );
-    assert_error_contains(
-        execution_prover_input_material_digest_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &malformed_prover_input,
-        ),
-        diagnostics.dynamic_expected_at(562, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(562),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(563, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(563),
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(564, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(564),
-    );
-    assert_error_contains(
-        validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_artifacts_v1(
-            &params,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(565, missing_full_bootstrap_material_error),
-        diagnostics.static_context_at(565),
-    );
-    assert_error_contains(bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_public_key_and_artifacts_v1(
-            &params,
-            &public_key,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(566, missing_full_bootstrap_material_error), diagnostics.static_context_at(566));
-    assert_error_contains(bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
-            &params,
-            &public_key,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(567, missing_full_bootstrap_material_error), diagnostics.static_context_at(567));
-    assert_error_contains(validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_and_artifacts_v1(
-            &params,
-            &public_key,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(568, missing_full_bootstrap_material_error), diagnostics.static_context_at(568));
+    assert_call! { assert_error_contains; validate_execution_prover_input_material_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &malformed_prover_input, ), diagnostics.dynamic_expected_at(561, missing_full_bootstrap_material_error), diagnostics.static_context_at(561), };
+    assert_call! { assert_error_contains; execution_prover_input_material_digest_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &malformed_prover_input, ), diagnostics.dynamic_expected_at(562, missing_full_bootstrap_material_error), diagnostics.static_context_at(562), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(563, missing_full_bootstrap_material_error), diagnostics.static_context_at(563), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(564, missing_full_bootstrap_material_error), diagnostics.static_context_at(564), };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_artifacts_v1( &params, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(565, missing_full_bootstrap_material_error), diagnostics.static_context_at(565), };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_public_key_and_artifacts_v1( &params, &public_key, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(566, missing_full_bootstrap_material_error), diagnostics.static_context_at(566) };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1( &params, &public_key, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(567, missing_full_bootstrap_material_error), diagnostics.static_context_at(567) };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_and_artifacts_v1( &params, &public_key, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(568, missing_full_bootstrap_material_error), diagnostics.static_context_at(568) };
     let compressed_artifact_bundle_error =
         "BFV full-bootstrap circuit artifact bundle bytes must use canonical v1 bytes";
     let compressed_galois_key_set_error =
         "BFV full-bootstrap Galois key set bytes must use canonical v1 bytes";
-    assert_error_contains(
-        validate_execution_prover_input_material_bytes_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &canonical_galois_key_set_bytes,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(569, compressed_artifact_bundle_error),
-        diagnostics.static_context_at(569),
-    );
-    assert_error_contains(
-        validate_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &canonical_galois_key_set_bytes,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(570, compressed_artifact_bundle_error),
-        diagnostics.static_context_at(570),
-    );
-    assert_error_contains(
-        validate_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &canonical_galois_key_set_bytes,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(571, compressed_artifact_bundle_error),
-        diagnostics.static_context_at(571),
-    );
-    assert_error_contains(
-        validate_execution_prover_input_material_bytes_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &artifact_bundle_bytes,
-            &compressed_galois_key_set_bytes,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(572, compressed_galois_key_set_error),
-        diagnostics.static_context_at(572),
-    );
-    assert_error_contains(
-        validate_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &artifact_bundle_bytes,
-            &compressed_galois_key_set_bytes,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(573, compressed_galois_key_set_error),
-        diagnostics.static_context_at(573),
-    );
-    assert_error_contains(
-        validate_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &artifact_bundle_bytes,
-            &compressed_galois_key_set_bytes,
-            &compressed_prover_input_material_bytes,
-        ),
-        diagnostics.dynamic_expected_at(574, compressed_galois_key_set_error),
-        diagnostics.static_context_at(574),
-    );
+    assert_call! { assert_error_contains; validate_execution_prover_input_material_bytes_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &canonical_galois_key_set_bytes, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(569, compressed_artifact_bundle_error), diagnostics.static_context_at(569), };
+    assert_call! { assert_error_contains; validate_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &canonical_galois_key_set_bytes, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(570, compressed_artifact_bundle_error), diagnostics.static_context_at(570), };
+    assert_call! { assert_error_contains; validate_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &canonical_galois_key_set_bytes, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(571, compressed_artifact_bundle_error), diagnostics.static_context_at(571), };
+    assert_call! { assert_error_contains; validate_execution_prover_input_material_bytes_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &artifact_bundle_bytes, &compressed_galois_key_set_bytes, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(572, compressed_galois_key_set_error), diagnostics.static_context_at(572), };
+    assert_call! { assert_error_contains; validate_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &artifact_bundle_bytes, &compressed_galois_key_set_bytes, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(573, compressed_galois_key_set_error), diagnostics.static_context_at(573), };
+    assert_call! { assert_error_contains; validate_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &artifact_bundle_bytes, &compressed_galois_key_set_bytes, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(574, compressed_galois_key_set_error), diagnostics.static_context_at(574), };
     assert_error_matrix!(diagnostics, 575, [
     (validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &bootstrap_key, &artifacts, &galois_keys, &prover_input_material_bytes, )),
     (validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &bootstrap_key, &artifacts, &galois_keys, &prover_input_material_bytes, )),
 ]);
-    assert_error_contains(validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
-            &params,
-            &compressed_public_key_bytes,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(577, missing_full_bootstrap_material_error), diagnostics.static_context_at(577));
-    assert_error_contains(validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1(
-            &params,
-            &compressed_public_key_bytes,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(578, missing_full_bootstrap_material_error), diagnostics.static_context_at(578));
-    assert_error_contains(validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digests_for_public_key_bytes_and_artifacts_v1(
-            &params,
-            &compressed_public_key_bytes,
-            &missing_material_bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &compressed_prover_input_material_bytes,
-        ), diagnostics.dynamic_expected_at(579, missing_full_bootstrap_material_error), diagnostics.static_context_at(579));
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(577, missing_full_bootstrap_material_error), diagnostics.static_context_at(577) };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(578, missing_full_bootstrap_material_error), diagnostics.static_context_at(578) };
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digests_for_public_key_bytes_and_artifacts_v1( &params, &compressed_public_key_bytes, &missing_material_bootstrap_key, &artifacts, &galois_keys, &compressed_prover_input_material_bytes, ), diagnostics.dynamic_expected_at(579, missing_full_bootstrap_material_error), diagnostics.static_context_at(579) };
     assert_error_matrix!(
         diagnostics,
         580,
@@ -28750,11 +26807,7 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
         copied_prover_input_trace_digest.arithmetic_trace_material_digest = alias_digest;
         let expected =
             format!("arithmetic trace material digest must be distinct from {prior_label}");
-        assert_error_contains(validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
-                &copied_prover_input_trace_digest,
-            ), diagnostics.dynamic_expected_at(599, &expected), diagnostics.dynamic_context_at(599, &format!(
-                "prover input material must reject arithmetic trace digests copied from {source_label} before mismatch checks"
-            )));
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1( &copied_prover_input_trace_digest, ), diagnostics.dynamic_expected_at(599, &expected), diagnostics.dynamic_context_at(599, &format!( "prover input material must reject arithmetic trace digests copied from {source_label} before mismatch checks" )) };
     }
     let mut stale_prover_input_air_digest = prover_input_material.clone();
     stale_prover_input_air_digest.arithmetic_air_constraint_system_digest =
@@ -28866,11 +26919,7 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     ] {
         let mut copied_air_evaluation_digest = prover_input_material.clone();
         copied_air_evaluation_digest.arithmetic_air_evaluation_material_digest = alias_digest;
-        assert_error_contains(validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
-                &copied_air_evaluation_digest,
-            ), diagnostics.dynamic_expected_at(616, expected), diagnostics.dynamic_context_at(616, &format!(
-                "prover input material must reject AIR evaluation digests copied from {alias_label} before mismatch checks"
-            )));
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1( &copied_air_evaluation_digest, ), diagnostics.dynamic_expected_at(616, expected), diagnostics.dynamic_context_at(616, &format!( "prover input material must reject AIR evaluation digests copied from {alias_label} before mismatch checks" )) };
     }
     let mut zero_public_opening_digest = prover_input_material.clone();
     zero_public_opening_digest.public_opening_material_digest =
@@ -28932,11 +26981,7 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     ] {
         let mut copied_public_opening_digest = prover_input_material.clone();
         copied_public_opening_digest.public_opening_material_digest = alias_digest;
-        assert_error_contains(validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
-                &copied_public_opening_digest,
-            ), diagnostics.dynamic_expected_at(623, expected), diagnostics.dynamic_context_at(623, &format!(
-                "prover input material must reject public-opening digests copied from {alias_label} before mismatch checks"
-            )));
+        assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1( &copied_public_opening_digest, ), diagnostics.dynamic_expected_at(623, expected), diagnostics.dynamic_context_at(623, &format!( "prover input material must reject public-opening digests copied from {alias_label} before mismatch checks" )) };
     }
     let mut copied_proof_key_pair_commitment = prover_input_material.clone();
     copied_proof_key_pair_commitment
@@ -29041,9 +27086,7 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     ] {
         let mut aliased_trace_profile = trace_material.clone();
         aliased_trace_profile.arithmetic_trace_profile_digest = alias_digest;
-        assert_error_contains(validate_arithmetic_trace_material_v1(&aliased_trace_profile), diagnostics.dynamic_expected_at(636, expected), diagnostics.dynamic_context_at(636, &format!(
-                "trace material must reject profile digests copied from {alias_label} before canonical mismatch checks"
-            )));
+        assert_call! { assert_error_contains; validate_arithmetic_trace_material_v1(&aliased_trace_profile), diagnostics.dynamic_expected_at(636, expected), diagnostics.dynamic_context_at(636, &format!( "trace material must reject profile digests copied from {alias_label} before canonical mismatch checks" )) };
     }
     let mut stale_trace_width = trace_material.clone();
     stale_trace_width.row_width += 1;
@@ -29360,17 +27403,7 @@ fn full_bootstrap_execution_proof_statement_binds_claim_and_artifacts() {
     ] {
         let mut aliased_galois_claim = exact_claim.clone();
         aliased_galois_claim.galois_key_set_digest = alias_digest;
-        assert_error_contains(
-            execution_proof_statement_digest_v1(
-                &params,
-                &public_key,
-                &bootstrap_key,
-                &artifacts,
-                &aliased_galois_claim,
-            ),
-            expected,
-            "execution proof statements must reject Galois key-set digest replay from statement-level public roles",
-        );
+        assert_call! { assert_error_contains; execution_proof_statement_digest_v1( &params, &public_key, &bootstrap_key, &artifacts, &aliased_galois_claim, ), expected, "execution proof statements must reject Galois key-set digest replay from statement-level public roles", };
     }
     for (alias_digest, expected) in [
         (
@@ -29392,17 +27425,7 @@ fn full_bootstrap_execution_proof_statement_binds_claim_and_artifacts() {
     ] {
         let mut aliased_witness_claim = exact_claim.clone();
         aliased_witness_claim.execution_witness_digest = alias_digest;
-        assert_error_contains(
-            execution_proof_statement_digest_v1(
-                &params,
-                &public_key,
-                &bootstrap_key,
-                &artifacts,
-                &aliased_witness_claim,
-            ),
-            expected,
-            "execution proof statements must reject witness digest replay from statement-level public roles",
-        );
+        assert_call! { assert_error_contains; execution_proof_statement_digest_v1( &params, &public_key, &bootstrap_key, &artifacts, &aliased_witness_claim, ), expected, "execution proof statements must reject witness digest replay from statement-level public roles", };
     }
     let mut aliased_galois_input_ciphertext_claim = exact_claim.clone();
     aliased_galois_input_ciphertext_claim.galois_key_set_digest = input_ciphertext_digest;
@@ -29590,12 +27613,6 @@ fn full_bootstrap_native_stark_air_domain_tag_binds_statement_hash() {
 }
 #[test]
 fn refresh_key_generators_preflight_metadata_and_public_key_before_masks() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let params = params();
     let malformed_public_key = BfvPublicKey {
         b: Vec::new(),
@@ -30352,12 +28369,6 @@ fn evaluation_key_bundle_refresh_transcripts_reject_malformed_public_metadata() 
 }
 #[test]
 fn evaluation_key_bundle_refresh_transcripts_preflight_public_key_before_bundle_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let material = evaluation_key_adversarial_material();
     let malformed_public_key = BfvPublicKey {
         b: Vec::new(),
@@ -31158,12 +29169,6 @@ fn exact_residual_bound_helpers_track_subtract_and_plaintext_operations() {
 }
 #[test]
 fn public_term_execution_preflights_plaintext_metadata_before_ciphertext_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let malformed_ciphertext = BfvCiphertext {
         c0: Vec::new(),
         c1: Vec::new(),
@@ -31477,12 +29482,6 @@ fn bounded_noise_affine_circuit_tracks_weighted_public_rows() {
 }
 #[test]
 fn affine_execution_preflights_public_circuit_before_ciphertext_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let malformed_input = BfvCiphertext {
         c0: Vec::new(),
         c1: Vec::new(),
@@ -31643,43 +29642,17 @@ fn bootstrap_full_mode_requires_circuit_material() {
         c0: Vec::new(),
         c1: Vec::new(),
     };
-    assert_full_mode_rejected(
-        bootstrap_ciphertext_round(&params, &bootstrap_key, &malformed_ciphertext, 0),
-        "full bootstrap mode must not run the refresh bridge",
-    );
-    assert_full_mode_rejected(
-        bootstrap_ciphertext_round(&params, &bootstrap_key, &malformed_ciphertext, 1),
-        "full bootstrap mode must reject before invalid round index",
-    );
-    assert_full_mode_rejected(
-        bootstrap_ciphertext_rounds(&params, &bootstrap_key, &malformed_ciphertext, 0),
-        "full bootstrap mode must reject before zero-round requests",
-    );
-    assert_full_mode_rejected(
-        bfv_bootstrap_key_refresh_output_residual_multiple_bound(
-            &params,
-            &bootstrap_key,
-            centered_residual_multiple_capacity(&params) + 1,
-            0,
-        ),
-        "full bootstrap mode must reject before exact bootstrap bound metadata",
-    );
+    assert_call! { assert_full_mode_rejected; bootstrap_ciphertext_round(&params, &bootstrap_key, &malformed_ciphertext, 0), "full bootstrap mode must not run the refresh bridge", };
+    assert_call! { assert_full_mode_rejected; bootstrap_ciphertext_round(&params, &bootstrap_key, &malformed_ciphertext, 1), "full bootstrap mode must reject before invalid round index", };
+    assert_call! { assert_full_mode_rejected; bootstrap_ciphertext_rounds(&params, &bootstrap_key, &malformed_ciphertext, 0), "full bootstrap mode must reject before zero-round requests", };
+    assert_call! { assert_full_mode_rejected; bfv_bootstrap_key_refresh_output_residual_multiple_bound( &params, &bootstrap_key, centered_residual_multiple_capacity(&params) + 1, 0, ), "full bootstrap mode must reject before exact bootstrap bound metadata", };
     let rns_params = rns_exact_params();
     let (_, rns_public_key, _) =
         keygen_from_seed(&rns_params, b"bfv-bootstrap-mode-rns-keygen").expect("RNS keygen");
     let rns_bootstrap_key =
         full_bootstrap_key_without_material(&rns_params, &rns_public_key, "bootstrap-mode-rns-key");
     let rns_chain = rns_exact_chain();
-    assert_full_mode_rejected(
-        bootstrap_ciphertext_rns_exact_round(
-            &rns_params,
-            &rns_chain,
-            &rns_bootstrap_key,
-            &malformed_ciphertext,
-            1,
-        ),
-        "full bootstrap mode must reject before invalid RNS round index",
-    );
+    assert_call! { assert_full_mode_rejected; bootstrap_ciphertext_rns_exact_round( &rns_params, &rns_chain, &rns_bootstrap_key, &malformed_ciphertext, 1, ), "full bootstrap mode must reject before invalid RNS round index", };
     let bounded_params = bounded_noise_multiply_params();
     let (_, bounded_public_key) =
         keygen_bounded_noise_from_seed(&bounded_params, b"bfv-bootstrap-mode-bounded-keygen")
@@ -31689,50 +29662,12 @@ fn bootstrap_full_mode_requires_circuit_material() {
         &bounded_public_key,
         "bootstrap-mode-bounded-key",
     );
-    assert_full_mode_rejected(
-        bootstrap_ciphertext_bounded_noise_round(
-            &bounded_params,
-            &bounded_bootstrap_key,
-            &malformed_ciphertext,
-            1,
-        ),
-        "full bounded bootstrap mode must reject before invalid round index",
-    );
-    assert_full_mode_rejected(
-        bfv_bootstrap_key_refresh_bounded_noise_output_bound(
-            &bounded_params,
-            &bounded_bootstrap_key,
-            rounded_plaintext_decoding_capacity(&bounded_params).expect("rounded capacity") + 1,
-            0,
-        ),
-        "full bounded bootstrap mode must reject before bounded output-bound metadata",
-    );
+    assert_call! { assert_full_mode_rejected; bootstrap_ciphertext_bounded_noise_round( &bounded_params, &bounded_bootstrap_key, &malformed_ciphertext, 1, ), "full bounded bootstrap mode must reject before invalid round index", };
+    assert_call! { assert_full_mode_rejected; bfv_bootstrap_key_refresh_bounded_noise_output_bound( &bounded_params, &bounded_bootstrap_key, rounded_plaintext_decoding_capacity(&bounded_params).expect("rounded capacity") + 1, 0, ), "full bounded bootstrap mode must reject before bounded output-bound metadata", };
     let bounded_chain = bounded_noise_multiply_rns_chain();
-    assert_full_mode_rejected(
-        bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_rounds(
-            &bounded_params,
-            &bounded_chain,
-            &bounded_chain,
-            &bounded_bootstrap_key,
-            &malformed_ciphertext,
-            0,
-        ),
-        "full bounded bootstrap mode must reject before basis-extension zero-round requests",
-    );
-    assert_full_mode_rejected(
-        bootstrap_key_zero_refresh_proof_statement_digest(&params, &public_key, &bootstrap_key)
-            .map(|_| ()),
-        "full bootstrap mode must not produce a refresh proof statement",
-    );
-    assert_full_mode_rejected(
-        bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
-            &params,
-            &public_key,
-            &bootstrap_key,
-        )
-        .map(|_| ()),
-        "full bootstrap mode must not produce a bounded-noise refresh proof statement",
-    );
+    assert_call! { assert_full_mode_rejected; bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_rounds( &bounded_params, &bounded_chain, &bounded_chain, &bounded_bootstrap_key, &malformed_ciphertext, 0, ), "full bounded bootstrap mode must reject before basis-extension zero-round requests", };
+    assert_call! { assert_full_mode_rejected; bootstrap_key_zero_refresh_proof_statement_digest(&params, &public_key, &bootstrap_key) .map(|_| ()), "full bootstrap mode must not produce a refresh proof statement", };
+    assert_call! { assert_full_mode_rejected; bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest( &params, &public_key, &bootstrap_key, ) .map(|_| ()), "full bootstrap mode must not produce a bounded-noise refresh proof statement", };
 }
 #[test]
 fn evaluation_key_bundle_rejects_full_bootstrap_mode() {
@@ -31750,16 +29685,8 @@ fn evaluation_key_bundle_rejects_full_bootstrap_mode() {
         bootstrap_key: Some(bootstrap_key),
     };
     let expected = "full BFV bootstrap key mode requires bootstrapping circuit material";
-    assert_error_contains(
-        bundle.validate(&material.params),
-        expected,
-        "bundle validation must reject reserved full bootstrap mode",
-    );
-    assert_error_contains(
-        bundle.digest(&material.params),
-        expected,
-        "bundle digest must reject reserved full bootstrap mode",
-    );
+    assert_call! { assert_error_contains; bundle.validate(&material.params), expected, "bundle validation must reject reserved full bootstrap mode", };
+    assert_call! { assert_error_contains; bundle.digest(&material.params), expected, "bundle digest must reject reserved full bootstrap mode", };
     let rotation_transcripts = [BfvRotationKeyTranscriptSeed {
         rotation_steps: 1,
         seed: b"bfv-eval-key-rotation",
@@ -31769,32 +29696,9 @@ fn evaluation_key_bundle_rejects_full_bootstrap_mode() {
         max_refresh_rounds: 1,
         seed: bootstrap_seed,
     });
-    assert_error_contains(
-        bundle.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
-            &material.params,
-            &material.public_key,
-            &rotation_transcripts,
-            bootstrap_transcript,
-        ),
-        expected,
-        "transcript-bound bootstrap proof statement must reject reserved full bootstrap mode",
-    );
-    assert_error_contains(
-        bundle.bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
-            &material.params,
-            &material.public_key,
-            &rotation_transcripts,
-            bootstrap_transcript,
-        ),
-        expected,
-        "transcript-bound bounded-noise bootstrap proof statement must reject reserved full bootstrap mode",
-    );
-    assert_error_contains(
-        bundle
-            .full_bootstrap_material_proof_statement_digest(&material.params, &material.public_key),
-        expected,
-        "full-bootstrap material proof statement must reject missing material",
-    );
+    assert_call! { assert_error_contains; bundle.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, bootstrap_transcript, ), expected, "transcript-bound bootstrap proof statement must reject reserved full bootstrap mode", };
+    assert_call! { assert_error_contains; bundle.bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript( &material.params, &material.public_key, &rotation_transcripts, bootstrap_transcript, ), expected, "transcript-bound bounded-noise bootstrap proof statement must reject reserved full bootstrap mode", };
+    assert_call! { assert_error_contains; bundle .full_bootstrap_material_proof_statement_digest(&material.params, &material.public_key), expected, "full-bootstrap material proof statement must reject missing material", };
     let mut malformed_key_id_bundle = bundle;
     malformed_key_id_bundle
         .bootstrap_key
@@ -31803,16 +29707,8 @@ fn evaluation_key_bundle_rejects_full_bootstrap_mode() {
         .key_id
         .clear();
     let metadata_expected = "bootstrap key id";
-    assert_error_contains(
-        malformed_key_id_bundle.validate(&material.params),
-        metadata_expected,
-        "bundle validation must reject bootstrap key metadata before reserved mode",
-    );
-    assert_error_contains(
-        malformed_key_id_bundle.digest(&material.params),
-        metadata_expected,
-        "bundle digest must reject bootstrap key metadata before reserved mode",
-    );
+    assert_call! { assert_error_contains; malformed_key_id_bundle.validate(&material.params), metadata_expected, "bundle validation must reject bootstrap key metadata before reserved mode", };
+    assert_call! { assert_error_contains; malformed_key_id_bundle.digest(&material.params), metadata_expected, "bundle digest must reject bootstrap key metadata before reserved mode", };
 }
 #[test]
 fn full_bootstrap_material_proof_statement_digest_binds_governance_inventory() {
@@ -31940,60 +29836,20 @@ fn full_bootstrap_material_proof_statement_digest_binds_governance_inventory() {
     stale_header_proof_input.version = stale_header_proof_input.version.saturating_add(1);
     let missing_governed_material_expected =
         "BFV full-bootstrap material proof input requires governed FullBootstrapV1 material";
-    assert_error_contains(
-        validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
-            &params,
-            &public_key,
-            &missing_governed_material_bundle,
-            &artifacts,
-            &stale_header_proof_input,
-        ),
-        missing_governed_material_expected,
-        "caller-bound typed material proof input validation must reject missing governed material before proof-input headers",
-    );
-    assert_error_contains(
-        material_proof_input_material_digest_for_artifacts_v1(
-            &params,
-            &public_key,
-            &missing_governed_material_bundle,
-            &artifacts,
-            &stale_header_proof_input,
-        ),
-        missing_governed_material_expected,
-        "caller-bound typed material proof input digesting must reject missing governed material before proof-input headers",
-    );
+    assert_call! { assert_error_contains; validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1( &params, &public_key, &missing_governed_material_bundle, &artifacts, &stale_header_proof_input, ), missing_governed_material_expected, "caller-bound typed material proof input validation must reject missing governed material before proof-input headers", };
+    assert_call! { assert_error_contains; material_proof_input_material_digest_for_artifacts_v1( &params, &public_key, &missing_governed_material_bundle, &artifacts, &stale_header_proof_input, ), missing_governed_material_expected, "caller-bound typed material proof input digesting must reject missing governed material before proof-input headers", };
     assert_eq_row! { proof_input_material_digest, material_proof_input_material_digest_v1(&proof_input) .expect("hash material proof input material again"), "material proof input material digest must be deterministic" };
     let mut proof_input_statement_pair_alias = proof_input.clone();
     proof_input_statement_pair_alias.statement_hash =
         full_bootstrap_material.proof_key_pair_commitment;
     let statement_pair_alias_expected = "BFV full-bootstrap material proof input material statement hash must be distinct from proof-key pair commitment";
-    assert_error_contains(
-        validate_material_proof_input_material_v1(&proof_input_statement_pair_alias),
-        statement_pair_alias_expected,
-        "material proof input validation must reject statement hashes copied from governed proof-key pair commitments before recomputing statements",
-    );
-    assert_error_contains(
-        material_proof_input_material_digest_v1(&proof_input_statement_pair_alias),
-        statement_pair_alias_expected,
-        "material proof input digesting must reject statement hashes copied from governed proof-key pair commitments before hashing",
-    );
+    assert_call! { assert_error_contains; validate_material_proof_input_material_v1(&proof_input_statement_pair_alias), statement_pair_alias_expected, "material proof input validation must reject statement hashes copied from governed proof-key pair commitments before recomputing statements", };
+    assert_call! { assert_error_contains; material_proof_input_material_digest_v1(&proof_input_statement_pair_alias), statement_pair_alias_expected, "material proof input digesting must reject statement hashes copied from governed proof-key pair commitments before hashing", };
     let proof_input_statement_pair_alias_bytes =
         norito::to_bytes(&proof_input_statement_pair_alias)
             .expect("encode proof input with statement/proof-key pair alias");
-    assert_error_contains(
-        decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
-            &proof_input_statement_pair_alias_bytes,
-        ),
-        statement_pair_alias_expected,
-        "material proof input byte admission must reject statement/proof-key pair aliases before accepting canonical bytes",
-    );
-    assert_error_contains(
-        bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_v1(
-            &proof_input_statement_pair_alias_bytes,
-        ),
-        statement_pair_alias_expected,
-        "material proof input byte digesting must reject statement/proof-key pair aliases before hashing",
-    );
+    assert_call! { assert_error_contains; decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1( &proof_input_statement_pair_alias_bytes, ), statement_pair_alias_expected, "material proof input byte admission must reject statement/proof-key pair aliases before accepting canonical bytes", };
+    assert_call! { assert_error_contains; bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_v1( &proof_input_statement_pair_alias_bytes, ), statement_pair_alias_expected, "material proof input byte digesting must reject statement/proof-key pair aliases before hashing", };
     let proof_input_material_bytes =
         norito::to_bytes(&proof_input).expect("encode material proof input material");
     let alternate_proof_input_material_bytes = encode_with_alternate_norito_layout(&proof_input);
@@ -32156,39 +30012,9 @@ fn full_bootstrap_material_proof_statement_digest_binds_governance_inventory() {
     assert_diag! { 1076 => validate_material_proof_input_material_bytes_and_digests_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &artifact_bundle_bytes, &compressed_proof_input_material_bytes, ) };
     let compressed_artifact_bundle_error =
         "BFV full-bootstrap circuit artifact bundle bytes must use canonical v1 bytes";
-    assert_error_contains(
-        validate_material_proof_input_material_bytes_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        compressed_artifact_bundle_error,
-        "material governance byte admission must reject compressed artifact-bundle framing before compressed proof-input framing",
-    );
-    assert_error_contains(
-        validate_material_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        compressed_artifact_bundle_error,
-        "material governance byte digest admission must reject compressed artifact-bundle framing before compressed proof-input framing",
-    );
-    assert_error_contains(
-        validate_material_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
-            &params,
-            &public_key_bytes,
-            &evaluation_key_bundle_bytes,
-            &compressed_artifact_bundle_bytes,
-            &compressed_proof_input_material_bytes,
-        ),
-        compressed_artifact_bundle_error,
-        "material governance byte digests admission must reject compressed artifact-bundle framing before compressed proof-input framing",
-    );
+    assert_call! { assert_error_contains; validate_material_proof_input_material_bytes_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &compressed_proof_input_material_bytes, ), compressed_artifact_bundle_error, "material governance byte admission must reject compressed artifact-bundle framing before compressed proof-input framing", };
+    assert_call! { assert_error_contains; validate_material_proof_input_material_bytes_and_digest_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &compressed_proof_input_material_bytes, ), compressed_artifact_bundle_error, "material governance byte digest admission must reject compressed artifact-bundle framing before compressed proof-input framing", };
+    assert_call! { assert_error_contains; validate_material_proof_input_material_bytes_and_digests_for_governance_bytes_v1( &params, &public_key_bytes, &evaluation_key_bundle_bytes, &compressed_artifact_bundle_bytes, &compressed_proof_input_material_bytes, ), compressed_artifact_bundle_error, "material governance byte digests admission must reject compressed artifact-bundle framing before compressed proof-input framing", };
     let binary_split_placeholder_proof_input_material_bytes =
         b"t\xffo\xffd\xffo pending BFV full-bootstrap material proof input bytes".to_vec();
     assert_diag! { 1077 => decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1( &binary_split_placeholder_proof_input_material_bytes, ) };
@@ -32301,20 +30127,8 @@ fn full_bootstrap_material_proof_statement_digest_binds_governance_inventory() {
     ] {
         let mut aliased_statement_input = proof_input.clone();
         aliased_statement_input.statement_hash = alias_digest;
-        assert_error_contains(
-            validate_material_proof_input_material_v1(&aliased_statement_input),
-            expected,
-            &format!(
-                "material proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks"
-            ),
-        );
-        assert_error_contains(
-            material_proof_input_material_digest_v1(&aliased_statement_input),
-            expected,
-            &format!(
-                "material proof input digesting must reject statement hashes copied from {alias_label} digests before hashing"
-            ),
-        );
+        assert_call! { assert_error_contains; validate_material_proof_input_material_v1(&aliased_statement_input), expected, &format!( "material proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks" ), };
+        assert_call! { assert_error_contains; material_proof_input_material_digest_v1(&aliased_statement_input), expected, &format!( "material proof input digesting must reject statement hashes copied from {alias_label} digests before hashing" ), };
     }
     let mut zero_statement_input = proof_input.clone();
     zero_statement_input.statement_hash = Hash::prehashed([0_u8; Hash::LENGTH]);
@@ -32376,15 +30190,7 @@ fn full_bootstrap_material_proof_statement_digest_binds_governance_inventory() {
                 .as_mut()
                 .expect("full-bootstrap material is present")
                 .$field = Hash::new($preimage);
-            assert_error_contains(
-                stale_profile_bundle
-                    .full_bootstrap_material_proof_statement_digest(&params, &public_key),
-                $expected,
-                concat!(
-                    "full-bootstrap material proof statements must reject stale ",
-                    $expected
-                ),
-            );
+            assert_call! { assert_error_contains; stale_profile_bundle .full_bootstrap_material_proof_statement_digest(&params, &public_key), $expected, concat!( "full-bootstrap material proof statements must reject stale ", $expected ), };
             let mut stale_profile_input = proof_input.clone();
             stale_profile_input
                 .evaluation_keys
@@ -32395,36 +30201,9 @@ fn full_bootstrap_material_proof_statement_digest_binds_governance_inventory() {
                 .as_mut()
                 .expect("input material carries full-bootstrap material")
                 .$field = Hash::new($preimage);
-            assert_error_contains(
-                validate_material_proof_input_material_v1(&stale_profile_input),
-                $expected,
-                concat!(
-                    "material proof input material must reject stale ",
-                    $expected
-                ),
-            );
-            assert_error_contains(
-                material_proof_input_material_digest_v1(&stale_profile_input),
-                $expected,
-                concat!(
-                    "material proof input material digesting must reject stale ",
-                    $expected
-                ),
-            );
-            assert_error_contains(
-                material_proof_input_material_digest_for_artifacts_v1(
-                    &params,
-                    &public_key,
-                    &bundle,
-                    &artifacts,
-                    &stale_profile_input,
-                ),
-                $expected,
-                concat!(
-                    "caller-bound material proof input digesting must reject stale ",
-                    $expected
-                ),
-            );
+            assert_call! { assert_error_contains; validate_material_proof_input_material_v1(&stale_profile_input), $expected, concat!( "material proof input material must reject stale ", $expected ), };
+            assert_call! { assert_error_contains; material_proof_input_material_digest_v1(&stale_profile_input), $expected, concat!( "material proof input material digesting must reject stale ", $expected ), };
+            assert_call! { assert_error_contains; material_proof_input_material_digest_for_artifacts_v1( &params, &public_key, &bundle, &artifacts, &stale_profile_input, ), $expected, concat!( "caller-bound material proof input digesting must reject stale ", $expected ), };
         }};
     }
     assert_material_profile_digest_rejected!(
@@ -32705,11 +30484,7 @@ fn evaluation_key_bundle_binds_full_bootstrap_material_but_direct_execution_requ
     ] {
         let mut aliased_public_key_digest_key = bootstrap_key.clone();
         aliased_public_key_digest_key.public_key_digest = Some(alias_digest);
-        assert_error_contains(
-            validate_execution_preflight_v1(&params, &aliased_public_key_digest_key, &ciphertext),
-            expected,
-            "full-bootstrap execution preflight must reject public-key digests copied from governed material commitments",
-        );
+        assert_call! { assert_error_contains; validate_execution_preflight_v1(&params, &aliased_public_key_digest_key, &ciphertext), expected, "full-bootstrap execution preflight must reject public-key digests copied from governed material commitments", };
     }
     assert_diag! { 1148 => full_bootstrap_ciphertext_registered_rns_exact_v1(&params, &bootstrap_key, &ciphertext) };
     assert_diag! { 1149 => full_output_residual_multiple_bound_v1(&params, &bootstrap_key, 1) };
@@ -32772,66 +30547,19 @@ fn full_bootstrap_execution_preflight_rejects_encrypted_zero_refresh_material() 
     .expect("invalid zero refresh");
     let assert_rejects_encrypted_zero_refresh =
         |bootstrap_key: &BfvBootstrapKey, expected: &str, label: &str| {
-            assert_error_contains(
-                validate_execution_preflight_v1(&params, bootstrap_key, &ciphertext),
-                expected,
-                &format!("{label} must fail full-bootstrap execution preflight"),
-            );
-            assert_error_contains(
-                validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
-                    &params,
-                    bootstrap_key,
-                    &ciphertext,
-                    &artifacts,
-                ),
-                expected,
-                &format!("{label} must fail artifact-aware full-bootstrap preflight"),
-            );
-            assert_error_contains(
-                full_bootstrap_ciphertext_registered_rns_exact_v1(
-                    &params,
-                    bootstrap_key,
-                    &ciphertext,
-                ),
-                expected,
-                &format!("{label} must fail direct exact execution before requiring artifacts"),
-            );
-            assert_error_contains(
-                full_output_residual_multiple_bound_v1(&params, bootstrap_key, 1),
-                expected,
-                &format!("{label} must fail exact bound propagation before requiring artifacts"),
-            );
-            assert_error_contains(
-                full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
-                    &params,
-                    bootstrap_key,
-                    &ciphertext,
-                ),
-                expected,
-                &format!("{label} must fail bounded-noise execution before requiring artifacts"),
-            );
-            assert_error_contains(
-                full_bounded_noise_output_bound_v1(&params, bootstrap_key, 1),
-                expected,
-                &format!(
-                    "{label} must fail bounded-noise bound propagation before requiring artifacts"
-                ),
-            );
+            assert_call! { assert_error_contains; validate_execution_preflight_v1(&params, bootstrap_key, &ciphertext), expected, &format!("{label} must fail full-bootstrap execution preflight"), };
+            assert_call! { assert_error_contains; validate_bfv_full_bootstrap_execution_artifacts_preflight_v1( &params, bootstrap_key, &ciphertext, &artifacts, ), expected, &format!("{label} must fail artifact-aware full-bootstrap preflight"), };
+            assert_call! { assert_error_contains; full_bootstrap_ciphertext_registered_rns_exact_v1( &params, bootstrap_key, &ciphertext, ), expected, &format!("{label} must fail direct exact execution before requiring artifacts"), };
+            assert_call! { assert_error_contains; full_output_residual_multiple_bound_v1(&params, bootstrap_key, 1), expected, &format!("{label} must fail exact bound propagation before requiring artifacts"), };
+            assert_call! { assert_error_contains; full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1( &params, bootstrap_key, &ciphertext, ), expected, &format!("{label} must fail bounded-noise execution before requiring artifacts"), };
+            assert_call! { assert_error_contains; full_bounded_noise_output_bound_v1(&params, bootstrap_key, 1), expected, &format!( "{label} must fail bounded-noise bound propagation before requiring artifacts" ), };
         };
     let mut invalid_zero_refresh_key = bootstrap_key.clone();
     invalid_zero_refresh_key.zero_refresh = invalid_refresh.clone();
-    assert_rejects_encrypted_zero_refresh(
-        &invalid_zero_refresh_key,
-        "zero_refresh material",
-        "full-bootstrap key with encrypted-zero zero_refresh material",
-    );
+    assert_call! { assert_rejects_encrypted_zero_refresh; &invalid_zero_refresh_key, "zero_refresh material", "full-bootstrap key with encrypted-zero zero_refresh material", };
     let mut invalid_round_refresh_key = bootstrap_key;
     invalid_round_refresh_key.round_refreshes = vec![invalid_refresh];
-    assert_rejects_encrypted_zero_refresh(
-        &invalid_round_refresh_key,
-        "round refresh material",
-        "full-bootstrap key with encrypted-zero round_refreshes material",
-    );
+    assert_call! { assert_rejects_encrypted_zero_refresh; &invalid_round_refresh_key, "round refresh material", "full-bootstrap key with encrypted-zero round_refreshes material", };
 }
 #[test]
 fn full_bootstrap_material_serialization_roundtrips_and_digest_binds() {
@@ -32890,12 +30618,6 @@ fn full_bootstrap_material_serialization_roundtrips_and_digest_binds() {
 }
 #[test]
 fn bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let exact_params = params();
     let (_, exact_public_key, _) =
         keygen_from_seed(&exact_params, b"bfv-bootstrap-round-index-exact-keygen").expect("keygen");
@@ -33589,12 +31311,6 @@ fn rotation_key_rejects_empty_and_full_cycle_slot_rotations() {
 }
 #[test]
 fn outer_slot_rotation_execution_preflights_slot_metadata_before_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let exact_params = rns_exact_params();
     let exact_chain = rns_exact_chain();
     let malformed_ciphertext = BfvCiphertext {
@@ -33681,12 +31397,6 @@ fn galois_key_switch_rns_exact_matches_scalar_baseline() {
 }
 #[test]
 fn galois_key_switch_execution_preflights_public_metadata_before_ciphertext_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let malformed_ciphertext = BfvCiphertext {
         c0: Vec::new(),
         c1: Vec::new(),
@@ -33868,12 +31578,6 @@ fn packed_rotate_left_with_galois_schedule_supports_one_step_rotation() {
 }
 #[test]
 fn packed_rotate_left_execution_preflights_rotation_metadata_before_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let params = ram_lfe_bfv_parameters_v1();
     let rns_chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
     let decomposition_chain = registered_bfv_key_switch_decomposition_chain(&params)
@@ -33900,12 +31604,6 @@ fn packed_rotate_left_execution_preflights_rotation_metadata_before_shapes() {
 }
 #[test]
 fn galois_key_switch_application_preflights_key_entries_before_ciphertext_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let params = ram_lfe_bfv_parameters_v1();
     let rns_chain = registered_bfv_rns_modulus_chain(&params).expect("registered RNS chain");
     let decomposition_chain = registered_bfv_key_switch_decomposition_chain(&params)
@@ -34222,12 +31920,6 @@ fn packed_rotate_left_rejects_duplicate_and_malformed_extra_galois_keys() {
 }
 #[test]
 fn packed_rotate_left_preflights_galois_key_set_entries_before_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     let params = bounded_noise_packed_params();
     let rns_chain = bounded_noise_multiply_rns_chain();
     let (secret_key, _, _) =
@@ -34474,12 +32166,6 @@ fn key_switch_primitives_reject_truncated_entries_before_digit_zip() {
 }
 #[test]
 fn multiply_preflights_relinearization_entries_before_ciphertext_shapes() {
-    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-        let Err(err) = result else {
-            panic!("{context}");
-        };
-        assert_row! { err.to_string().contains(expected), "expected `{expected}` in `{err}`" };
-    }
     fn malformed_key_with_expected_entry_count(params: &BfvParameters) -> BfvRelinearizationKey {
         let entry_count = params
             .decomposition_digits()
@@ -34806,38 +32492,13 @@ fn shared_key_validators_reject_malformed_parameters_first() {
         &material.zero_refresh,
         vec![material.zero_refresh.clone()],
     );
-    assert_malformed_parameter_rejection(
-        validate_secret_key(&invalid_params, &material.secret_key),
-        "secret-key validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_public_key(&invalid_params, &material.public_key),
-        "public-key validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_rotation_key(&invalid_params, &material.rotation_key),
-        "rotation-key validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_relinearization_key(&invalid_params, &material.relinearization_key),
-        "relinearization-key validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_galois_key(&invalid_params, &material.galois_key),
-        "Galois-key validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_key_switch_entries(
-            &invalid_params,
-            &material.relinearization_key.entries,
-            "direct key-switch entries",
-        ),
-        "key-switch entry validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_bootstrap_key(&invalid_params, &bootstrap_key),
-        "bootstrap-key validation must reject malformed parameters",
-    );
+    assert_call! { assert_malformed_parameter_rejection; validate_secret_key(&invalid_params, &material.secret_key), "secret-key validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_public_key(&invalid_params, &material.public_key), "public-key validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_rotation_key(&invalid_params, &material.rotation_key), "rotation-key validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_relinearization_key(&invalid_params, &material.relinearization_key), "relinearization-key validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_galois_key(&invalid_params, &material.galois_key), "Galois-key validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_key_switch_entries( &invalid_params, &material.relinearization_key.entries, "direct key-switch entries", ), "key-switch entry validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_bootstrap_key(&invalid_params, &bootstrap_key), "bootstrap-key validation must reject malformed parameters", };
 }
 #[test]
 fn bfv_shape_validators_reject_malformed_parameters_first() {
@@ -34851,34 +32512,12 @@ fn bfv_shape_validators_reject_malformed_parameters_first() {
     let rns_polynomial = BfvRnsPolynomial {
         residues_by_limb: Vec::new(),
     };
-    assert_malformed_parameter_rejection(
-        validate_plaintext(&invalid_params, &[0]),
-        "plaintext validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_ciphertext(&invalid_params, &material.zero_refresh),
-        "ciphertext validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_poly(
-            &invalid_params,
-            &material.zero_refresh.c0,
-            "direct polynomial",
-        ),
-        "polynomial validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_galois_automorphism_power(&invalid_params, 3).map(|_| ()),
-        "Galois automorphism validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        affine_circuit.validate(&invalid_params, 1),
-        "affine circuit validation must reject malformed parameters",
-    );
-    assert_malformed_parameter_rejection(
-        validate_rns_polynomial(&invalid_params, &rns_exact_chain(), &rns_polynomial),
-        "RNS polynomial validation must reject malformed parameters",
-    );
+    assert_call! { assert_malformed_parameter_rejection; validate_plaintext(&invalid_params, &[0]), "plaintext validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_ciphertext(&invalid_params, &material.zero_refresh), "ciphertext validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_poly( &invalid_params, &material.zero_refresh.c0, "direct polynomial", ), "polynomial validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_galois_automorphism_power(&invalid_params, 3).map(|_| ()), "Galois automorphism validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; affine_circuit.validate(&invalid_params, 1), "affine circuit validation must reject malformed parameters", };
+    assert_call! { assert_malformed_parameter_rejection; validate_rns_polynomial(&invalid_params, &rns_exact_chain(), &rns_polynomial), "RNS polynomial validation must reject malformed parameters", };
 }
 #[test]
 fn evaluation_key_bundle_rejects_adversarial_rotation_metadata() {
@@ -34889,12 +32528,7 @@ fn evaluation_key_bundle_rejects_adversarial_rotation_metadata() {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &duplicate_rotation,
-        "duplicate rotation key",
-        "duplicate rotation keys must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &duplicate_rotation, "duplicate rotation key", "duplicate rotation keys must be rejected", };
     let zero_step_rotation = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: vec![BfvRotationKey {
@@ -34904,12 +32538,7 @@ fn evaluation_key_bundle_rejects_adversarial_rotation_metadata() {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &zero_step_rotation,
-        "greater than zero",
-        "zero-step rotation keys must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &zero_step_rotation, "greater than zero", "zero-step rotation keys must be rejected", };
     let mut malformed_rotation_key = material.rotation_key;
     malformed_rotation_key.zero_refresh.c0.pop();
     let malformed_rotation = BfvEvaluationKeyBundle {
@@ -34918,12 +32547,7 @@ fn evaluation_key_bundle_rejects_adversarial_rotation_metadata() {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &malformed_rotation,
-        "ciphertext c0 length",
-        "malformed rotation refresh ciphertext must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &malformed_rotation, "ciphertext c0 length", "malformed rotation refresh ciphertext must be rejected", };
 }
 #[test]
 fn evaluation_key_bundle_digest_rejects_inert_refresh_material() {
@@ -35018,12 +32642,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &blank_bootstrap_key,
-        "bootstrap key id",
-        "blank bootstrap key ids must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &blank_bootstrap_key, "bootstrap key id", "blank bootstrap key ids must be rejected", };
     let placeholder_bootstrap_key = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: Vec::new(),
@@ -35035,12 +32654,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &placeholder_bootstrap_key,
-        "placeholder text",
-        "placeholder bootstrap key ids must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &placeholder_bootstrap_key, "placeholder text", "placeholder bootstrap key ids must be rejected", };
     let binary_decorated_placeholder_bootstrap_key = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: Vec::new(),
@@ -35052,12 +32666,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &binary_decorated_placeholder_bootstrap_key,
-        "placeholder text",
-        "binary-decorated placeholder bootstrap key ids must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &binary_decorated_placeholder_bootstrap_key, "placeholder text", "binary-decorated placeholder bootstrap key ids must be rejected", };
     let binary_split_placeholder_bootstrap_key = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: Vec::new(),
@@ -35069,12 +32678,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &binary_split_placeholder_bootstrap_key,
-        "placeholder text",
-        "binary-split placeholder bootstrap key ids must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &binary_split_placeholder_bootstrap_key, "placeholder text", "binary-split placeholder bootstrap key ids must be rejected", };
     let padded_binary_split_placeholder_bootstrap_key = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: Vec::new(),
@@ -35086,12 +32690,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &padded_binary_split_placeholder_bootstrap_key,
-        "placeholder text",
-        "whitespace-prefixed binary-split placeholder bootstrap key ids must be rejected before canonicality",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &padded_binary_split_placeholder_bootstrap_key, "placeholder text", "whitespace-prefixed binary-split placeholder bootstrap key ids must be rejected before canonicality", };
     let padded_placeholder_bootstrap_key = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: Vec::new(),
@@ -35103,12 +32702,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &padded_placeholder_bootstrap_key,
-        "placeholder text",
-        "whitespace-prefixed placeholder bootstrap key ids must be rejected before canonicality",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &padded_placeholder_bootstrap_key, "placeholder text", "whitespace-prefixed placeholder bootstrap key ids must be rejected before canonicality", };
     let padded_bootstrap_key = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: Vec::new(),
@@ -35173,12 +32767,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata() {
             Vec::new(),
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &zero_round_key,
-        "max_refresh_rounds",
-        "zero bootstrap refresh-round capacity must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &zero_round_key, "max_refresh_rounds", "zero bootstrap refresh-round capacity must be rejected", };
     let err = bootstrap_key_with_max_refresh_rounds_from_seed(
         &material.params,
         &material.public_key,
@@ -35226,12 +32815,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &missing_round_refresh,
-        "round refresh ciphertexts",
-        "missing per-round bootstrap refresh material must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &missing_round_refresh, "round refresh ciphertexts", "missing per-round bootstrap refresh material must be rejected", };
     let mut malformed_zero_refresh = material.zero_refresh.clone();
     malformed_zero_refresh.c0.pop();
     let malformed_missing_round_refresh = BfvEvaluationKeyBundle {
@@ -35245,12 +32829,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata() {
             vec![malformed_zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &malformed_missing_round_refresh,
-        "round refresh ciphertexts",
-        "bootstrap round-count metadata must be rejected before malformed refresh shapes",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &malformed_missing_round_refresh, "round refresh ciphertexts", "bootstrap round-count metadata must be rejected before malformed refresh shapes", };
     let duplicate_round_refresh = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: Vec::new(),
@@ -35262,12 +32841,7 @@ fn evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata() {
             vec![material.zero_refresh.clone(), material.zero_refresh.clone()],
         )),
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &duplicate_round_refresh,
-        "duplicate round refresh",
-        "duplicate per-round bootstrap refresh material must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &duplicate_round_refresh, "duplicate round refresh", "duplicate per-round bootstrap refresh material must be rejected", };
 }
 #[test]
 fn evaluation_key_bundle_rejects_adversarial_galois_and_bundle_metadata() {
@@ -35278,12 +32852,7 @@ fn evaluation_key_bundle_rejects_adversarial_galois_and_bundle_metadata() {
         galois_keys: vec![material.galois_key.clone(), material.galois_key.clone()],
         bootstrap_key: None,
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &duplicate_galois,
-        "duplicate Galois key",
-        "duplicate Galois keys must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &duplicate_galois, "duplicate Galois key", "duplicate Galois keys must be rejected", };
     let mut malformed_galois_key = material.galois_key.clone();
     malformed_galois_key.entries.pop();
     let malformed_galois = BfvEvaluationKeyBundle {
@@ -35292,24 +32861,14 @@ fn evaluation_key_bundle_rejects_adversarial_galois_and_bundle_metadata() {
         galois_keys: vec![malformed_galois_key],
         bootstrap_key: None,
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &malformed_galois,
-        "Galois key expected",
-        "malformed Galois key entries must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &malformed_galois, "Galois key expected", "malformed Galois key entries must be rejected", };
     let oversized_galois_bundle = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key.clone(),
         rotation_keys: Vec::new(),
         galois_keys: vec![material.galois_key; BFV_EVALUATION_KEY_MAX_GALOIS_KEYS + 1],
         bootstrap_key: None,
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &oversized_galois_bundle,
-        "Galois keys",
-        "oversized Galois-key bundles must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &oversized_galois_bundle, "Galois keys", "oversized Galois-key bundles must be rejected", };
     let oversized_rotation_bundle = BfvEvaluationKeyBundle {
         relinearization_key: material.relinearization_key,
         rotation_keys: (1..=u32::try_from(BFV_EVALUATION_KEY_MAX_ROTATION_KEYS + 1)
@@ -35322,12 +32881,7 @@ fn evaluation_key_bundle_rejects_adversarial_galois_and_bundle_metadata() {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_evaluation_key_bundle_error_contains(
-        &material.params,
-        &oversized_rotation_bundle,
-        "rotation keys",
-        "oversized rotation-key bundles must be rejected",
-    );
+    assert_call! { assert_evaluation_key_bundle_error_contains; &material.params, &oversized_rotation_bundle, "rotation keys", "oversized rotation-key bundles must be rejected", };
 }
 #[test]
 fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
@@ -35346,11 +32900,7 @@ fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_bundle_error_contains(
-        &duplicate_rotation,
-        "duplicate rotation key",
-        "duplicate rotation metadata must be rejected before malformed relinearization shapes",
-    );
+    assert_call! { assert_bundle_error_contains; &duplicate_rotation, "duplicate rotation key", "duplicate rotation metadata must be rejected before malformed relinearization shapes", };
     let zero_step_rotation = BfvEvaluationKeyBundle {
         relinearization_key: malformed_relinearization_key.clone(),
         rotation_keys: vec![BfvRotationKey {
@@ -35363,11 +32913,7 @@ fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_bundle_error_contains(
-        &zero_step_rotation,
-        "greater than zero",
-        "zero rotation metadata must be rejected before malformed relinearization shapes",
-    );
+    assert_call! { assert_bundle_error_contains; &zero_step_rotation, "greater than zero", "zero rotation metadata must be rejected before malformed relinearization shapes", };
     let mut malformed_galois_key = material.galois_key.clone();
     malformed_galois_key.entries.pop();
     let duplicate_galois = BfvEvaluationKeyBundle {
@@ -35376,11 +32922,7 @@ fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
         galois_keys: vec![malformed_galois_key, material.galois_key.clone()],
         bootstrap_key: None,
     };
-    assert_bundle_error_contains(
-        &duplicate_galois,
-        "duplicate Galois key",
-        "duplicate Galois metadata must be rejected before malformed key shapes",
-    );
+    assert_call! { assert_bundle_error_contains; &duplicate_galois, "duplicate Galois key", "duplicate Galois metadata must be rejected before malformed key shapes", };
     let malformed_bootstrap_key_id = BfvEvaluationKeyBundle {
         relinearization_key: malformed_relinearization_key.clone(),
         rotation_keys: Vec::new(),
@@ -35392,11 +32934,7 @@ fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_bundle_error_contains(
-        &malformed_bootstrap_key_id,
-        "canonical",
-        "bootstrap key-id metadata must be rejected before malformed relinearization shapes",
-    );
+    assert_call! { assert_bundle_error_contains; &malformed_bootstrap_key_id, "canonical", "bootstrap key-id metadata must be rejected before malformed relinearization shapes", };
     let err = malformed_bootstrap_key_id
         .digest(&material.params)
         .expect_err("digest must preflight bundle metadata before encoding");
@@ -35412,11 +32950,7 @@ fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
             vec![material.zero_refresh.clone()],
         )),
     };
-    assert_bundle_error_contains(
-        &missing_bootstrap_round,
-        "round refresh ciphertexts",
-        "bootstrap round-count metadata must be rejected before malformed relinearization shapes",
-    );
+    assert_call! { assert_bundle_error_contains; &missing_bootstrap_round, "round refresh ciphertexts", "bootstrap round-count metadata must be rejected before malformed relinearization shapes", };
     let shape_only_relinearization_error = BfvEvaluationKeyBundle {
         relinearization_key: malformed_relinearization_key,
         rotation_keys: vec![BfvRotationKey {
@@ -35429,11 +32963,7 @@ fn evaluation_key_bundle_preflights_public_metadata_before_key_shapes() {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    assert_bundle_error_contains(
-        &shape_only_relinearization_error,
-        "relinearization key expected",
-        "valid public metadata should still reach key-material shape validation",
-    );
+    assert_call! { assert_bundle_error_contains; &shape_only_relinearization_error, "relinearization key expected", "valid public metadata should still reach key-material shape validation", };
 }
 #[cfg(feature = "bfv-accel")]
 #[test]

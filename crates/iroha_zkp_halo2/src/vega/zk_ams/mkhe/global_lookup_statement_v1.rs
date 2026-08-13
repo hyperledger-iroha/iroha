@@ -7,10 +7,12 @@
 //! false.
 
 #![allow(dead_code, reason = "production entry seals are uninhabited")]
-use core::convert::Infallible;
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
+use core::convert::Infallible;
 #[path = "global_lookup_statement_v1/challenge_v1.rs"]
 mod challenge_v1;
+#[path = "global_lookup_statement_v1/challenge_v2.rs"]
+pub(super) mod challenge_v2;
 #[path = "global_lookup_statement_v1/external_sumcheck_storage_v1.rs"]
 mod external_sumcheck_storage_v1;
 #[path = "global_lookup_statement_v1/global_lookup_committed_mle_v1.rs"]

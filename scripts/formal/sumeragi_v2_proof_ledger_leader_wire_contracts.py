@@ -388,6 +388,19 @@ let verdict = fair_v2_ingress_queue_gate_verdict(
     )
     _require_rust_token_sequence(
         ingress_path,
+        selector,
+        """
+let selected = select_fair_v2_ingress_candidate(
+    &candidates,
+    |(admission_ordinal, _, gate, obsolete)| (*admission_ordinal, *gate, *obsolete),
+    |(_, inbound, _, _)| predicate(inbound.as_ref()),
+);
+""",
+        "the physical selector must delegate to the shared strict-before-dependency fair choice",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
         projection,
         """
 let control_barrier = selected_barrier.as_ref().is_some_and(|owner| {

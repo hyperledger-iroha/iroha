@@ -20,16 +20,16 @@
 //! fields are uninhabited. Consequently no production caller can create these
 //! spools yet. Test-only construction exercises the storage state machine with
 //! tiny geometry. Every readiness and completion axis remains false.
+use super::super::super::manifest::{RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1};
+use super::is_prime_u64;
+use crate::vega::sponge::{Keccak256, keccak256};
 use core::{convert::Infallible, fmt};
-use std::path::Path;
 use iroha_confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1,
     ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
-use crate::vega::sponge::{Keccak256, keccak256};
-use super::super::super::manifest::{RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1};
-use super::is_prime_u64;
+use std::path::Path;
 const Q_PCS_SPOOL_VERSION_V2: u8 = 2;
 const OPENING_REPETITIONS_V2: u8 = 5;
 const ROWS_PER_REPETITION_V2: u8 = 2;

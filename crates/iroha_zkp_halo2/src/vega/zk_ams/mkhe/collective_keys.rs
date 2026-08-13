@@ -4,7 +4,6 @@
 //! compact Galois keys in the frozen T256 binary-rotation schedule.  The large
 //! key payload is content addressed; consensus binds this small exact manifest
 //! and never interprets network availability as a cryptographic validity bit.
-use std::collections::BTreeSet;
 use super::{
     MKHE_VERSION_V1, ZkAmsMkheErrorV1, ZkAmsMkheGovernedRosterWireV1,
     manifest::release_profile_v1,
@@ -15,6 +14,7 @@ use super::{
     resource::derive_resource_certificate_v1,
 };
 use crate::vega::sponge::{Keccak256, keccak256};
+use std::collections::BTreeSet;
 const COLLECTIVE_EVALUATED_KEY_MANIFEST_TAG_V1: [u8; 4] = *b"ZAEK";
 const COLLECTIVE_EVALUATED_KEY_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-manifest";

@@ -5,8 +5,14 @@
 //! batch size.  A release engineer must run it in an externally resource-
 //! contained process, archive the emitted digest and resource record, and only
 //! then pin that digest in the production implementation certificate.
+use super::super::super::{
+    ZK_AMS_ACTION_INDEX_V1, ZkAmsAdmissionPublicInputV1, ZkAmsAdmissionRelationWitnessV1,
+    ZkAmsProofContextV1,
+};
+use super::super::phase23_encrypted::{
+    ZkAmsPhase23AccumulatorShapeV1, zk_ams_phase23_release_map_manifest_v1,
+};
 use super::*;
-use std::sync::Arc;
 use crate::vega::{
     circuit::CircuitAssignment,
     masked_relaxed::{
@@ -17,13 +23,7 @@ use crate::vega::{
     sponge::Keccak256,
 };
 use hex_literal::hex;
-use super::super::super::{
-    ZK_AMS_ACTION_INDEX_V1, ZkAmsAdmissionPublicInputV1, ZkAmsAdmissionRelationWitnessV1,
-    ZkAmsProofContextV1,
-};
-use super::super::phase23_encrypted::{
-    ZkAmsPhase23AccumulatorShapeV1, zk_ams_phase23_release_map_manifest_v1,
-};
+use std::sync::Arc;
 const RELEASE_TERMINAL_KAT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.release-terminal-kat";
 const RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1: u32 = 21;
 #[derive(Clone)]

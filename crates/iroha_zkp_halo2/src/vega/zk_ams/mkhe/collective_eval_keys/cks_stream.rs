@@ -633,7 +633,7 @@ where
         return Err(ZkAmsMkheErrorV1::InvalidPartySet);
     }
     let mut source_components = [None; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1];
-    for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+    for (party_index, source_component) in source_components.iter_mut().enumerate() {
         let party = read_canonical_party(&mut body)?;
         if party != roster.parties()[party_index] {
             return Err(ZkAmsMkheErrorV1::InvalidPartySet);
@@ -642,7 +642,7 @@ where
             0 => {}
             1 => {
                 let component = index_canonical_cks_polynomial(&mut body, &profile)?;
-                source_components[party_index] = Some(component);
+                *source_component = Some(component);
             }
             _ => return Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
         }
@@ -726,7 +726,7 @@ where
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let contribution_ceiling = maximum_cks_contribution_record_bytes()?;
     let mut contribution_digests = [[0_u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1];
-    for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+    for (party_index, contribution_digest) in contribution_digests.iter_mut().enumerate() {
         let bytes = usize::try_from(read_canonical_u64(&mut body)?)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
         if u64::try_from(bytes)
@@ -756,7 +756,7 @@ where
             statement.source_digest,
         )?;
         drop(encoded);
-        contribution_digests[party_index] = verify_indexed_cks_contribution_limbwise(
+        *contribution_digest = verify_indexed_cks_contribution_limbwise(
             &mut *body.reader,
             &statement,
             party_index,

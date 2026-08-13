@@ -13,13 +13,13 @@
 // Production inlines this private gate; changing it to borrowed wrappers would
 // create a second, unverified calling relation solely to silence this lint.
 #![allow(clippy::large_types_passed_by_value)]
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt,
-};
 use super::{
     ConsensusMessageV2, ContextId, Digest, DurableState, HeightContext, Reducer, Round,
     SignedTimeoutVote, Subject, TimeoutCertificate, ValidatorId, reducer::PendingPersistence,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
 };
 /// Maximum number of effects one reducer input can emit.
 ///
@@ -6290,6 +6290,13 @@ impl<P> CheckedProductionTransition<P> {
     }
     /// Borrow the versioned witness attached by the production checker.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "first-release witness is consumed by release validation"
+        )
+    )]
     pub(crate) const fn first_release_witness(
         &self,
     ) -> Option<&ProductionInFlightFirstReleaseTransitionWitnessV1> {

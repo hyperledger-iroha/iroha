@@ -23289,7 +23289,6 @@ seiyaku Callee {
             .value()
             .as_ref()
             .clone()
-            .into_inner()
     }
     fn assert_alias_current_binding(
         case: &AliasContractCaseV1,

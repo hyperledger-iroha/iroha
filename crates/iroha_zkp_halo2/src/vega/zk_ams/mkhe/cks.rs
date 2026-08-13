@@ -4,20 +4,6 @@
 //! streaming corridor. The former native full-roster owner and replay path is
 //! retained only for differential tests; compiling it into production would
 //! make simultaneous ownership of the source and contribution set possible.
-use core::mem::size_of;
-use super::{
-    BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, ZkAmsMkheErrorV1,
-    ZkAmsMkheGovernedRosterWireV1, ZkAmsMkhePartyIdV1, ZkAmsMkheWireBindingV1,
-    decryption::{
-        SignedWideV1, WIDE_RELATION_MASK_SLACK_LOG2_V1, small_response_parameters,
-        wide_relation_challenge_weight, wide_response_parameters,
-    },
-    manifest::{
-        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_noise_certificate_v1,
-    },
-    wire::{ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, derive_wire_length_certificate_v1},
-};
-use crate::vega::sponge::{Keccak256, keccak256, shake256};
 #[cfg(test)]
 use super::{
     ArtifactAuthentication, MaskedRelaxedRandomSourceV1, RnsPolynomial, SecretPolynomial,
@@ -32,6 +18,20 @@ use super::{
     manifest::zk_ams_mkhe_release_manifest_v1,
     wire::zk_ams_mkhe_cks_statement_digest_v1,
 };
+use super::{
+    BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, ZkAmsMkheErrorV1,
+    ZkAmsMkheGovernedRosterWireV1, ZkAmsMkhePartyIdV1, ZkAmsMkheWireBindingV1,
+    decryption::{
+        SignedWideV1, WIDE_RELATION_MASK_SLACK_LOG2_V1, small_response_parameters,
+        wide_relation_challenge_weight, wide_response_parameters,
+    },
+    manifest::{
+        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_noise_certificate_v1,
+    },
+    wire::{ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, derive_wire_length_certificate_v1},
+};
+use crate::vega::sponge::{Keccak256, keccak256, shake256};
+use core::mem::size_of;
 const CKS_PROOF_TAG_V1: [u8; 4] = *b"ZACP";
 const CKS_PROOF_HEADER_BYTES_V1: usize = 4 + 1 + 2 + 4 + 32 + 4 + 4 + 4;
 const CKS_SIGNED_SMALL_BYTES_V1: usize = size_of::<i64>();
@@ -463,7 +463,7 @@ impl Drop for ZkAmsMkheCksProofV1 {
 impl ZkAmsMkheCksProofV1 {
     fn smudge_response_count(&self) -> Option<usize> {
         let width = usize::from(self.wide_response_bytes);
-        if width == 0 || self.smudge_response.len() % width != 0 {
+        if width == 0 || !self.smudge_response.len().is_multiple_of(width) {
             None
         } else {
             Some(self.smudge_response.len() / width)
@@ -476,7 +476,7 @@ impl ZkAmsMkheCksProofV1 {
         ZkAmsMkheErrorV1,
     > {
         let width = usize::from(self.wide_response_bytes);
-        if width == 0 || self.smudge_response.len() % width != 0 {
+        if width == 0 || !self.smudge_response.len().is_multiple_of(width) {
             return Err(ZkAmsMkheErrorV1::InvalidCksProof);
         }
         Ok(self

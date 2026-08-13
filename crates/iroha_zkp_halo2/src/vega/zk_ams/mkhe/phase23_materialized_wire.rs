@@ -1,5 +1,4 @@
 //! Bounded canonical streaming for materialized Phase-II/III accumulators.
-use std::io::{Read, Write};
 use super::manifest::release_profile_v1;
 use super::phase23_encrypted::{
     PHASE23_ENCRYPTED_VERSION_V1, PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1,
@@ -8,6 +7,7 @@ use super::phase23_encrypted::{
     validate_materialized,
 };
 use super::{Scalar, ZkAmsMkheErrorV1};
+use std::io::{Read, Write};
 struct ZeroizingMaterializedScalarBytesV1([u8; 32]);
 impl ZeroizingMaterializedScalarBytesV1 {
     fn new(value: Scalar) -> Self {

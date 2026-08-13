@@ -1329,13 +1329,13 @@ impl<'a> FixedDecoder<'a> {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
     use super::*;
     use crate::vega::{
         MaskedRelaxedRandomErrorV1,
         sponge::{keccak256, shake256},
     };
     use hex_literal::hex;
+    use std::sync::OnceLock;
     struct KatRandom {
         seed: Vec<u8>,
         counter: u64,

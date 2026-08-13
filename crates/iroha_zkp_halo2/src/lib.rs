@@ -33,6 +33,12 @@ mod norito_types;
 mod params;
 mod poly;
 pub mod poseidon;
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "shared test-directory helper is retained for parked storage-backed tests"
+)]
+mod testing;
 mod transcript;
 pub mod vega;
 // Re-exports for the default (Pallas) backend.

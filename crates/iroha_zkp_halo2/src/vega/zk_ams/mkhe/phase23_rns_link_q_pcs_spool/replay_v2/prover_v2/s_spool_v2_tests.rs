@@ -1,9 +1,9 @@
+use super::*;
 use std::{
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-use super::*;
 static DIRECTORY_SEQUENCE_V2: AtomicU64 = AtomicU64::new(0);
 static TEST_MODULI_V2: [u64; 2] = [97, 113];
 const RELEASE_PARAMETER_KAT_V2: [u8; 32] = [

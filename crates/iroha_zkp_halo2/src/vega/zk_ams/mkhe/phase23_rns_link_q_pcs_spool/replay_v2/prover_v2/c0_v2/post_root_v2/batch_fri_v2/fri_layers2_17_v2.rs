@@ -1,11 +1,11 @@
 //! Bounded authenticated B1-to-B17 FRI continuation and equal-terminal binding.
-use core::{array, convert::Infallible};
-use std::path::Path;
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use super::*;
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     ProverFriQueriesV2, ProverFriRoundsReadyV2,
 };
-use super::*;
+use core::{array, convert::Infallible};
+use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use std::path::Path;
 const FRI_CONTINUATION_LAYERS_V2: usize = 17;
 const FRI_CONTINUATION_READ_BYTES_V2: u64 = 3_190_802_240;
 const FRI_CONTINUATION_WRITE_BYTES_V2: u64 = 1_595_410_240;

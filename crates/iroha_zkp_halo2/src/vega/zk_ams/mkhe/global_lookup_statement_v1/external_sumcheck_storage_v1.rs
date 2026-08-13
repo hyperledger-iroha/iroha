@@ -9,17 +9,17 @@
     dead_code,
     reason = "production producer/evaluator/transcript/sink seals are uninhabited"
 )]
-use core::convert::Infallible;
-use std::path::{Path, PathBuf};
-use iroha_confidential_spool::{
-    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
-    ConfidentialSpoolWriterV1,
-};
+use super::global_lookup_topology_digest_v1;
 use crate::vega::{
     VegaT256ScalarV1 as Scalar, bulletproof_t256::ZeroizingT256ScalarCopyV1 as SecretScalarV1,
     sponge::Keccak256,
 };
-use super::global_lookup_topology_digest_v1;
+use core::convert::Infallible;
+use iroha_confidential_spool::{
+    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
+    ConfidentialSpoolWriterV1,
+};
+use std::path::{Path, PathBuf};
 const STORAGE_VERSION_V1: u8 = 1;
 const GLOBAL_STATEMENT_ORDINAL_V1: u8 = 15;
 const GLOBAL_SUMCHECK_ROUNDS_V1: u8 = 29;

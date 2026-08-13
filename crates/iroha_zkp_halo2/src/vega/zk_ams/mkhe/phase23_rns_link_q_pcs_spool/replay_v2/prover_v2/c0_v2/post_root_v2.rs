@@ -7,12 +7,7 @@
 //! 20-slot Merkle frontier. The combined move-only result retains coefficient,
 //! C0, Cq, and S snapshots, but batching, FRI, proof, and release gates stay
 //! false and the production authority remains uninhabited.
-use core::{convert::Infallible, sync::atomic};
-use std::path::Path;
-use iroha_confidential_spool::{
-    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
-    ConfidentialSpoolWriterV1,
-};
+use super::*;
 use crate::vega::{
     sponge::Keccak256,
     zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
@@ -20,7 +15,12 @@ use crate::vega::{
         SoundnessErrorV2,
     },
 };
-use super::*;
+use core::{convert::Infallible, sync::atomic};
+use iroha_confidential_spool::{
+    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
+    ConfidentialSpoolWriterV1,
+};
+use std::path::Path;
 #[path = "post_root_v2/batch_fri_v2.rs"]
 mod batch_fri_v2;
 #[path = "post_root_v2/global_lookup_s_replay_v1.rs"]

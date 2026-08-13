@@ -1,25 +1,14 @@
 //! Integration tests for the peer-to-peer networking layer.
 #![allow(unexpected_cfgs)]
-use std::{
-    collections::HashSet,
-    fmt::Debug,
-    num::NonZeroUsize,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
-};
+use super::next_port;
 use futures::{prelude::*, stream::FuturesUnordered, task::AtomicWaker};
 use iroha_config::parameters::{
     actual::{
-        LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-        SoranetPow, SoranetPrivacy, SoranetVpn,
+        Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake, SoranetPow,
     },
-    defaults::network::{
-        DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, PEER_GOSSIP_PERIOD, RELAY_TTL,
-        REPLY_WRITER_FLUSH_TIMEOUT,
-    },
+    defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, TRUST_GOSSIP},
 };
+#[cfg(feature = "p2p_tls")]
 use iroha_config_base::WithOrigin;
 use iroha_crypto::{
     KeyPair,
@@ -33,11 +22,19 @@ use iroha_logger::{prelude::*, test_logger};
 use iroha_p2p::{NetworkHandle, network::message::*, peer::message::PeerMessage};
 use iroha_primitives::addr::socket_addr;
 use norito::codec::{Decode, Encode};
+use std::{
+    collections::HashSet,
+    fmt::Debug,
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+};
 use tokio::{
     sync::{Barrier, mpsc},
     time::Duration,
 };
-use super::next_port;
 #[derive(Clone, Debug, Decode, Encode)]
 struct TestMessage(String);
 // Classify test payloads into a generic topic
@@ -73,141 +70,18 @@ macro_rules! impl_decode_from_slice_via_canonical {
     };
 }
 impl_decode_from_slice_via_canonical!(TestMessage, MultiTopic, ConsensusMessage);
-#[allow(clippy::too_many_lines)]
 fn trust_config(
     addr: iroha_primitives::addr::SocketAddr,
     trust_gossip: bool,
     idle_timeout: Duration,
 ) -> Config {
-    Config {
-        address: WithOrigin::inline(addr.clone()),
-        public_address: WithOrigin::inline(addr),
-        relay_mode: RelayMode::Disabled,
-        relay_hub_addresses: Vec::new(),
-        relay_ttl: RELAY_TTL,
-        soranet_handshake: default_soranet_handshake(),
-        soranet_privacy: SoranetPrivacy::default(),
-        soranet_vpn: SoranetVpn::default(),
-        lane_profile: LaneProfile::Core,
-        require_sm_handshake_match: true,
-        require_sm_openssl_preview_match: true,
+    super::test_network_config(
+        addr.clone(),
+        addr,
         idle_timeout,
-        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-        peer_gossip_period: PEER_GOSSIP_PERIOD,
-        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-        trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-        trust_penalty_bad_gossip:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-        trust_penalty_unknown_peer:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-        trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-        debug_packet_loss_inbound_percent: 0,
-        debug_packet_loss_outbound_percent: 0,
+        default_soranet_handshake(),
         trust_gossip,
-        prefer_ws_fallback: false,
-        p2p_proxy: None,
-        p2p_proxy_required: false,
-        p2p_no_proxy: vec![],
-        p2p_proxy_tls_verify: true,
-        p2p_proxy_tls_pinned_cert_der_base64: None,
-        happy_eyeballs_stagger: Duration::from_millis(100),
-        addr_ipv6_first: false,
-        dns_refresh_interval: None,
-        dns_refresh_ttl: None,
-        quic_enabled: false,
-        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-        quic_datagram_max_payload_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-        quic_datagram_receive_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-        quic_datagram_send_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-        scion: iroha_config::parameters::actual::ScionConfig::default(),
-        tls_enabled: false,
-        tls_fallback_to_plain: true,
-        tls_listen_address: None,
-        tls_inbound_only: false,
-        p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
-        p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
-        p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
-        p2p_outbound_frame_queue_max_high_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-        p2p_outbound_frame_queue_max_low_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-        p2p_outbound_frame_queue_max_high_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-        p2p_outbound_frame_queue_max_low_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-        p2p_subscriber_queue_cap:
-            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-        consensus_ingress_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-        consensus_ingress_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-        consensus_ingress_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-        consensus_ingress_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-        consensus_ingress_critical_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-        consensus_ingress_critical_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-        consensus_ingress_critical_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-        consensus_ingress_critical_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_penalty_threshold:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-        consensus_ingress_penalty_window: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-        ),
-        consensus_ingress_penalty_cooldown: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-        ),
-        max_incoming: None,
-        max_total_connections: None,
-        accept_rate_per_ip_per_sec: None,
-        accept_burst_per_ip: None,
-        max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-        accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-        accept_prefix_v4_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-        accept_prefix_v6_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-        accept_rate_per_prefix_per_sec: None,
-        accept_burst_per_prefix: None,
-        low_priority_rate_per_sec: None,
-        low_priority_burst: None,
-        low_priority_bytes_per_sec: None,
-        low_priority_bytes_burst: None,
-        allowlist_only: false,
-        allow_keys: vec![],
-        deny_keys: vec![],
-        allow_cidrs: vec![],
-        deny_cidrs: vec![],
-        disconnect_on_post_overflow: true,
-        max_frame_bytes: 1_048_576,
-        tcp_nodelay: true,
-        tcp_keepalive: None,
-        max_frame_bytes_consensus: 262_144,
-        max_frame_bytes_control: 262_144,
-        max_frame_bytes_block_sync: 1_048_576,
-        max_frame_bytes_tx_gossip: 262_144,
-        max_frame_bytes_peer_gossip: 131_072,
-        max_frame_bytes_health: 65_536,
-        max_frame_bytes_other: 262_144,
-        tls_only_v1_3: true,
-        quic_max_idle_timeout: None,
-    }
+    )
 }
 #[cfg(feature = "p2p_ws")]
 fn websocket_test_config(
@@ -215,11 +89,7 @@ fn websocket_test_config(
     idle_timeout: Duration,
     prefer_ws_fallback: bool,
 ) -> Config {
-    let mut config = trust_config(
-        address,
-        iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-        idle_timeout,
-    );
+    let mut config = trust_config(address, TRUST_GOSSIP, idle_timeout);
     config.prefer_ws_fallback = prefer_ws_fallback;
     config.happy_eyeballs_stagger = Duration::from_millis(50);
     config.p2p_queue_cap_high =
@@ -261,135 +131,7 @@ async fn network_create() {
     let public_key = key_pair.public_key().clone();
     let idle_timeout = Duration::from_secs(60);
     let chain_id = super::test_network_id("test_chain");
-    let config = Config {
-        address: WithOrigin::inline(address.clone()),
-        public_address: WithOrigin::inline(address.clone()),
-        relay_mode: RelayMode::Disabled,
-        relay_hub_addresses: Vec::new(),
-        relay_ttl: RELAY_TTL,
-        soranet_handshake: default_soranet_handshake(),
-        soranet_privacy: SoranetPrivacy::default(),
-        soranet_vpn: SoranetVpn::default(),
-        lane_profile: LaneProfile::Core,
-        require_sm_handshake_match: true,
-        require_sm_openssl_preview_match: true,
-        idle_timeout,
-        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-        peer_gossip_period: PEER_GOSSIP_PERIOD,
-        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-        trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-        trust_penalty_bad_gossip:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-        trust_penalty_unknown_peer:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-        trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-        debug_packet_loss_inbound_percent: 0,
-        debug_packet_loss_outbound_percent: 0,
-        trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-        prefer_ws_fallback: false,
-        p2p_proxy: None,
-        p2p_proxy_required: false,
-        p2p_no_proxy: vec![],
-        p2p_proxy_tls_verify: true,
-        p2p_proxy_tls_pinned_cert_der_base64: None,
-        happy_eyeballs_stagger: Duration::from_millis(100),
-        addr_ipv6_first: false,
-        dns_refresh_interval: None,
-        dns_refresh_ttl: None,
-        quic_enabled: false,
-        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-        quic_datagram_max_payload_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-        quic_datagram_receive_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-        quic_datagram_send_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-        scion: iroha_config::parameters::actual::ScionConfig::default(),
-        tls_enabled: false,
-        tls_fallback_to_plain: true,
-        tls_listen_address: None,
-        tls_inbound_only: false,
-        p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
-        p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
-        p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
-        p2p_outbound_frame_queue_max_high_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-        p2p_outbound_frame_queue_max_low_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-        p2p_outbound_frame_queue_max_high_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-        p2p_outbound_frame_queue_max_low_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-        p2p_subscriber_queue_cap:
-            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-        consensus_ingress_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-        consensus_ingress_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-        consensus_ingress_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-        consensus_ingress_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-        consensus_ingress_critical_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-        consensus_ingress_critical_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-        consensus_ingress_critical_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-        consensus_ingress_critical_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_penalty_threshold:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-        consensus_ingress_penalty_window: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-        ),
-        consensus_ingress_penalty_cooldown: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-        ),
-        max_incoming: None,
-        max_total_connections: None,
-        accept_rate_per_ip_per_sec: None,
-        accept_burst_per_ip: None,
-        max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-        accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-        accept_prefix_v4_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-        accept_prefix_v6_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-        accept_rate_per_prefix_per_sec: None,
-        accept_burst_per_prefix: None,
-        low_priority_rate_per_sec: None,
-        low_priority_burst: None,
-        low_priority_bytes_per_sec: None,
-        low_priority_bytes_burst: None,
-        allowlist_only: false,
-        allow_keys: vec![],
-        deny_keys: vec![],
-        allow_cidrs: vec![],
-        deny_cidrs: vec![],
-        disconnect_on_post_overflow: true,
-        max_frame_bytes: 1_048_576,
-        tcp_nodelay: true,
-        tcp_keepalive: None,
-        max_frame_bytes_consensus: 262_144,
-        max_frame_bytes_control: 262_144,
-        max_frame_bytes_block_sync: 1_048_576,
-        max_frame_bytes_tx_gossip: 262_144,
-        max_frame_bytes_peer_gossip: 131_072,
-        max_frame_bytes_health: 65_536,
-        max_frame_bytes_other: 262_144,
-        tls_only_v1_3: true,
-        quic_max_idle_timeout: None,
-    };
+    let config = trust_config(address.clone(), TRUST_GOSSIP, idle_timeout);
     let started = NetworkHandle::start(
         super::p2p_identity_keys(key_pair),
         config,
@@ -820,135 +562,10 @@ async fn two_networks() {
     info!("Starting first network...");
     let address1 = socket_addr!(127.0.0.1: {next_port()});
     let config1 = Config {
-        address: WithOrigin::inline(address1.clone()),
-        public_address: WithOrigin::inline(address1.clone()),
-        relay_mode: RelayMode::Disabled,
-        relay_hub_addresses: Vec::new(),
-        relay_ttl: RELAY_TTL,
-        soranet_handshake: default_soranet_handshake(),
-        soranet_privacy: SoranetPrivacy::default(),
-        soranet_vpn: SoranetVpn::default(),
-        lane_profile: LaneProfile::Core,
-        require_sm_handshake_match: true,
-        require_sm_openssl_preview_match: true,
-        idle_timeout,
-        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-        peer_gossip_period: PEER_GOSSIP_PERIOD,
-        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-        trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-        trust_penalty_bad_gossip:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-        trust_penalty_unknown_peer:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-        trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-        debug_packet_loss_inbound_percent: 0,
-        debug_packet_loss_outbound_percent: 0,
-        trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-        prefer_ws_fallback: false,
-        p2p_proxy: None,
-        p2p_proxy_required: false,
-        p2p_no_proxy: vec![],
-        p2p_proxy_tls_verify: true,
-        p2p_proxy_tls_pinned_cert_der_base64: None,
-        happy_eyeballs_stagger: Duration::from_millis(100),
-        addr_ipv6_first: false,
-        dns_refresh_interval: None,
-        dns_refresh_ttl: None,
-        quic_enabled: false,
-        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-        quic_datagram_max_payload_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-        quic_datagram_receive_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-        quic_datagram_send_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-        scion: iroha_config::parameters::actual::ScionConfig::default(),
-        tls_enabled: false,
-        tls_fallback_to_plain: true,
-        tls_listen_address: None,
-        tls_inbound_only: false,
-        p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
-        p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
-        p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
-        p2p_outbound_frame_queue_max_high_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-        p2p_outbound_frame_queue_max_low_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-        p2p_outbound_frame_queue_max_high_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-        p2p_outbound_frame_queue_max_low_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-        p2p_subscriber_queue_cap:
-            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-        consensus_ingress_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-        consensus_ingress_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-        consensus_ingress_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-        consensus_ingress_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-        consensus_ingress_critical_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-        consensus_ingress_critical_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-        consensus_ingress_critical_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-        consensus_ingress_critical_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_penalty_threshold:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-        consensus_ingress_penalty_window: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-        ),
-        consensus_ingress_penalty_cooldown: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-        ),
-        max_incoming: None,
-        max_total_connections: None,
-        accept_rate_per_ip_per_sec: None,
-        accept_burst_per_ip: None,
-        max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-        accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-        accept_prefix_v4_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-        accept_prefix_v6_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-        accept_rate_per_prefix_per_sec: None,
-        accept_burst_per_prefix: None,
-        low_priority_rate_per_sec: None,
-        low_priority_burst: None,
-        low_priority_bytes_per_sec: None,
-        low_priority_bytes_burst: None,
-        allowlist_only: false,
-        allow_keys: vec![],
-        deny_keys: vec![],
-        allow_cidrs: vec![],
-        deny_cidrs: vec![],
-        disconnect_on_post_overflow: true,
         // `max_frame_bytes` is the encrypted ceiling, while topic caps are
         // plaintext. Reserve the fixed ChaCha20-Poly1305 nonce and tag.
         max_frame_bytes: 1_048_576 + DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
-        tcp_nodelay: true,
-        tcp_keepalive: None,
-        max_frame_bytes_consensus: 262_144,
-        max_frame_bytes_control: 262_144,
-        max_frame_bytes_block_sync: 1_048_576,
-        max_frame_bytes_tx_gossip: 262_144,
-        max_frame_bytes_peer_gossip: 131_072,
-        max_frame_bytes_health: 65_536,
-        max_frame_bytes_other: 262_144,
-        tls_only_v1_3: true,
-        quic_max_idle_timeout: None,
+        ..trust_config(address1.clone(), TRUST_GOSSIP, idle_timeout)
     };
     let (mut network1, _) = NetworkHandle::start(
         super::p2p_identity_keys(key_pair1),
@@ -963,135 +580,10 @@ async fn two_networks() {
     info!("Starting second network...");
     let address2 = socket_addr!(127.0.0.1: {next_port()});
     let config2 = Config {
-        address: WithOrigin::inline(address2.clone()),
-        public_address: WithOrigin::inline(address2.clone()),
-        relay_mode: RelayMode::Disabled,
-        relay_hub_addresses: Vec::new(),
-        relay_ttl: RELAY_TTL,
-        soranet_handshake: default_soranet_handshake(),
-        soranet_privacy: SoranetPrivacy::default(),
-        soranet_vpn: SoranetVpn::default(),
-        lane_profile: LaneProfile::Core,
-        require_sm_handshake_match: true,
-        require_sm_openssl_preview_match: true,
-        idle_timeout,
-        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-        peer_gossip_period: PEER_GOSSIP_PERIOD,
-        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-        trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-        trust_penalty_bad_gossip:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-        trust_penalty_unknown_peer:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-        trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-        debug_packet_loss_inbound_percent: 0,
-        debug_packet_loss_outbound_percent: 0,
-        trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-        prefer_ws_fallback: false,
-        p2p_proxy: None,
-        p2p_proxy_required: false,
-        p2p_no_proxy: vec![],
-        p2p_proxy_tls_verify: true,
-        p2p_proxy_tls_pinned_cert_der_base64: None,
-        happy_eyeballs_stagger: Duration::from_millis(100),
-        addr_ipv6_first: false,
-        dns_refresh_interval: None,
-        dns_refresh_ttl: None,
-        quic_enabled: false,
-        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-        quic_datagram_max_payload_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-        quic_datagram_receive_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-        quic_datagram_send_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-        scion: iroha_config::parameters::actual::ScionConfig::default(),
-        tls_enabled: false,
-        tls_fallback_to_plain: true,
-        tls_listen_address: None,
-        tls_inbound_only: false,
-        p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
-        p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
-        p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
-        p2p_outbound_frame_queue_max_high_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-        p2p_outbound_frame_queue_max_low_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-        p2p_outbound_frame_queue_max_high_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-        p2p_outbound_frame_queue_max_low_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-        p2p_subscriber_queue_cap:
-            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-        consensus_ingress_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-        consensus_ingress_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-        consensus_ingress_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-        consensus_ingress_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-        consensus_ingress_critical_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-        consensus_ingress_critical_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-        consensus_ingress_critical_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-        consensus_ingress_critical_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_penalty_threshold:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-        consensus_ingress_penalty_window: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-        ),
-        consensus_ingress_penalty_cooldown: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-        ),
-        max_incoming: None,
-        max_total_connections: None,
-        accept_rate_per_ip_per_sec: None,
-        accept_burst_per_ip: None,
-        max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-        accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-        accept_prefix_v4_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-        accept_prefix_v6_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-        accept_rate_per_prefix_per_sec: None,
-        accept_burst_per_prefix: None,
-        low_priority_rate_per_sec: None,
-        low_priority_burst: None,
-        low_priority_bytes_per_sec: None,
-        low_priority_bytes_burst: None,
-        allowlist_only: false,
-        allow_keys: vec![],
-        deny_keys: vec![],
-        allow_cidrs: vec![],
-        deny_cidrs: vec![],
-        disconnect_on_post_overflow: true,
         // `max_frame_bytes` is the encrypted ceiling, while topic caps are
         // plaintext. Reserve the fixed ChaCha20-Poly1305 nonce and tag.
         max_frame_bytes: 1_048_576 + DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
-        tcp_nodelay: true,
-        tcp_keepalive: None,
-        max_frame_bytes_consensus: 262_144,
-        max_frame_bytes_control: 262_144,
-        max_frame_bytes_block_sync: 1_048_576,
-        max_frame_bytes_tx_gossip: 262_144,
-        max_frame_bytes_peer_gossip: 131_072,
-        max_frame_bytes_health: 65_536,
-        max_frame_bytes_other: 262_144,
-        tls_only_v1_3: true,
-        quic_max_idle_timeout: None,
+        ..trust_config(address2.clone(), TRUST_GOSSIP, idle_timeout)
     };
     let (mut network2, _) = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair2),
@@ -1184,130 +676,7 @@ async fn update_peers_triggers_immediate_connect() {
     let key_pair2 = super::random_node_key_pair();
     let started1 = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair1.clone()),
-        Config {
-            address: WithOrigin::inline(address1.clone()),
-            public_address: WithOrigin::inline(address1.clone()),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout,
-            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
-            happy_eyeballs_stagger: Duration::from_millis(100),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
-            p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
-            p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
-        },
+        trust_config(address1.clone(), TRUST_GOSSIP, idle_timeout),
         chain_id.clone(),
         None,
         None,
@@ -1325,130 +694,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
     };
     let started2 = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair2.clone()),
-        Config {
-            address: WithOrigin::inline(address2.clone()),
-            public_address: WithOrigin::inline(address2.clone()),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout,
-            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
-            happy_eyeballs_stagger: Duration::from_millis(100),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
-            p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
-            p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
-        },
+        trust_config(address2.clone(), TRUST_GOSSIP, idle_timeout),
         chain_id.clone(),
         None,
         None,
@@ -1506,130 +752,7 @@ async fn happy_eyeballs_parallel_dials() {
     let key_pair2 = super::random_node_key_pair();
     let started2 = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair2.clone()),
-        Config {
-            address: WithOrigin::inline(address2.clone()),
-            public_address: WithOrigin::inline(address2.clone()),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout,
-            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
-            happy_eyeballs_stagger: Duration::from_millis(100),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
-            p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
-            p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
-        },
+        trust_config(address2.clone(), TRUST_GOSSIP, idle_timeout),
         chain_id.clone(),
         None,
         None,
@@ -1648,130 +771,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
     let key_pair1 = super::random_node_key_pair();
     let started1 = NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair1.clone()),
-        Config {
-            address: WithOrigin::inline(address1.clone()),
-            public_address: WithOrigin::inline(address1.clone()),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout,
-            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
-            happy_eyeballs_stagger: Duration::from_millis(100),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
-            p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
-            p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
-        },
+        trust_config(address1.clone(), TRUST_GOSSIP, idle_timeout),
         chain_id.clone(),
         None,
         None,
@@ -1854,128 +854,11 @@ async fn low_topics_do_not_starve_each_other() {
     let (net_b, _child_b) = match NetworkHandle::<MultiTopic>::start(
         super::p2p_identity_keys(kp_b.clone()),
         Config {
-            address: WithOrigin::inline(addr_b.clone()),
-            public_address: WithOrigin::inline(addr_b.clone()),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout,
-            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
             happy_eyeballs_stagger: Duration::from_millis(50),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(1024).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
+            ..trust_config(addr_b.clone(), TRUST_GOSSIP, idle_timeout)
         },
         chain_id.clone(),
         None,
@@ -1996,128 +879,11 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
     let (mut net_a, _child_a) = match NetworkHandle::<MultiTopic>::start(
         super::p2p_identity_keys(kp_a.clone()),
         Config {
-            address: WithOrigin::inline(addr_a.clone()),
-            public_address: WithOrigin::inline(addr_a.clone()),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout,
-            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
             happy_eyeballs_stagger: Duration::from_millis(50),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(1024).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
+            ..trust_config(addr_a.clone(), TRUST_GOSSIP, idle_timeout)
         },
         chain_id.clone(),
         None,
@@ -2226,129 +992,14 @@ async fn relay_hub_routes_consensus_between_spokes() {
          relay_mode: RelayMode,
          relay_hub_addresses: Vec<iroha_primitives::addr::SocketAddr>| {
             Config {
-            address: WithOrigin::inline(address.clone()),
-            public_address: WithOrigin::inline(address),
-            relay_mode,
-            relay_hub_addresses,
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout,
-            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
-            happy_eyeballs_stagger: Duration::from_millis(50),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
-            p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
-            p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
-        }
+                relay_mode,
+                relay_hub_addresses,
+                happy_eyeballs_stagger: Duration::from_millis(50),
+                p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
+                p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
+                p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+                ..trust_config(address.clone(), TRUST_GOSSIP, idle_timeout)
+            }
         };
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
         super::p2p_identity_keys(hub_kp.clone()),
@@ -2487,126 +1138,13 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
          relay_mode: RelayMode,
          relay_hub_addresses: Vec<iroha_primitives::addr::SocketAddr>| {
             Config {
-                address: WithOrigin::inline(address.clone()),
-                public_address: WithOrigin::inline(address),
                 relay_mode,
                 relay_hub_addresses,
-                relay_ttl: RELAY_TTL,
-                soranet_handshake: default_soranet_handshake(),
-                soranet_privacy: SoranetPrivacy::default(),
-                soranet_vpn: SoranetVpn::default(),
-                lane_profile: LaneProfile::Core,
-                require_sm_handshake_match: true,
-                require_sm_openssl_preview_match: true,
-                idle_timeout,
-                reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-                connect_startup_delay:
-                    iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-                dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-                peer_gossip_period: PEER_GOSSIP_PERIOD,
-                peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-                trust_decay_half_life:
-                    iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-                trust_penalty_bad_gossip:
-                    iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-                trust_penalty_unknown_peer:
-                    iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-                trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-                debug_packet_loss_inbound_percent: 0,
-                debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-                prefer_ws_fallback: false,
-                p2p_proxy: None,
-                p2p_proxy_required: false,
-                p2p_no_proxy: vec![],
-                p2p_proxy_tls_verify: true,
-                p2p_proxy_tls_pinned_cert_der_base64: None,
                 happy_eyeballs_stagger: Duration::from_millis(50),
-                addr_ipv6_first: false,
-                dns_refresh_interval: None,
-                dns_refresh_ttl: None,
-                quic_enabled: false,
-                quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-                quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-                quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-                quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-                scion: iroha_config::parameters::actual::ScionConfig::default(),
-                tls_enabled: false,
-                tls_fallback_to_plain: true,
-                tls_listen_address: None,
-                tls_inbound_only: false,
                 p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
                 p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
                 p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
-                p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-                p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-                p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-                p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-                p2p_subscriber_queue_cap:
-                    iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-                consensus_ingress_rate_per_sec:
-                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-                consensus_ingress_burst:
-                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-                consensus_ingress_bytes_per_sec:
-                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-                consensus_ingress_bytes_burst:
-                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-                consensus_ingress_critical_rate_per_sec: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-                consensus_ingress_critical_burst:
-                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-                consensus_ingress_critical_bytes_per_sec: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-                consensus_ingress_critical_bytes_burst: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-                consensus_ingress_penalty_threshold: iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-                consensus_ingress_penalty_window: Duration::from_millis(
-                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-                ),
-                consensus_ingress_penalty_cooldown: Duration::from_millis(
-                    iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-                ),
-                max_incoming: None,
-                max_total_connections: None,
-                accept_rate_per_ip_per_sec: None,
-                accept_burst_per_ip: None,
-                max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-                accept_bucket_idle:
-                    iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-                accept_prefix_v4_bits:
-                    iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-                accept_prefix_v6_bits:
-                    iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-                accept_rate_per_prefix_per_sec: None,
-                accept_burst_per_prefix: None,
-                low_priority_rate_per_sec: None,
-                low_priority_burst: None,
-                low_priority_bytes_per_sec: None,
-                low_priority_bytes_burst: None,
-                allowlist_only: false,
-                allow_keys: vec![],
-                deny_keys: vec![],
-                allow_cidrs: vec![],
-                deny_cidrs: vec![],
-                disconnect_on_post_overflow: true,
-                max_frame_bytes: 1_048_576,
-                tcp_nodelay: true,
-                tcp_keepalive: None,
-                max_frame_bytes_consensus: 262_144,
-                max_frame_bytes_control: 262_144,
-                max_frame_bytes_block_sync: 1_048_576,
-                max_frame_bytes_tx_gossip: 262_144,
-                max_frame_bytes_peer_gossip: 131_072,
-                max_frame_bytes_health: 65_536,
-                max_frame_bytes_other: 262_144,
-                tls_only_v1_3: true,
-                quic_max_idle_timeout: None,
+                ..trust_config(address.clone(), TRUST_GOSSIP, idle_timeout)
             }
         };
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
@@ -2817,135 +1355,7 @@ async fn start_network(
     let actor = TestActor::start(messages);
     let address = peer.address().clone();
     let idle_timeout = Duration::from_secs(60);
-    let config = Config {
-        address: WithOrigin::inline(address.clone()),
-        public_address: WithOrigin::inline(address.clone()),
-        relay_mode: RelayMode::Disabled,
-        relay_hub_addresses: Vec::new(),
-        relay_ttl: RELAY_TTL,
-        soranet_handshake: default_soranet_handshake(),
-        soranet_privacy: SoranetPrivacy::default(),
-        soranet_vpn: SoranetVpn::default(),
-        lane_profile: LaneProfile::Core,
-        require_sm_handshake_match: true,
-        require_sm_openssl_preview_match: true,
-        idle_timeout,
-        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-        peer_gossip_period: PEER_GOSSIP_PERIOD,
-        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-        trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-        trust_penalty_bad_gossip:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-        trust_penalty_unknown_peer:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-        trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-        debug_packet_loss_inbound_percent: 0,
-        debug_packet_loss_outbound_percent: 0,
-        trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-        prefer_ws_fallback: false,
-        p2p_proxy: None,
-        p2p_proxy_required: false,
-        p2p_no_proxy: vec![],
-        p2p_proxy_tls_verify: true,
-        p2p_proxy_tls_pinned_cert_der_base64: None,
-        happy_eyeballs_stagger: Duration::from_millis(100),
-        addr_ipv6_first: false,
-        dns_refresh_interval: None,
-        dns_refresh_ttl: None,
-        quic_enabled: false,
-        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-        quic_datagram_max_payload_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-        quic_datagram_receive_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-        quic_datagram_send_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-        scion: iroha_config::parameters::actual::ScionConfig::default(),
-        tls_enabled: false,
-        tls_fallback_to_plain: true,
-        tls_listen_address: None,
-        tls_inbound_only: false,
-        p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
-        p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
-        p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
-        p2p_outbound_frame_queue_max_high_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-        p2p_outbound_frame_queue_max_low_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-        p2p_outbound_frame_queue_max_high_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-        p2p_outbound_frame_queue_max_low_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-        p2p_subscriber_queue_cap:
-            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-        consensus_ingress_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-        consensus_ingress_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-        consensus_ingress_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-        consensus_ingress_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-        consensus_ingress_critical_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-        consensus_ingress_critical_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-        consensus_ingress_critical_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-        consensus_ingress_critical_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_penalty_threshold:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-        consensus_ingress_penalty_window: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-        ),
-        consensus_ingress_penalty_cooldown: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-        ),
-        max_incoming: None,
-        max_total_connections: None,
-        accept_rate_per_ip_per_sec: None,
-        accept_burst_per_ip: None,
-        max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-        accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-        accept_prefix_v4_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-        accept_prefix_v6_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-        accept_rate_per_prefix_per_sec: None,
-        accept_burst_per_prefix: None,
-        low_priority_rate_per_sec: None,
-        low_priority_burst: None,
-        low_priority_bytes_per_sec: None,
-        low_priority_bytes_burst: None,
-        allowlist_only: false,
-        allow_keys: vec![],
-        deny_keys: vec![],
-        allow_cidrs: vec![],
-        deny_cidrs: vec![],
-        disconnect_on_post_overflow: true,
-        max_frame_bytes: 1_048_576,
-        tcp_nodelay: true,
-        tcp_keepalive: None,
-        max_frame_bytes_consensus: 262_144,
-        max_frame_bytes_control: 262_144,
-        max_frame_bytes_block_sync: 1_048_576,
-        max_frame_bytes_tx_gossip: 262_144,
-        max_frame_bytes_peer_gossip: 131_072,
-        max_frame_bytes_health: 65_536,
-        max_frame_bytes_other: 262_144,
-        tls_only_v1_3: true,
-        quic_max_idle_timeout: None,
-    };
+    let config = trust_config(address.clone(), TRUST_GOSSIP, idle_timeout);
     let (mut network, _) = NetworkHandle::start(
         super::p2p_identity_keys(key_pair),
         config,
@@ -3029,133 +1439,18 @@ async fn tls_inbound_listener_smoke() {
     let key_pair1 = super::random_node_key_pair();
     let peer1 = Peer::new(public_host_addr.clone(), key_pair1.public_key().clone());
     let config1 = Config {
-        address: WithOrigin::inline(super::next_addr()),
-        public_address: WithOrigin::inline(public_host_addr.clone()),
-        relay_mode: RelayMode::Disabled,
-        relay_hub_addresses: Vec::new(),
-        relay_ttl: RELAY_TTL,
-        soranet_handshake: default_soranet_handshake(),
-        soranet_privacy: SoranetPrivacy::default(),
-        soranet_vpn: SoranetVpn::default(),
-        lane_profile: LaneProfile::Core,
-        require_sm_handshake_match: true,
-        require_sm_openssl_preview_match: true,
-        idle_timeout,
-        reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-        peer_gossip_period: PEER_GOSSIP_PERIOD,
-        peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-        trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-        trust_penalty_bad_gossip:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-        trust_penalty_unknown_peer:
-            iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-        trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-        debug_packet_loss_inbound_percent: 0,
-        debug_packet_loss_outbound_percent: 0,
-        trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-        prefer_ws_fallback: false,
-        p2p_proxy: None,
-        p2p_proxy_required: false,
-        p2p_no_proxy: vec![],
-        p2p_proxy_tls_verify: true,
-        p2p_proxy_tls_pinned_cert_der_base64: None,
         happy_eyeballs_stagger: Duration::from_millis(50),
-        addr_ipv6_first: false,
-        dns_refresh_interval: None,
-        dns_refresh_ttl: None,
-        quic_enabled: false,
-        quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-        quic_datagram_max_payload_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-        quic_datagram_receive_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-        quic_datagram_send_buffer_bytes:
-            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-        scion: iroha_config::parameters::actual::ScionConfig::default(),
         tls_enabled: true,
-        tls_fallback_to_plain: true,
-        tls_listen_address: None,
-        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
         p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
         p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
-        p2p_outbound_frame_queue_max_high_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-        p2p_outbound_frame_queue_max_low_bytes:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-        p2p_outbound_frame_queue_max_high_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-        p2p_outbound_frame_queue_max_low_frames:
-            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-        p2p_subscriber_queue_cap:
-            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-        consensus_ingress_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-        consensus_ingress_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-        consensus_ingress_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-        consensus_ingress_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-        consensus_ingress_critical_rate_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-        consensus_ingress_critical_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-        consensus_ingress_critical_bytes_per_sec:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-        consensus_ingress_critical_bytes_burst:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-        consensus_ingress_penalty_threshold:
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-        consensus_ingress_penalty_window: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-        ),
-        consensus_ingress_penalty_cooldown: Duration::from_millis(
-            iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-        ),
-        max_incoming: None,
-        max_total_connections: None,
-        accept_rate_per_ip_per_sec: None,
-        accept_burst_per_ip: None,
-        max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-        accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-        accept_prefix_v4_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-        accept_prefix_v6_bits: iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-        accept_rate_per_prefix_per_sec: None,
-        accept_burst_per_prefix: None,
-        low_priority_rate_per_sec: None,
-        low_priority_burst: None,
-        low_priority_bytes_per_sec: None,
-        low_priority_bytes_burst: None,
-        allowlist_only: false,
-        allow_keys: vec![],
-        deny_keys: vec![],
-        allow_cidrs: vec![],
-        deny_cidrs: vec![],
-        disconnect_on_post_overflow: true,
-        max_frame_bytes: 1_048_576,
-        tcp_nodelay: true,
-        tcp_keepalive: None,
-        max_frame_bytes_consensus: 262_144,
-        max_frame_bytes_control: 262_144,
-        max_frame_bytes_block_sync: 1_048_576,
-        max_frame_bytes_tx_gossip: 262_144,
-        max_frame_bytes_peer_gossip: 131_072,
-        max_frame_bytes_health: 65_536,
-        max_frame_bytes_other: 262_144,
-        tls_only_v1_3: true,
-        quic_max_idle_timeout: None,
+        ..super::test_network_config(
+            super::next_addr(),
+            public_host_addr.clone(),
+            idle_timeout,
+            default_soranet_handshake(),
+            TRUST_GOSSIP,
+        )
     };
     // Start network1; if sandbox forbids sockets, skip
     let (network1, _child1) = match NetworkHandle::<TestMessage>::start(
@@ -3183,128 +1478,18 @@ async fn tls_inbound_listener_smoke() {
     let (_n2, _child2) = match NetworkHandle::<TestMessage>::start(
         super::p2p_identity_keys(key_pair2.clone()),
         Config {
-            address: WithOrigin::inline(dialer_addr.clone()),
-            public_address: WithOrigin::inline(dialer_addr),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout,
-            reply_writer_flush_timeout: REPLY_WRITER_FLUSH_TIMEOUT,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
             happy_eyeballs_stagger: Duration::from_millis(50),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
             tls_enabled: true,
-            tls_fallback_to_plain: true,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
+            ..super::test_network_config(
+                dialer_addr.clone(),
+                dialer_addr,
+                idle_timeout,
+                default_soranet_handshake(),
+                TRUST_GOSSIP,
+            )
         },
         chain_id.clone(),
         None,

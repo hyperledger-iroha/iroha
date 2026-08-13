@@ -898,6 +898,53 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert_eq!(published.last_committed_height + 1, published.height);
         close_ingress_for_rollover(&exact_ready, &exact_ingress);
         super::super::status::clear_v2_status();
+        let (_kura, _predecessor_root, typed_context, retirement) =
+            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+        let typed_ready = Arc::new(AtomicBool::new(false));
+        let typed_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+        typed_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure typed CompleteTip activation ingress");
+        let typed_activation = ProductionLifecycleCompleteTipRunnerActivationV1::for_test(
+            Arc::clone(&typed_ready),
+            Arc::clone(&typed_ingress),
+        );
+        let activated = typed_activation
+            .open_and_publish(&typed_ingress, retirement, successor_status(&typed_context))
+            .expect("typed CompleteTip activation retains retirement through publication");
+        assert!(typed_ready.load(Ordering::Acquire));
+        assert_eq!(
+            super::super::status::v2_status()
+                .expect("typed CompleteTip activation publishes H+1")
+                .height_context_id,
+            typed_context.id()
+        );
+        drop(activated);
+        assert!(!typed_ready.load(Ordering::Acquire));
+        assert!(!typed_ingress.state.lock().open);
+        super::super::status::clear_v2_status();
+        let (_kura, _predecessor_root, invalid_context, retirement) =
+            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+        let invalid_ready = Arc::new(AtomicBool::new(true));
+        let invalid_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+        invalid_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure invalid CompleteTip activation ingress");
+        invalid_ingress
+            .open()
+            .expect("open stale CompleteTip activation ingress");
+        let invalid_activation = ProductionLifecycleCompleteTipRunnerActivationV1::for_test(
+            Arc::clone(&invalid_ready),
+            Arc::clone(&invalid_ingress),
+        );
+        let mut invalid_status = successor_status(&invalid_context);
+        invalid_status.last_committed_height = invalid_status.height;
+        assert!(matches!(
+            invalid_activation.open_and_publish(&invalid_ingress, retirement, invalid_status),
+            Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid { .. })
+        ));
+        assert!(!invalid_ready.load(Ordering::Acquire));
+        assert!(!invalid_ingress.state.lock().open);
         let (drift_kura, _predecessor_root, drift_context, retirement) =
             super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let successor_ledger = drift_kura

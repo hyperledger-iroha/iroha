@@ -1,12 +1,12 @@
 //! Purpose-bound authenticated B0 replay and B1 storage/root construction.
+use super::*;
+use crate::vega::sponge::Keccak256;
 use core::sync::atomic;
-use std::path::Path;
 use iroha_confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
-use crate::vega::sponge::Keccak256;
-use super::*;
+use std::path::Path;
 #[path = "fold_layer1_v2/fold_layers2_17_v2.rs"]
 mod fold_layers2_17_v2;
 pub(in super::super) use fold_layers2_17_v2::*;

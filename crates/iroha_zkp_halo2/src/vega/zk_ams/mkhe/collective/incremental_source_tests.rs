@@ -1,9 +1,9 @@
-use crate::vega::MaskedRelaxedRandomErrorV1;
 use super::super::tests::{
     KatRandom, encrypt_test_with_opening, test_canonical_plaintext, test_input_topology, test_key,
     test_profile,
 };
 use super::*;
+use crate::vega::MaskedRelaxedRandomErrorV1;
 struct FailingRandom;
 impl MaskedRelaxedRandomSourceV1 for FailingRandom {
     fn fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
@@ -893,8 +893,14 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
         .next()
         .expect("sealed ciphertext binding boundary");
     assert!(ciphertext_binding.contains("fn read_component_limb_into_v1<P>"));
-    assert!(ciphertext_binding.contains("pub(crate) fn read_constant_limb_into_v1<P>"));
-    assert!(ciphertext_binding.contains("pub(crate) fn read_linear_limb_into_v1<P>"));
+    assert!(
+        ciphertext_binding
+            .contains("pub(in crate::vega::zk_ams::mkhe) fn read_constant_limb_into_v1<P>")
+    );
+    assert!(
+        ciphertext_binding
+            .contains("pub(in crate::vega::zk_ams::mkhe) fn read_linear_limb_into_v1<P>")
+    );
     assert!(ciphertext_binding.contains("if receipt != *publication.post_publish_read_receipt()"));
     assert!(ciphertext_binding.contains("destination: &mut [u64]"));
     assert!(

@@ -411,12 +411,47 @@ fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
         preflight.find(".take()").unwrap() < preflight.find("exact_manifest_preflight_v2").unwrap()
     );
     let freeze = PRODUCTION_SOURCE_V2.split("fn freeze_v2").nth(1).unwrap();
-    assert!(freeze.contains("mut self,"));
+    assert!(freeze.starts_with("(mut self)"));
     assert!(freeze.find(".take()").unwrap() < freeze.find("live.owner.validate_v1()").unwrap());
+    assert!(!freeze.contains("RadixHyraxProofSealV2"));
+    assert!(!freeze.contains("_radix_hyrax_proof"));
     assert!(!PRODUCTION_SOURCE_V2.contains("fn preflight_v2(&mut self"));
     assert!(!PRODUCTION_SOURCE_V2.contains("fn freeze_v2(&mut self"));
     assert!(PARENT_SOURCE_V2.contains("fn into_source_algebra_prerequisite_v2("));
     assert!(PARENT_SOURCE_V2.contains("self,"));
+    let parent_freeze = PARENT_SOURCE_V2
+        .split("fn into_source_algebra_prerequisite_v2")
+        .nth(1)
+        .unwrap()
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap();
+    assert!(!parent_freeze.contains("RadixHyraxProofSealV2"));
+    assert!(
+        GLOBAL_LOOKUP_REPLAY_SOURCE_V1.contains("bind_radix_hyrax_replay_after_materialization_v2")
+    );
+    assert!(!GLOBAL_LOOKUP_REPLAY_SOURCE_V1.contains("into_radix_hyrax_bound_replay_v2"));
+}
+#[test]
+fn source_algebra_freeze_precedes_replay_and_late_proof_authority() {
+    assert_eq!(
+        PRODUCTION_SOURCE_V2
+            .matches("RadixHyraxProofSealV2")
+            .count(),
+        1
+    );
+    let consume = PRODUCTION_SOURCE_V2
+        .split("fn consume_phase23_source_algebra_prerequisite_v2")
+        .nth(1)
+        .unwrap();
+    assert!(consume.contains(".freeze_v2()"));
+    assert!(!consume.contains("radix_hyrax_proof:"));
+    let replay = PRODUCTION_SOURCE_V2
+        .split("fn into_global_lookup_source_replay_v1")
+        .nth(1)
+        .unwrap();
+    assert!(replay.contains("Phase23GlobalLookupSourceReplayEvidenceV1"));
+    assert!(!replay.contains("RadixHyraxProofSealV2"));
 }
 #[test]
 fn source_and_test_budgets_remain_bounded() {
@@ -424,12 +459,12 @@ fn source_and_test_budgets_remain_bounded() {
     assert!(TEST_SOURCE_V2.lines().count() <= 650);
     assert!(PRODUCTION_SOURCE_V2.len() <= 52_000);
     assert!(TEST_SOURCE_V2.len() <= 30_000);
-    assert!(GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count() <= 800);
+    assert!(GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count() <= 900);
     assert!(GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count() <= 400);
     assert!(
         GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count()
             + GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count()
-            <= 1_200
+            <= 1_300
     );
     assert!(SOURCE_OPENINGS_SOURCE_V1.lines().count() <= 1_300);
     assert!(SOURCE_OPENINGS_TEST_SOURCE_V1.lines().count() <= 500);

@@ -13,12 +13,8 @@
 //! flips reviewable without allowing an unrelated readiness bit to bypass an
 //! open receipt handoff.
 
-#![allow(
-    dead_code,
-    reason = "the receipt graph remains private and fail-closed until every opaque handoff is wired"
-)]
-use crate::vega::sponge::Keccak256;
 use super::{MKHE_VERSION_V1, ZkAmsMkheErrorV1};
+use crate::vega::sponge::Keccak256;
 const RECEIPT_CAPABILITY_AUDIT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.verified-receipt-capability-audit";
 const BLOCKER_CPK_AGGREGATE_V1: u16 = 1 << 0;

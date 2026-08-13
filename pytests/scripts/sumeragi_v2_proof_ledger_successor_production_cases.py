@@ -79,6 +79,332 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
     ), errors
 
 
+ADDITIONAL_SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn project_proposal_exact_output_authority(",
+        "!matches!(",
+        "matches!(",
+        "affine recovered Proposal exact-output projection must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn prepare_recovered_lifecycle_sign_completion_with_body(",
+        ".prepare_proposal_prepare_wal_body_lookup(",
+        ".project_broadcast_and_sign_body_lookup(",
+        "single-preview recovered next-Vote body executor join must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn prepare_proposal_prepare_wal_body_lookup(",
+        "next_reducer.step(persisted_event.clone())",
+        "self.next_reducer.step(persisted_event.clone())",
+        "pre-WAL initial Proposal continuation must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn append_recovered_lifecycle_proposal_prepare_wal(",
+        "self.adapter.wal.append(&encoded_wal_payload)",
+        "self.adapter.wal.recovered_records().last()",
+        "fail-stop initial Proposal WAL append must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn append_recovered_lifecycle_proposal_prepare_wal(",
+        "permit.authorizes(",
+        "permit.authorizes_for_test(",
+        "initial Proposal WAL append must retain its armed output reservation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn append_recovered_lifecycle_proposal_prepare_wal(",
+        "permit.cross_wal_attempt_boundary()",
+        "drop(permit)",
+        "fail-stop initial Proposal WAL append must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "fn prepare_wal_append_permit(",
+        "&& !self.wal_append.attempted",
+        "|| !self.wal_append.attempted",
+        "armed Proposal reservation lends WAL authority without parts must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "fn abort_before_publication(",
+        "assert!(\n            !self.wal_append.attempted",
+        "debug_assert!(\n            !self.wal_append.attempted",
+        "retry-safe recovered Proposal reservation abort must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn settle_recovered_lifecycle_proposal_prepare_wal(",
+        "output.prepare_wal_append_permit()",
+        "None::<super::v2_worker::RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_>>",
+        "restart-closed initial Proposal PrepareIntent settlement must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn settle_recovered_lifecycle_proposal_prepare_wal(",
+        "preview\n            .append_recovered_lifecycle_proposal_prepare_wal(wal_permit)",
+        "drop(preview)",
+        "restart-closed initial Proposal PrepareIntent settlement must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
+        "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
+        "PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence",
+        "queue-owned recovered Decision Fetch selector must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
+        "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
+        "true",
+        "queue-owned recovered Decision Fetch selector must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
+        "self.lifecycle_terminal_subject()",
+        "None",
+        "queue-owned recovered Decision Fetch selector must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "fn select_fair_v2_ingress_candidate<T>(",
+        "for dependency_pass in [false, true]",
+        "for dependency_pass in [true, false]",
+        "queue-owned recovered Decision Fetch fair selection must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn v2_ingress_head_can_drain<R: EffectRuntime>(",
+        "fn v2_ingress_head_can_drain<R: EffectRuntime>(",
+        "fn v2_ingress_head_can_drain<R>(",
+        "shared pure ingress drain predicate omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_effects_main_04.rs",
+        "fn recovered_decision_fetch_fences_later_ordinary_body_coordinates()",
+        "a later recovered response cannot leapfrog the ordinary fair winner",
+        "a later recovered response may leapfrog the ordinary fair winner",
+        "queue-owned recovered Decision Fetch selector behavior must retain each executable literal exactly once",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn activate_with(",
+        "self.executor\n            .arm_live_clocks(now)",
+        "let _ = now",
+        "one-shot lifecycle activation transaction must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
+        ".activate(Instant::now(), activation)",
+        ".activate(Instant::now(), activation_forbidden)",
+        "production lifecycle activation behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn activate_with(",
+        "activation.complete();",
+        "drop(activation);",
+        "one-shot lifecycle activation transaction must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "struct ProductionLifecycleRunnerActivationV1",
+        "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
+        "true",
+        "runner-owned lifecycle activation authority must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "struct ProductionLifecycleRunnerActivationV1",
+        "fn current_height(",
+        "pub(in crate::sumeragi) fn current_height(",
+        "runner-owned lifecycle activation status classes must use the opaque checked-transition gate",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "struct ProductionLifecycleCompleteTipRunnerActivationV1",
+        "retirement.authorizes_successor_status(&successor)",
+        "true",
+        "runner-owned CompleteTip lifecycle activation authority must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "struct ProductionLifecycleCompleteTipRunnerActivationV1",
+        "fn mint_for_recovered_runner(",
+        "pub(in crate::sumeragi) fn mint_for_recovered_runner(",
+        "runner-owned CompleteTip lifecycle activation seal must use the opaque checked-transition gate",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+        "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
+        "launched.activate_recovered_complete_tip(now, runner, retirement)",
+        "launched.activate(now, runner)",
+        "CompleteTip exact H+1 owner bind must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn with_runner_runtime<R>(",
+        "_runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1",
+        "_runner: &mut ()",
+        "borrow-bound activated lifecycle owner omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "struct ActivatedProductionLifecycleV1",
+        "launched: LaunchedProductionLifecycleV1",
+        "pub(in crate::sumeragi) launched: LaunchedProductionLifecycleV1",
+        "opaque activated lifecycle owner must use the opaque checked-transition gate",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "struct ActivatedProductionLifecycleV1",
+        "runner_activation: super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1,\n    launched: LaunchedProductionLifecycleV1,",
+        "launched: LaunchedProductionLifecycleV1,\n    runner_activation: super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1,",
+        "opaque activated lifecycle owner drop order must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "struct ProductionLifecycleActivatedRunnerAuthorityV1",
+        "self.ingress_ready.store(false, Ordering::Release);",
+        "let _ = &self.ingress_ready;",
+        "activated runner readiness retirement must contain",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+        "fn authenticate_current_for_lifecycle_retirement(",
+        "self.validate_authenticated_cut(&authenticated)?;",
+        "let _ = &authenticated;",
+        "live Serve retirement directory authentication must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn refresh_live_serve_retirement_cut(",
+        "exactly_covers_finalization_work(&self.coordinator)",
+        "exactly_covers_recovered_ready_work(&self.coordinator)",
+        "launched live Serve retirement refresh must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+        "fn authenticate_live_finalization_serve_census(",
+        "receipt.exactly_matches_pending(payload.request())",
+        "true",
+        "live finalization Serve ledger/admission-wait join must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
+        "fn matches_current_finalization_record(",
+        "WaitSource::Recovery(digest)",
+        "WaitSource::External(digest)",
+        "volatile refanned Broadcast finalization state omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        "fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign()",
+        "finalization accepts the exact volatile refanout wait beside its Ready next Sign",
+        "finalization accepts an inexact volatile refanout wait beside its Ready next Sign",
+        "volatile refanned Broadcast finalization behavior must retain each executable literal exactly once",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "fn exact_optional_recovered_wal_authority(",
+        "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
+        "true",
+        "finalization-only recovered registry census omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn into_finalized_rollover(",
+        "launched\n            .leader_wire_ingress_binding\n            .retire()",
+        "Ok(())",
+        "activated lifecycle finalization must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "impl FinalizedProductionLifecycleRolloverV1",
+        "refresh_live_serve_retirement_cut(&services, &retired_ingress)",
+        "refresh_live_serve_retirement_cut_for_test()",
+        "typed lifecycle finalized-output rollover must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "impl ProductionLifecyclePostOutputHandoffV1",
+        "publication.consume_owners(registry)",
+        "drop(publication)",
+        "post-output lifecycle-store retirement must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs",
+        "fn persist_exact_finalization_successor(",
+        "store.load()? != retired",
+        "false",
+        "opaque all-row finalization publication must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs",
+        "fn persist_exact_finalization_successor(",
+        "coordinator: self",
+        "coordinator: LifecycleCoordinator::from_recovery",
+        "opaque all-row finalization publication must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "impl ProductionLifecycleCleanupReadyV1",
+        "self.services.allow_clean_shutdown()",
+        "let _ = &self.services",
+        "cleanup-ready lifecycle service teardown must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "TransactionBuilder::new_genesis(",
+        "TransactionBuilder::new(",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "Algorithm::Ed25519",
+        "Algorithm::BlsNormal",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        ".into_finalized_rollover(&mut runner)",
+        ".retire_lifecycle_stores_for_test(finality_receipt)",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        ".retain_merge_sidecars_for_global_view(",
+        ".retain_merge_sidecars_for_global_view_removed(",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "pub(in crate::sumeragi) fn project_proposal_exact_output_authority(",
+        "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign\n                    | RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
+        "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
+        "recovered Proposal output must preserve both first-release successor shapes",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "fn install_recovered_wal_decision_store<'registry>(",
+        "fn install_recovered_wal_decision_store<'registry>(",
+        "fn install_recovered_wal_decision_store(",
+        "recovered Decision Store installation must retain its registry lifetime",
+    ),
+)
+
+
 @pytest.mark.parametrize(
     ("relative_path", "region_marker", "old", "new", "error_fragment"),
     (
@@ -1228,7 +1554,8 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "sumeragi::v2_block_sync::tests::catch_up_is_not_release_bound",
             "production refinement test must be pinned exactly once",
         ),
-    ),
+    )
+    + ADDITIONAL_SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS,
 )
 def test_successor_production_source_mapping_mutations_fail_closed(
     tmp_path: Path,
@@ -1241,6 +1568,7 @@ def test_successor_production_source_mapping_mutations_fail_closed(
     module = load_checker()
     for source_name in (
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
         "crates/iroha_core/src/sumeragi/mod.rs",
         "crates/iroha_core/src/sumeragi/status.rs",
         "crates/iroha_core/src/sumeragi/v2_first_release_recovery.rs",
@@ -1261,8 +1589,12 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
         "crates/iroha_core/src/sumeragi/v2_transport.rs",
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -1275,7 +1607,8 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         shutil.copy2(ROOT_DIR / source_name, destination)
     copy_reviewed_rust_include_components(tmp_path)
 
-    assert module._successor_production_source_fidelity_errors(tmp_path) == []
+    baseline_errors = module._successor_production_source_fidelity_errors(tmp_path)
+    assert baseline_errors == [], baseline_errors
 
     path = tmp_path / relative_path
     source = path.read_text(encoding="utf-8")

@@ -10,23 +10,11 @@
 //! particular, membership of a committed vector does not establish that the
 //! same vector was used in a CPK share relation.  That separate relation proof
 //! remains fail closed at its state-owned minting boundary.
-use thiserror::Error;
-use crate::{
-    generalized_bulletproof::ProofRandomSource,
-    vega::{
-        VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-        bulletproof_t256::{
-            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZkAmsT256MembershipBoundV1,
-            ZkAmsT256MembershipErrorV1, ZkAmsT256MembershipProofV1,
-        },
-    },
-};
 #[cfg(test)]
-use crate::vega::{
-    bulletproof_t256::{
-        prove_zk_ams_t256_membership_chunk_v1, verify_zk_ams_t256_membership_chunk_v1,
-    },
-    sponge::Keccak256,
+use super::exact_eight_chunk_membership::{
+    commitment_set_digest as exact_commitment_set_digest,
+    proof_set_digest as exact_proof_set_digest,
+    verifier_transcript_set_digest as exact_verifier_transcript_set_digest,
 };
 use super::{
     ZkAmsMkhePartyIdV1,
@@ -38,11 +26,23 @@ use super::{
     },
 };
 #[cfg(test)]
-use super::exact_eight_chunk_membership::{
-    commitment_set_digest as exact_commitment_set_digest,
-    proof_set_digest as exact_proof_set_digest,
-    verifier_transcript_set_digest as exact_verifier_transcript_set_digest,
+use crate::vega::{
+    bulletproof_t256::{
+        prove_zk_ams_t256_membership_chunk_v1, verify_zk_ams_t256_membership_chunk_v1,
+    },
+    sponge::Keccak256,
 };
+use crate::{
+    generalized_bulletproof::ProofRandomSource,
+    vega::{
+        VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+        bulletproof_t256::{
+            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZkAmsT256MembershipBoundV1,
+            ZkAmsT256MembershipErrorV1, ZkAmsT256MembershipProofV1,
+        },
+    },
+};
+use thiserror::Error;
 const PERSISTENT_MEMBERSHIP_MAGIC_V1: [u8; 4] = *b"ZPME";
 const PERSISTENT_MEMBERSHIP_VERSION_V1: u8 = 1;
 const PERSISTENT_MEMBERSHIP_BOUND_V1: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::One;

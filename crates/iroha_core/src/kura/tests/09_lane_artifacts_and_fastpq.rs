@@ -564,28 +564,9 @@ fn store_block_rejects_lane_payload_ownership_for_unconfigured_lane() {
 }
 #[test]
 fn pipeline_sidecar_roundtrip() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -820,28 +801,9 @@ fn pipeline_tx_snapshot_legacy_key_lists_contribute_counts() {
 }
 #[test]
 fn pipeline_sidecar_enqueue_flushes() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -990,28 +952,9 @@ fn consensus_sidecar_enqueues_do_not_wait_for_unrelated_prune_lock_holder() {
 }
 #[test]
 fn fastpq_proof_snapshot_merges_into_pipeline_sidecar() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1062,28 +1005,9 @@ fn fastpq_proof_snapshot_merges_into_pipeline_sidecar() {
 }
 #[test]
 fn fastpq_proof_snapshot_persists_compact_metadata_only() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     kura.write_pipeline_metadata(&PipelineRecoverySidecar::new(
         1,
@@ -1119,28 +1043,9 @@ fn fastpq_proof_snapshot_persists_compact_metadata_only() {
 }
 #[test]
 fn fastpq_proof_snapshots_for_same_block_flush_as_single_sidecar_update() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1223,28 +1128,9 @@ fn fastpq_proof_snapshot_retries_missing_sidecar_until_limit() {
 }
 #[test]
 fn pipeline_sidecar_promotes_temp_index_on_read() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1283,28 +1169,9 @@ fn pipeline_sidecar_promotes_temp_index_on_read() {
 }
 #[test]
 fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let hashes = store_dummy_blocks(&kura, 2);
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1374,28 +1241,9 @@ fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
 }
 #[test]
 fn pipeline_sidecar_recovers_temp_data_before_temp_index() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let old_sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1605,28 +1453,9 @@ fn pipeline_sidecar_prune_marker_sync_failure_keeps_main_pair_unchanged() {
 }
 #[test]
 fn pipeline_sidecar_fails_closed_on_corrupt_temp_index() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1654,28 +1483,9 @@ fn pipeline_sidecar_fails_closed_on_corrupt_temp_index() {
 }
 #[test]
 fn pipeline_sidecar_fails_closed_on_orphaned_temp_data() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let hashes = store_dummy_blocks(&kura, 2);
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1709,28 +1519,9 @@ fn pipeline_sidecar_fails_closed_on_orphaned_temp_data() {
 }
 #[test]
 fn pipeline_sidecar_rejects_height_mismatch() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -1793,28 +1584,9 @@ fn sidecar_fsync_mode_tracks_kura_config() {
 }
 #[test]
 fn pipeline_sidecar_rejects_block_hash_mismatch() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let mut blocks = DummyBlocks::new();
     let block = blocks.next();
     let expected_hash = block.hash();
@@ -1838,28 +1610,9 @@ fn pipeline_sidecar_rejects_block_hash_mismatch() {
 }
 #[test]
 fn pipeline_sidecars_append_to_single_store() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let hashes = store_dummy_blocks(&kura, 2);
     let dag = PipelineDagSnapshot {
         fingerprint: [1u8; 32],
@@ -1945,28 +1698,9 @@ fn pipeline_sidecar_overwrite_updates_entry() {
 }
 #[test]
 fn pipeline_sidecar_rejects_overlapping_offsets() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -2012,28 +1746,9 @@ fn pipeline_sidecar_rejects_overlapping_offsets() {
 }
 #[test]
 fn pipeline_sidecar_allows_out_of_order_offsets() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -2080,28 +1795,9 @@ fn pipeline_sidecar_allows_out_of_order_offsets() {
 }
 #[test]
 fn pipeline_sidecar_allows_misaligned_index() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -2195,28 +1891,9 @@ fn sidecar_reader_rejects_oversized_payloads() {
 }
 #[test]
 fn pipeline_sidecar_ignores_invalid_prev_entry() {
-    use iroha_config::base::WithOrigin;
     let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");

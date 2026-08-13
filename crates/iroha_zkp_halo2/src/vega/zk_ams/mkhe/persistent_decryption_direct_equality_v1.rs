@@ -26,9 +26,9 @@
     dead_code,
     reason = "direct-equality production capabilities are deliberately uninhabited"
 )]
-use core::convert::Infallible;
 use super::super::{ZkAmsMkhePartyIdV1, manifest::RELEASE_MODULI_V1};
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1 as Point};
+use core::convert::Infallible;
 const DIRECT_EQUALITY_VERSION_V1: u8 = 1;
 const DIRECT_EQUALITY_PARTIES_V1: usize = 8;
 const DIRECT_EQUALITY_SECRET_COMMITMENTS_V1: usize = 8;

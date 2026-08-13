@@ -1,9 +1,9 @@
-use std::{panic::AssertUnwindSafe, sync::OnceLock};
+use super::*;
 use crate::{
     generalized_bulletproof::{ProofGenerators, ProofSuite},
     vega::bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1,
 };
-use super::*;
+use std::sync::OnceLock;
 const PRODUCTION_SOURCE_V1: &str = include_str!("source_openings_v1.rs");
 const CANONICAL_REOPEN_SOURCE_V1: &str = include_str!("source_openings_v1/canonical_reopen_v1.rs");
 const REPLAY_SOURCE_V1: &str = include_str!("../global_lookup_source_replay_v1.rs");
@@ -254,7 +254,7 @@ fn tiny_commitment_kat_uses_secret_msm_and_identity_is_rejected() {
     );
 }
 #[test]
-fn canonical_parse_entropy_errors_and_unwinds_fail_closed() {
+fn canonical_parse_errors_fail_closed() {
     let mut destination = ZeroizingT256ScalarVecV1::with_capacity(256);
     append_canonical_block_scalars_v1(&mut destination, &[0; PHASE23_MAIN_BLOCK_BYTES_V1]).unwrap();
     assert_eq!(destination.len(), 256);
@@ -265,40 +265,6 @@ fn canonical_parse_entropy_errors_and_unwinds_fail_closed() {
         append_canonical_block_scalars_v1(&mut destination, &[0; PHASE23_MAIN_BLOCK_BYTES_V1 - 1],)
             .is_err()
     );
-    let mut healthy = GlobalLookupSourceOpeningEntropySealV1::TestOnly(
-        DeterministicSourceOpeningEntropyV1::new_v1([0x41; 32]),
-    );
-    let (mut first_chunk, first) = healthy.sample_blinding_chunk_v1(0).unwrap();
-    let (mut second_chunk, second) = healthy.sample_blinding_chunk_v1(1).unwrap();
-    assert!(!first.get().is_zero());
-    assert!(!second.get().is_zero());
-    assert_ne!(first.get(), second.get());
-    assert_eq!(first_chunk.as_mut_slice_v1(), first.get().to_be_bytes());
-    assert_eq!(second_chunk.as_mut_slice_v1(), second.get().to_be_bytes());
-    let mut failing = GlobalLookupSourceOpeningEntropySealV1::TestOnly(
-        DeterministicSourceOpeningEntropyV1::with_fault_v1(
-            [0x42; 32],
-            TestEntropyFaultV1::ErrorAt(0),
-        ),
-    );
-    assert!(failing.sample_blinding_chunk_v1(0).is_err());
-    let mut zero = GlobalLookupSourceOpeningEntropySealV1::TestOnly(
-        DeterministicSourceOpeningEntropyV1::with_fault_v1(
-            [0x43; 32],
-            TestEntropyFaultV1::ZeroAt(0),
-        ),
-    );
-    assert!(zero.sample_blinding_chunk_v1(0).is_err());
-    let unwind = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let mut panicking = GlobalLookupSourceOpeningEntropySealV1::TestOnly(
-            DeterministicSourceOpeningEntropyV1::with_fault_v1(
-                [0x44; 32],
-                TestEntropyFaultV1::PanicAt(0),
-            ),
-        );
-        let _ = panicking.sample_blinding_chunk_v1(0);
-    }));
-    assert!(unwind.is_err());
 }
 #[test]
 fn receipt_kat_and_mutations_keep_every_proof_authority_and_release_gate_false() {
@@ -397,7 +363,7 @@ fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
         "push(value, generator)",
         "values.iter().zip(generators.g_bold)",
         "push(blinding.as_ref(), &generators.h)",
-        "ZeroizingT256ScalarCopyV1::take(&mut blinding)",
+        "let blinding = ZeroizingT256ScalarCopyV1::new(*blinding);",
         "let mut live = self\n            .live\n            .take()",
         "panic_after_take_for_test_v1",
         "source_opening_materialized: SOURCE_OPENING_MATERIALIZED_V1",
@@ -411,13 +377,14 @@ fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
         "blinding_snapshot: ConfidentialSpoolSnapshotV1",
         "!= self.record.blinding_snapshot_root",
         "Scalar::from_be_bytes_exact_ref(encoded)",
-        "random\n            .fill_bytes(chunk.as_mut_slice_v1())",
+        "proof_session\n                .sample_source_blinding_v1(u32::from(coordinate.ordinal))",
     ] {
         assert!(
             PRODUCTION_SOURCE_V1.contains(required),
             "missing source-opening guard: {required}"
         );
     }
+    assert!(!PRODUCTION_SOURCE_V1.contains("let mut blinding = *blinding;"));
     for required in [
         "let mut replay = self\n            .replay\n            .take()",
         "read_canonical_plaintext_block_v1(record, block)",

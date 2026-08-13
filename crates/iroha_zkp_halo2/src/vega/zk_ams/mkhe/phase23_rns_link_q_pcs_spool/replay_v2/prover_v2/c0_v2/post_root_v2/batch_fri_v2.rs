@@ -7,14 +7,14 @@
 //! 380 layer-0 alphas, authenticates paired B0 blocks, and roots B1. A bounded
 //! child continues B1 through B17 and the equal terminal. No proof, ZK, RSS,
 //! receipt, or release authority is produced.
-use core::convert::Infallible;
-use std::path::Path;
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use super::*;
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     ProverBatchChallengesV2, ProverBatchRowsCompleteV2, ProverFriLayer0ChallengesV2,
     ProverFriLayer0FoldCompleteV2,
 };
-use super::*;
+use core::convert::Infallible;
+use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use std::path::Path;
 #[path = "batch_fri_v2/storage_v2.rs"]
 mod storage_v2;
 use storage_v2::*;

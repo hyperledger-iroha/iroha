@@ -1,6 +1,6 @@
 //! Sequential final-proof replay adapters for C0 and Cq.
-use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::CanonicalProofSectionV2;
 use super::*;
+use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::CanonicalProofSectionV2;
 pub(in super::super) struct C0CanonicalProofReplayV2 {
     replay: Option<C0BatchReplayV2>,
     purpose: Option<CanonicalTreePurposeBoundV2>,

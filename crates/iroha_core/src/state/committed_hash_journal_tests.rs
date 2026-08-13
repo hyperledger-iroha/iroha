@@ -1,5 +1,5 @@
-use std::num::NonZeroUsize;
 use super::*;
+use std::num::NonZeroUsize;
 #[test]
 fn committed_block_hashes_snapshot_reads_block_hash_journal() {
     let kura = Kura::blank_kura_for_testing();

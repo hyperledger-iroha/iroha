@@ -23,22 +23,6 @@
 //! Their scalar field is the T256 plaintext field, so encoding the full BGV
 //! equation in that field would erase `t*e`.  No membership-only path in this
 //! module can construct a relation receipt or contribution capability.
-use core::{
-    fmt,
-    sync::atomic::{Ordering, compiler_fence},
-};
-use thiserror::Error;
-use crate::{
-    generalized_bulletproof::{ProofRandomSource, ProofSuite, multiexp},
-    vega::{
-        MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-        bulletproof_t256::{
-            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
-            ZkAmsT256BulletproofSuiteV1, ZkAmsT256MembershipProofV1,
-        },
-        sponge::{Keccak256, Shake256Reader},
-    },
-};
 use super::{
     ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
     ZkAmsMkhePartyIdV1,
@@ -65,6 +49,22 @@ use super::{
     signed_mod,
     wire::ZkAmsMkheAuthenticationWireV1,
 };
+use crate::{
+    generalized_bulletproof::{ProofRandomSource, ProofSuite, multiexp},
+    vega::{
+        MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+        bulletproof_t256::{
+            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+            ZkAmsT256BulletproofSuiteV1, ZkAmsT256MembershipProofV1,
+        },
+        sponge::{Keccak256, Shake256Reader},
+    },
+};
+use core::{
+    fmt,
+    sync::atomic::{Ordering, compiler_fence},
+};
+use thiserror::Error;
 #[path = "cpk_relation_common_a.rs"]
 mod common_a;
 pub(super) use common_a::{

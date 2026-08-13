@@ -1,12 +1,12 @@
 //! Purpose-bound authenticated column staging for the initial C0 pass.
-use std::path::Path;
+use super::*;
+use crate::vega::sponge::Keccak256;
 use iroha_confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1,
     ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
-use crate::vega::sponge::Keccak256;
-use super::*;
+use std::path::Path;
 const INITIAL_C0_COLUMN_MAPPING_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.initial-c0-column-stage.mapping\0";
 const INITIAL_C0_COLUMN_CONTEXT_DOMAIN_V2: &[u8] =

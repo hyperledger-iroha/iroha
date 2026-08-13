@@ -6,22 +6,15 @@
 //! receipt can only be obtained after the bytes, their metadata, and the
 //! directory entry have been synchronised. The first release has one V1 frame
 //! layout and no predecessor-format reader or migration path.
-use std::{
-    collections::BTreeMap,
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    mem::size_of,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use super::v2_core::EventTag;
-use iroha_crypto::{Hash, HashOf, PublicKey};
-use iroha_data_model::block::{
-    CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
-};
-use norito::codec::{Decode, DecodeAll as _, Encode};
-use thiserror::Error;
+#![cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "recovered-body seams remain test-sealed until first release"
+    )
+)]
 use super::v2_chunks::encode_payload;
+use super::v2_core::EventTag;
 use super::{
     v2::{
         PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1,
@@ -38,6 +31,20 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyResponse,
 };
 use crate::kura::KuraV2CommitReceipt;
+use iroha_crypto::{Hash, HashOf, PublicKey};
+use iroha_data_model::block::{
+    CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
+};
+use norito::codec::{Decode, DecodeAll as _, Encode};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    mem::size_of,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use thiserror::Error;
 const STORE_MAGIC: &[u8; 8] = b"SUM2BODY";
 const VALIDATED_MAGIC: &[u8; 8] = b"SUM2VALD";
 const STORE_VERSION: u16 = 1;

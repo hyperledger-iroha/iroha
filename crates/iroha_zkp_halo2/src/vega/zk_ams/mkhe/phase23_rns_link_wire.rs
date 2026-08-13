@@ -19,12 +19,6 @@
 //! The bound decoder gives the header's statement digest one meaning only: the
 //! verifier-derived digest of the complete release RNS challenge set.
 
-#![allow(dead_code)]
-use core::fmt;
-use crate::vega::{
-    MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-    bulletproof_t256::{ZeroizingT256ScalarCopyV1, ZeroizingT256ScalarVecV1},
-};
 use super::{
     ZkAmsMkheErrorV1,
     phase23_rns_link::{
@@ -33,6 +27,11 @@ use super::{
         ZkAmsPhase23RnsLinkWholeProofBindingV1, expected_logical_values_v1,
     },
 };
+use crate::vega::{
+    MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+    bulletproof_t256::{ZeroizingT256ScalarCopyV1, ZeroizingT256ScalarVecV1},
+};
+use core::fmt;
 const WHOLE_PROOF_MAGIC_V1: [u8; 8] = *b"ZKRNLNK1";
 const WHOLE_PROOF_VERSION_V1: u8 = 1;
 const WHOLE_PROOF_FLAGS_V1: u8 = 0;
@@ -120,7 +119,7 @@ impl WholeProofFamilyV1 {
         })
     }
     const fn chunk_count(self) -> usize {
-        (self.logical_values() + WHOLE_PROOF_SLOT_COUNT_V1 - 1) / WHOLE_PROOF_SLOT_COUNT_V1
+        self.logical_values().div_ceil(WHOLE_PROOF_SLOT_COUNT_V1)
     }
 }
 const WHOLE_PROOF_FAMILY_ORDER_V1: [WholeProofFamilyV1; WHOLE_PROOF_FAMILY_COUNT_V1] = [
@@ -865,17 +864,17 @@ where
 }
 #[cfg(test)]
 mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use crate::vega::{
-        MaskedRelaxedRandomErrorV1, VEGA_T256_BASE_MODULUS_BE_V1, VEGA_T256_SCALAR_MODULUS_BE_V1,
-        bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1, derive_t256_generators_v1,
-        sponge::keccak256,
-    };
     use super::super::phase23_encrypted::zk_ams_phase23_release_map_set_digest_v1;
     use super::super::phase23_rns_link::{
         ZkAmsPhase23RnsLinkCommitmentDigestsV1, ZkAmsPhase23RnsLinkFamilyV1,
     };
     use super::*;
+    use crate::vega::{
+        MaskedRelaxedRandomErrorV1, VEGA_T256_BASE_MODULUS_BE_V1, VEGA_T256_SCALAR_MODULUS_BE_V1,
+        bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1, derive_t256_generators_v1,
+        sponge::keccak256,
+    };
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     fn next_scalar(counter: &mut u64) -> Scalar {
         let value = *counter;
         *counter = counter.checked_add(1).expect("fixture scalar counter fits");

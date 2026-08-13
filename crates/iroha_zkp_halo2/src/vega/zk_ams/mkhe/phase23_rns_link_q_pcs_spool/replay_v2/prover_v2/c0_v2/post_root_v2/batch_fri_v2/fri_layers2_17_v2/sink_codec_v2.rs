@@ -130,11 +130,11 @@ const _: () = {
 };
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::atomic::{AtomicUsize, Ordering},
     };
-    use super::*;
     static PANIC_SINK_DROPS_V2: AtomicUsize = AtomicUsize::new(0);
     struct HashSinkV2 {
         hash: Keccak256,

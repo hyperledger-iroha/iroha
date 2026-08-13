@@ -93,14 +93,8 @@ impl ZkAmsMkheTrustedSourceContextV1 {
             || self.collective_key_digest == [0; 32]
             || self.public_key_a_native_digest == [0; 32]
             || self.public_key_a_wire_digest == [0; 32]
-            || self
-                .party_public_b_native_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
-            || self
-                .party_public_b_wire_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
+            || self.party_public_b_native_digests.contains(&[0; 32])
+            || self.party_public_b_wire_digests.contains(&[0; 32])
             || self.cks_verification_seal == [0; 32]
             || self.verification_seal == [0; 32]
             || self.verification_seal != trusted_source_context_seal(self)

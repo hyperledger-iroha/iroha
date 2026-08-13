@@ -6,20 +6,13 @@
 //! completions. Control messages use the bounded committee topology: proposal
 //! manifests and phase votes reach the full committee, first-send body chunks
 //! reach Set A, and timeout/QC recovery remains committee-wide.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fs::{self, File, OpenOptions},
-    io::{ErrorKind, Read, Write},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
-        mpsc,
-    },
-    thread,
-    time::{Duration, Instant},
-};
+#![cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "worker completion seams remain test-sealed until cutover"
+    )
+)]
 use super::v2_core::{
     CanonicalIdentityProjection, Committee, EventTag, IDENTITY_DOMAIN_PAYLOAD,
     IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY,
@@ -31,9 +24,78 @@ use super::v2_core::{
     check_production_reliable_flush_worker_transition,
 };
 #[cfg(test)]
-use super::v2_core::{Generation, production_reliable_flush_trace_refines_outbound_ownership_kernel};
+use super::v2_core::{
+    Generation, production_reliable_flush_trace_refines_outbound_ownership_kernel,
+};
 #[cfg(test)]
 use super::v2_runtime::{LocalProposalEffectOwnership, RuntimeQueueSnapshot};
+use super::{
+    FairV2Ingress, FairV2IngressOwnershipEvidence,
+    message::{
+        BlockMessage, BlockMessageWire, KuraReplicaAdvertV1, LaneHistoricalRecoveryPayloadV1,
+        LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
+    },
+    output_guard::{ConsensusFailStopOperation, ConsensusOutputGuard, ConsensusOutputPermit},
+    v2_apply::{
+        RecoveredDecisionApplyTaskV1, RecoveredDecisionApplyWorkerResultV1, V2ApplyService,
+    },
+    v2_body_store::{
+        BodyStoreCompletion, BodyValidationCompletion, V2BodyRetirementJob, V2BodyStore,
+        V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
+    },
+    v2_certified_serve_payload_store::{
+        AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadStoreInstanceIdentity,
+        CertifiedServePayloadStoreV1, CertifiedServeRetirementAuthenticationErrorV1,
+    },
+    v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
+    v2_effects::{
+        ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
+        CertifiedBodyFetchCompletionDisposition, CompletionDisposition,
+        ConsensusBroadcastDisposition, ConsensusSignTask, DurableApplyCompletion,
+        EffectExecutorError, EffectExecutorStatus, EffectRuntime, EffectTransportError,
+        EffectWorkId, PayloadChunkLifecycleDisposition, PendingTipRecoveryAttemptResult,
+        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
+    },
+    v2_lane_work::{
+        DurableLaneRolloverAuthority, V2LaneWorkAdapter, V2LaneWorkEffect,
+        durable_historical_lane_output_source_hash, lane_output_identity,
+    },
+    v2_lifecycle_coordinator::{
+        AuthenticatedSchedulerInputsFactory, CertifiedFetchBodyPersistenceCompletion,
+        CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
+        LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal,
+        PreparedLifecycleIngressSelector, PreparedRecoveredDecisionApplyDispatch,
+        PreparedRecoveredLifecycleSignDispatch,
+        ProductionLifecycleServeRetirementAuthenticationPermitV1,
+        ProductionV2CompletionObserverActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
+        RecoveredDecisionFetchBodyPersistenceCompletionV1,
+        RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchDispatchKeyV1,
+        RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
+    },
+    v2_runtime::{
+        ExactServePredecessorCompletionEvidence, ExactServePredecessorEpisodeWitness,
+        LeaderWireRuntimeTerminal, RuntimeLifecycleOrdinalSource, RuntimeQueueLaneSnapshot,
+        SerializedV2Runtime,
+    },
+    v2_transport::{
+        AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk, V2TransportError,
+        authenticate_certified_body_request_identity,
+        authenticate_certified_body_request_with_validator_pops,
+    },
+};
+use crate::{
+    EventsSender, IrohaNetwork, NetworkMessage,
+    kura::{Kura, KuraReplicaAdvertSourceV1, KuraV2CommitReceipt},
+    lane_consensus::LaneDrainVoteV1,
+    merge_sidecar::{
+        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
+        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarClosedPrefix,
+        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarStreamEpochV1,
+        MergeSidecarError, reliable_flush_topic_tag,
+    },
+    native_amx::NativeAmxMessage,
+};
 use iroha_config::parameters::{
     actual::{
         KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN,
@@ -74,66 +136,19 @@ use iroha_p2p::{
     },
 };
 use norito::codec::{Decode, DecodeAll, Encode};
-use super::{
-    FairV2Ingress, FairV2IngressOwnershipEvidence,
-    message::{
-        BlockMessage, BlockMessageWire, KuraReplicaAdvertV1, LaneHistoricalRecoveryPayloadV1,
-        LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fs::{self, File, OpenOptions},
+    io::{ErrorKind, Read, Write},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
+        mpsc,
     },
-    output_guard::{ConsensusFailStopOperation, ConsensusOutputGuard, ConsensusOutputPermit},
-    v2_apply::{
-        RecoveredDecisionApplyTaskV1, RecoveredDecisionApplyWorkerResultV1, V2ApplyService,
-    },
-    v2_body_store::{
-        BodyStoreCompletion, BodyValidationCompletion, V2BodyRetirementJob, V2BodyStore,
-        V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
-    },
-    v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
-    v2_effects::{
-        ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
-        CertifiedBodyFetchCompletionDisposition, CompletionDisposition,
-        ConsensusBroadcastDisposition, ConsensusSignTask, DurableApplyCompletion,
-        EffectExecutorError, EffectExecutorStatus, EffectRuntime, EffectTransportError,
-        EffectWorkId, PayloadChunkLifecycleDisposition, PendingTipRecoveryAttemptResult,
-        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
-    },
-    v2_lane_work::{
-        DurableLaneRolloverAuthority, V2LaneWorkAdapter, V2LaneWorkEffect,
-        durable_historical_lane_output_source_hash, lane_output_identity,
-    },
-    v2_lifecycle_coordinator::{
-        AuthenticatedSchedulerInputsFactory, CertifiedFetchBodyPersistenceCompletion,
-        CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
-        LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal,
-        PreparedLifecycleIngressSelector, PreparedRecoveredDecisionApplyDispatch,
-        PreparedRecoveredLifecycleSignDispatch, ProductionV2CompletionObserverActivationPermitV1,
-        RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchBodyPersistenceCompletionV1,
-        RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchDispatchKeyV1,
-        RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
-    },
-    v2_runtime::{
-        ExactServePredecessorCompletionEvidence, ExactServePredecessorEpisodeWitness,
-        LeaderWireRuntimeTerminal, RuntimeLifecycleOrdinalSource, RuntimeQueueLaneSnapshot,
-        SerializedV2Runtime,
-    },
-    v2_transport::{
-        AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk, V2TransportError,
-        authenticate_certified_body_request_identity,
-        authenticate_certified_body_request_with_validator_pops,
-    },
-};
-use crate::{
-    EventsSender, IrohaNetwork, NetworkMessage,
-    kura::{Kura, KuraReplicaAdvertSourceV1, KuraV2CommitReceipt},
-    lane_consensus::LaneDrainVoteV1,
-    merge_sidecar::{
-        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
-        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarClosedPrefix,
-        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
-        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarStreamEpochV1,
-        MergeSidecarError, reliable_flush_topic_tag,
-    },
-    native_amx::NativeAmxMessage,
+    thread,
+    time::{Duration, Instant},
 };
 fn reliable_flush_typed_identity<T>(
     domain: u8,
@@ -2347,7 +2362,7 @@ impl LifecycleIoCapacityReservation<'_> {
     }
     /// Verify that one prepared persistence command can consume this exact
     /// target slot without any fallible queue mutation after planning.
-    pub(crate) fn preflight_certified_fetch_body_persistence(
+    pub(in crate::sumeragi) fn preflight_certified_fetch_body_persistence(
         &self,
         task: &CertifiedFetchBodyPersistenceTask,
     ) -> bool {
@@ -2435,7 +2450,7 @@ impl LifecycleIoCapacityReservation<'_> {
     }
     /// Consume the locked reservation into the preflighted exact persistence
     /// command and publish the FIFO only after its ownership index is installed.
-    pub(crate) fn commit_certified_fetch_body_persistence(
+    pub(in crate::sumeragi) fn commit_certified_fetch_body_persistence(
         mut self,
         task: CertifiedFetchBodyPersistenceTask,
     ) {
@@ -9078,6 +9093,27 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignCompletionDrainV1 {
 pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyCompletionDrainV1 {
     completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,
 }
+
+/// Opaque result of taking the physical completion head exactly once.
+///
+/// Ordinary I/O and local reconstruction work is never exposed. An ordinary
+/// I/O head is restored into the service's sole held slot before
+/// `PassThrough` returns, so the ordinary drain observes the same FIFO item.
+/// Recovered variants transfer only their guarded, class-specific owner.
+#[must_use = "a selected recovered completion must remain lifecycle-owned"]
+pub(in crate::sumeragi) enum RecoveredLifecycleCompletionTakeV1 {
+    /// No physical I/O completion is currently available.
+    None,
+    /// The ordinary completion owner must service the current turn.
+    PassThrough,
+    /// The exact recovered Decision Apply completion left the FIFO owner.
+    Apply(PreparedRecoveredDecisionApplyCompletionV1),
+    /// The exact recovered Sign completion left the FIFO owner.
+    Sign(PreparedRecoveredLifecycleSignCompletionV1),
+    /// The exact persisted recovered Decision Fetch body left the FIFO owner.
+    DecisionFetch(PreparedRecoveredDecisionFetchBodyCompletionV1),
+}
+
 impl RecoveredDecisionFetchBodyCompletionDrainV1 {
     /// Consume the drain result into its optional guarded persistence completion.
     pub(in crate::sumeragi) fn into_completion(
@@ -16171,6 +16207,7 @@ pub(crate) struct ProductionV2Services {
     chunk_root: PathBuf,
     io: Option<V2IoHandle>,
     lifecycle_body_store_identity: Option<V2BodyStoreInstanceIdentity>,
+    lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
     fetches: BTreeMap<EffectWorkId, FetchSession>,
     fetch_by_manifest: BTreeMap<HashOf<wire::PayloadManifest>, EffectWorkId>,
     orphan_chunks: BTreeMap<HashOf<wire::PayloadManifest>, VecDeque<BufferedPayloadChunk>>,
@@ -16367,13 +16404,73 @@ pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputReservationV
     pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     batch: Option<PendingExactOutputBatchPlan>,
     authority: Option<super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1>,
+    wal_append: RecoveredLifecycleProposalPrepareWalAppendSealV1,
+}
+
+/// Reservation-owned identity seal for the initial Proposal WAL append.
+///
+/// It is constructed only after the exact control/chunk batch owns aggregate
+/// corridor capacity. The public borrow wrapper below prevents the WAL append
+/// from outliving or bypassing that armed reservation.
+struct RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+    dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+    output_guard: Arc<ConsensusOutputGuard>,
+    attempted: bool,
+}
+
+/// Borrow-bound proof that one exact Proposal batch remains reserved.
+#[must_use = "the Proposal WAL append permit must remain tied to its output reservation"]
+pub(in crate::sumeragi) struct RecoveredLifecycleProposalPrepareWalAppendPermitV1<'reservation> {
+    seal: &'reservation mut RecoveredLifecycleProposalPrepareWalAppendSealV1,
+}
+
+impl RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_> {
+    /// Compare the preview owner without exposing any reservation constituent.
+    pub(in crate::sumeragi) fn authorizes(
+        &self,
+        dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+        body_store_identity: &V2BodyStoreInstanceIdentity,
+        output_guard: &Arc<ConsensusOutputGuard>,
+    ) -> bool {
+        !self.seal.attempted
+            && self.seal.dispatch_key == dispatch_key
+            && self
+                .seal
+                .body_store_identity
+                .same_instance(body_store_identity)
+            && Arc::ptr_eq(&self.seal.output_guard, output_guard)
+    }
+
+    /// Irreversibly cross the retry boundary before attempting the WAL append.
+    pub(in crate::sumeragi) fn cross_wal_attempt_boundary(self) {
+        self.seal.attempted = true;
+    }
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
+    /// Borrow the sole initial-Proposal WAL permit while this batch is armed.
+    pub(in crate::sumeragi) fn prepare_wal_append_permit(
+        &mut self,
+    ) -> Option<RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_>> {
+        (self.operation.is_some()
+            && self.pending.is_some()
+            && self.batch.is_some()
+            && self.authority.is_some()
+            && !self.wal_append.attempted)
+            .then_some(RecoveredLifecycleProposalPrepareWalAppendPermitV1 {
+                seal: &mut self.wal_append,
+            })
+    }
+
     /// Release an unchanged aggregate reservation before durable publication.
     pub(in crate::sumeragi) fn abort_before_publication(
         mut self,
     ) -> super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1 {
+        assert!(
+            !self.wal_append.attempted,
+            "an attempted Proposal WAL cut cannot return to the prepublication retry boundary"
+        );
         drop(self.pending.take());
         drop(self.batch.take());
         self.operation
@@ -16705,6 +16802,12 @@ impl ProductionV2Services {
         proposal
             .validate(&self.context)
             .map_err(|error| error.to_string())?;
+        let wal_append = RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+            dispatch_key,
+            body_store_identity: body_store_identity.clone(),
+            output_guard: Arc::clone(&authority_output_guard),
+            attempted: false,
+        };
         let retry_authority =
             super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(
                 RecoveredLifecycleProposalExactOutputPermitV1::new(),
@@ -16794,6 +16897,7 @@ impl ProductionV2Services {
                 pending: Some(pending),
                 batch: Some(batch),
                 authority: Some(retry_authority),
+                wal_append,
             },
         ))
     }
@@ -16954,6 +17058,79 @@ impl ProductionV2Services {
                 .as_ref()
                 .is_some_and(|worker_identity| worker_identity.same_instance(owner_identity))
     }
+
+    /// Return whether the service was launched beside this exact Serve store.
+    pub(in crate::sumeragi) fn matches_lifecycle_payload_store(
+        &self,
+        owner_identity: &CertifiedServePayloadStoreInstanceIdentity,
+    ) -> bool {
+        self.io.is_some()
+            && self
+                .lifecycle_payload_store_identity
+                .as_ref()
+                .is_some_and(|service_identity| service_identity.same_instance(owner_identity))
+    }
+
+    /// Refresh the exact live Certified-Serve cut for all-row retirement.
+    ///
+    /// The output-handoff seal is the irreversible prerequisite: before it is
+    /// present a live output or ingress transaction could still race this
+    /// census. The launch-private permit and both retained store identities
+    /// prevent a sibling service, signer, or reopened directory owner from
+    /// authenticating the cut.
+    pub(in crate::sumeragi) fn authenticate_current_lifecycle_serve_retirement(
+        &self,
+        permit: ProductionLifecycleServeRetirementAuthenticationPermitV1,
+        verified: &super::v2::VerifiedHeightContext,
+        payload_store: &CertifiedServePayloadStoreV1,
+        owner_body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> Result<
+        AuthenticatedCertifiedServePayloadRecoveryCut,
+        CertifiedServeRetirementAuthenticationErrorV1,
+    > {
+        let payload_store_identity = payload_store.instance_identity();
+        let roster_position = self
+            .context
+            .roster
+            .iter()
+            .position(|entry| entry.validator == self.local_peer)
+            .and_then(|position| wire::ValidatorIndex::try_from(position).ok());
+        if self.context != *verified.context()
+            || self.validator_set_pops != verified.proofs_of_possession()
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || self
+                .local_validator
+                .is_some_and(|validator| roster_position != Some(validator))
+            || !self.matches_lifecycle_body_store(owner_body_store_identity)
+            || !self.matches_lifecycle_payload_store(&payload_store_identity)
+            || !self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(CertifiedServeRetirementAuthenticationErrorV1::ForeignServiceOwner);
+        }
+        payload_store.authenticate_current_for_lifecycle_retirement(
+            permit,
+            verified,
+            &self.key_pair,
+        )
+    }
+
+    /// Seal an empty fixture corridor before exercising retirement census joins.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn seal_empty_exact_output_for_lifecycle_retirement_test(
+        &self,
+    ) -> Result<(), String> {
+        let pending = self
+            .pending_exact_output
+            .lock()
+            .map_err(|_| "fixture exact-output corridor lock was poisoned".to_owned())?;
+        if pending.is_pending() {
+            return Err("fixture exact-output corridor still owns output".to_owned());
+        }
+        self.exact_output_handoff_owner
+            .seal()
+            .map_err(|error| error.to_string())
+    }
+
     fn recovered_lifecycle_next_vote_body_executor_permit<R: EffectRuntime>(
         &self,
         executor: &V2EffectExecutor<R>,
@@ -17009,7 +17186,6 @@ impl ProductionV2Services {
     /// launch stack. No constructor, drain, or ordinary status update can
     /// register this observer. The runner cut will consume this method only as
     /// part of its final all-or-restart activation transaction.
-    // TODO: Consume this seam in the one-shot runner activation transaction.
     #[allow(dead_code)]
     pub(in crate::sumeragi) fn activate_effect_completion_observer(
         &self,
@@ -17254,6 +17430,7 @@ impl ProductionV2Services {
             network,
             chunk_root,
             body_store,
+            None,
             state,
             kura,
             apply_service,
@@ -17287,6 +17464,7 @@ impl ProductionV2Services {
         network: IrohaNetwork,
         chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
+        payload_store_identity: CertifiedServePayloadStoreInstanceIdentity,
         state: Arc<crate::state::State>,
         kura: Arc<crate::kura::Kura>,
         apply_service: V2ApplyService,
@@ -17319,6 +17497,7 @@ impl ProductionV2Services {
             network,
             chunk_root,
             body_store,
+            Some(payload_store_identity),
             state,
             kura,
             apply_service,
@@ -17345,6 +17524,7 @@ impl ProductionV2Services {
         network: IrohaNetwork,
         chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
+        lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
         state: Arc<crate::state::State>,
         kura: Arc<crate::kura::Kura>,
         apply_service: V2ApplyService,
@@ -17448,6 +17628,7 @@ impl ProductionV2Services {
             chunk_root: context_chunk_root,
             io: Some(io),
             lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
+            lifecycle_payload_store_identity,
             fetches: BTreeMap::new(),
             fetch_by_manifest: BTreeMap::new(),
             orphan_chunks: BTreeMap::new(),
@@ -19212,6 +19393,106 @@ impl ProductionV2Services {
             completion: Some(PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }),
         })
     }
+
+    /// Take and classify the oldest Completion-lane owner in one operation.
+    ///
+    /// This is the lifecycle driver's sole physical-head classifier. It does
+    /// not probe three mutually exclusive drains. A pending local completion,
+    /// or an ordinary I/O head, returns `PassThrough` without acknowledgement
+    /// or ownership-position removal. A recovered result transfers exactly its
+    /// dedicated guarded token and advances completion-source rotation once.
+    pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(
+        &mut self,
+    ) -> Result<RecoveredLifecycleCompletionTakeV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        if self.held_io_completion.is_none()
+            && self.next_completion_source == CompletionSource::Local
+            && !self.local_completions.is_empty()
+        {
+            return Ok(RecoveredLifecycleCompletionTakeV1::PassThrough);
+        }
+
+        let completion = if let Some(completion) = self.held_io_completion.take() {
+            completion
+        } else {
+            let Some(io) = self.io.as_ref() else {
+                return Ok(RecoveredLifecycleCompletionTakeV1::None);
+            };
+            let Ok(completion) = io.try_recv_completion_unacknowledged() else {
+                return if self.local_completions.is_empty() {
+                    Ok(RecoveredLifecycleCompletionTakeV1::None)
+                } else {
+                    Ok(RecoveredLifecycleCompletionTakeV1::PassThrough)
+                };
+            };
+            completion
+        };
+
+        match completion {
+            V2IoCompletion::RecoveredDecisionApply(guarded) => {
+                let key = guarded.result().dispatch_key();
+                let work_ack = match self.io.as_ref().ok_or_else(|| {
+                    "recovered Decision Apply completion lost its I/O service owner".to_owned()
+                }) {
+                    Ok(io) => match io
+                        .prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))
+                    {
+                        Ok(work_ack) => work_ack,
+                        Err(error) => {
+                            self.held_io_completion =
+                                Some(V2IoCompletion::RecoveredDecisionApply(guarded));
+                            return Err(error);
+                        }
+                    },
+                    Err(error) => {
+                        self.held_io_completion =
+                            Some(V2IoCompletion::RecoveredDecisionApply(guarded));
+                        return Err(error);
+                    }
+                };
+                self.next_completion_source = CompletionSource::Local;
+                Ok(RecoveredLifecycleCompletionTakeV1::Apply(
+                    PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack },
+                ))
+            }
+            V2IoCompletion::RecoveredLifecycleSign(guarded) => {
+                let completion = self
+                    .io
+                    .as_ref()
+                    .and_then(|io| io.prepare_recovered_lifecycle_sign_completion(guarded, 0))
+                    .ok_or_else(|| {
+                        "recovered Sign completion lost its exact dedicated owner".to_owned()
+                    })?;
+                self.next_completion_source = CompletionSource::Local;
+                Ok(RecoveredLifecycleCompletionTakeV1::Sign(completion))
+            }
+            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded) => {
+                let completion = self
+                    .io
+                    .as_ref()
+                    .and_then(|io| io.prepare_recovered_decision_fetch_body_completion(guarded, 0))
+                    .ok_or_else(|| {
+                        "recovered Decision Fetch body completion lost its exact dedicated owner"
+                            .to_owned()
+                    })?;
+                self.next_completion_source = CompletionSource::Local;
+                Ok(RecoveredLifecycleCompletionTakeV1::DecisionFetch(
+                    completion,
+                ))
+            }
+            ordinary => {
+                assert!(
+                    self.held_io_completion.is_none(),
+                    "ordinary pass-through must restore the sole held completion slot"
+                );
+                self.held_io_completion = Some(ordinary);
+                Ok(RecoveredLifecycleCompletionTakeV1::PassThrough)
+            }
+        }
+    }
+
     /// Drain only the oldest lifecycle-owned recovered Sign completion.
     ///
     /// The returned token remains opaque and guarded. A different FIFO head is

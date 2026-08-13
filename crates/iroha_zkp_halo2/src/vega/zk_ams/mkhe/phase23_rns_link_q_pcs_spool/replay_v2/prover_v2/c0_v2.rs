@@ -7,12 +7,12 @@
 //! initial Merkle tree.  The only production authority is uninhabited.  The
 //! returned value is therefore a non-authorizing prerequisite and retains the
 //! accepted replay owner without exposing a file, path, key, slot, or snapshot.
-use core::{convert::Infallible, sync::atomic};
-use std::path::Path;
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
-use crate::vega::sponge::Keccak256;
 use super::super::super::super::{Fq2ParametersV1, Fq2V1};
 use super::*;
+use crate::vega::sponge::Keccak256;
+use core::{convert::Infallible, sync::atomic};
+use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use std::path::Path;
 const MERKLE_LEAF_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0";
 const MERKLE_NODE_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-node\0";
 const INITIAL_TREE_KIND_V2: u8 = 1;

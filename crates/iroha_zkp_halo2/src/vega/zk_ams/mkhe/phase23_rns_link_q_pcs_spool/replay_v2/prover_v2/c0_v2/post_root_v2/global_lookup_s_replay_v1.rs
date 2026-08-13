@@ -3,8 +3,8 @@
 //! This module deliberately has no inhabited production authority yet.  It owns
 //! the exact replay schedule and binding now, while the later lookup-plane seal
 //! remains the only place that may make the production entry point reachable.
-use core::{convert::Infallible, mem::size_of};
 use super::*;
+use core::{convert::Infallible, mem::size_of};
 const GLOBAL_LOOKUP_S_REPLAY_PURPOSE_V1: &[u8] = b"iroha.vega.mkhe.global_lookup.q_pcs_s_replay.v1";
 const GLOBAL_LOOKUP_S_REPLAY_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.vega.mkhe.global_lookup.q_pcs_s_replay.binding.v1";

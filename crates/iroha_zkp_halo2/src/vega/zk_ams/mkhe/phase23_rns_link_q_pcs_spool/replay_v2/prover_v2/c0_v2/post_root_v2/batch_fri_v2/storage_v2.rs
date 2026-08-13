@@ -1,12 +1,12 @@
 //! Purpose-bound authenticated storage and root replay for qPCS B0.
+use super::*;
+use crate::vega::sponge::Keccak256;
 use core::sync::atomic;
-use std::path::Path;
 use iroha_confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
-use crate::vega::sponge::Keccak256;
-use super::*;
+use std::path::Path;
 #[path = "storage_v2/fold_layer1_v2.rs"]
 mod fold_layer1_v2;
 pub(super) use fold_layer1_v2::*;

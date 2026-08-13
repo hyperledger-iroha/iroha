@@ -4,16 +4,16 @@
 //! and byte accounting needed by a later global-lookup opening implementation.
 //! It owns no polynomial, opening, randomness, prover, verifier, or release
 //! authority. Production data-plane and proof-session seals remain uninhabited.
-use core::convert::Infallible;
-use crate::vega::{
-    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-    bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, sponge::Keccak256,
-};
 use super::{
     COEFFICIENT_IPAS_V1, ENDPOINT_GATES_V1, ENDPOINT_STATEMENTS_V1, HIDDEN_ENDPOINTS_V1,
     IpaStatementRoleV1, challenge_v1::challenge_manifest_digest_v1,
     global_lookup_topology_digest_v1, ipa_statement_role_v1, ipa_tag_v1,
 };
+use crate::vega::{
+    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+    bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, sponge::Keccak256,
+};
+use core::convert::Infallible;
 const COMMITTED_MLE_VERSION_V1: u8 = 1;
 const COMMITTED_MLE_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.committed-mle.manifest\0";

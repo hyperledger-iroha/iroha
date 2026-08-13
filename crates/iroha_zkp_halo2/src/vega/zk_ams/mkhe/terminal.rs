@@ -15,7 +15,6 @@
 //! enforced at encrypted ingress by the authenticated full-roster mask-share
 //! ceremony bound to the roster/epoch/transcript context, not by trusting a
 //! prover-supplied digest at this terminal boundary.
-use std::sync::Arc;
 use super::{
     Scalar, ZkAmsMkheErrorV1, keccak256,
     manifest::release_profile_v1,
@@ -38,6 +37,7 @@ use crate::vega::{
     nifs::NovaNifs,
     r1cs::{Instance, RelaxedInstance, RelaxedWitness, Shape, SparseMatrix},
 };
+use std::sync::Arc;
 const PHASE3_TERMINAL_VERSION_V1: u8 = 1;
 const PHASE3_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.terminal-context";
 const PHASE3_MAP_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.paper-order-map-set";
@@ -588,6 +588,10 @@ impl ZeroizingTerminalRelaxedWitnessV1 {
     fn take(&mut self) -> Result<RelaxedWitness, ZkAmsMkheErrorV1> {
         self.0.take().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     }
+    #[allow(
+        dead_code,
+        reason = "cross-basis kernel remains source-and-packing sealed until its consuming owner is wired"
+    )]
     fn as_ref(&self) -> &RelaxedWitness {
         self.0.as_ref().expect("guarded witness is present")
     }
@@ -628,6 +632,10 @@ impl Drop for ZeroizingTerminalRelaxedWitnessV1 {
 /// and cannot outlive it.  Their order is fixed as every `E,rE` row followed
 /// by every `W,rW` row.  This view deliberately has no constructor, codec, or
 /// owned-vector return path.
+#[allow(
+    dead_code,
+    reason = "cross-basis kernel remains source-and-packing sealed until its consuming owner is wired"
+)]
 pub(super) struct ZkAmsPhase3PreparedTerminalOpeningsV1<'a> {
     context_digest: [u8; 32],
     materialized_digest: [u8; 32],
@@ -638,6 +646,10 @@ pub(super) struct ZkAmsPhase3PreparedTerminalOpeningsV1<'a> {
     witness_blindings: &'a [Scalar],
     witness_commitment: &'a Commitment,
 }
+#[allow(
+    dead_code,
+    reason = "cross-basis kernel remains source-and-packing sealed until its consuming owner is wired"
+)]
 impl<'a> ZkAmsPhase3PreparedTerminalOpeningsV1<'a> {
     /// Digest of the exact terminal context checked before borrowing rows.
     pub(super) const fn context_digest_v1(&self) -> [u8; 32] {
@@ -700,6 +712,10 @@ impl ZkAmsPhase3PreparedTerminalMaterializationV1 {
         Ok(())
     }
     /// Borrow the exact checked openings without transferring any owner.
+    #[allow(
+        dead_code,
+        reason = "cross-basis kernel remains source-and-packing sealed until its consuming owner is wired"
+    )]
     pub(super) fn openings_for_cross_basis_v1(
         &self,
         context: ZkAmsPhase3TerminalContextV1,
@@ -1767,6 +1783,10 @@ fn terminal_instance_digest(terminal: &RelaxedInstance) -> Result<[u8; 32], ZkAm
     }
     Ok(keccak256(&frame))
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed terminal receipt axes remain explicit to preserve canonical digest order"
+)]
 fn terminal_receipt(
     context: ZkAmsPhase3TerminalContextV1,
     composition_context_digest: [u8; 32],
@@ -1853,11 +1873,6 @@ fn usize_to_u32(value: usize) -> Result<u32, ZkAmsMkheErrorV1> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeSet,
-        panic::{AssertUnwindSafe, catch_unwind},
-        sync::OnceLock,
-    };
     use super::*;
     use crate::vega::{
         circuit::CircuitAssignment,
@@ -1865,6 +1880,11 @@ mod tests {
             MaskedRelaxedRandomErrorV1, MaskedRelaxedRandomSourceV1, precompute_masked_relaxed_v1,
         },
         zk_ams::mkhe::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1,
+    };
+    use std::{
+        collections::BTreeSet,
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::OnceLock,
     };
     const TEST_ROWS: usize = MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
     #[derive(Clone)]

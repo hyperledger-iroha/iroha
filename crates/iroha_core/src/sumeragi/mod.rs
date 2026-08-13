@@ -1,16 +1,9 @@
 //! Translates to Emperor. Consensus-related logic of Iroha.
 //!
 //! `Consensus` trait is now implemented only by `Sumeragi` for now.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    future::Future,
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc,
-    },
-    time::{Duration, Instant},
+use crate::{
+    merge_sidecar::{CertifiedMergeSidecarMessage, MAX_CERTIFIED_MERGE_CHUNK_BYTES},
+    state::{State, StateReadOnly, StateView, WorldReadOnly},
 };
 use eyre::Result;
 use iroha_config::parameters::{
@@ -47,9 +40,16 @@ use iroha_p2p::network::{
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
-use crate::{
-    merge_sidecar::{CertifiedMergeSidecarMessage, MAX_CERTIFIED_MERGE_CHUNK_BYTES},
-    state::{State, StateReadOnly, StateView, WorldReadOnly},
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
 };
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
@@ -114,13 +114,13 @@ pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
 }
 #[cfg(test)]
 mod thread_builder_tests {
-    use std::sync::{Mutex, atomic::Ordering, mpsc};
-    use iroha_crypto::KeyPair;
     use super::{
         Algorithm, CONFIGURED_SUMERAGI_STACK_SIZE_BYTES, concurrency_defaults,
         is_bls_normal_public_key, normalized_sumeragi_stack_size_bytes,
         set_sumeragi_stack_size_bytes, sumeragi_stack_size_bytes, sumeragi_thread_builder,
     };
+    use iroha_crypto::KeyPair;
+    use std::sync::{Mutex, atomic::Ordering, mpsc};
     static STACK_CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
     struct RestoreSumeragiStackSize(usize);
     impl Drop for RestoreSumeragiStackSize {
@@ -503,9 +503,9 @@ pub(crate) fn prf_seed_for_height_from_world(
 }
 #[cfg(test)]
 mod exact_epoch_seed_tests {
-    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
     #[test]
     fn exact_authenticated_epoch_seed_is_not_rederived_from_height() {
         let state = State::new_for_testing(
@@ -3935,6 +3935,34 @@ pub(crate) enum FairV2IngressDequeueDisposition {
     RetireObsolete,
 }
 include!("fair_v2_ingress_selector.rs");
+
+fn select_fair_v2_ingress_candidate<T>(
+    candidates: &[Vec<T>],
+    projection: impl Fn(&T) -> (u64, FairV2IngressQueueGateVerdict, bool),
+    mut predicate: impl FnMut(&T) -> bool,
+) -> Option<(usize, u64, FairV2IngressDequeueDisposition)> {
+    for dependency_pass in [false, true] {
+        for (source_index, source_candidates) in candidates.iter().enumerate() {
+            for candidate in source_candidates {
+                let (ordinal, gate, obsolete) = projection(candidate);
+                let dependency = gate == FairV2IngressQueueGateVerdict::Dependency;
+                if gate == FairV2IngressQueueGateVerdict::Blocked || dependency != dependency_pass {
+                    continue;
+                }
+                if obsolete || predicate(candidate) {
+                    let disposition = if obsolete {
+                        FairV2IngressDequeueDisposition::RetireObsolete
+                    } else {
+                        FairV2IngressDequeueDisposition::Admit
+                    };
+                    return Some((source_index, ordinal, disposition));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Fixed-capacity, roster-aware v2 ingress with per-hop admission and service fairness.
 ///
 /// Every authenticated validator hop owns one protected source slot, one ordinary
@@ -6466,72 +6494,38 @@ impl FairV2Ingress {
                         .get(source)
                         .into_iter()
                         .flat_map(|lane| {
-                            lane.entries
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(index, entry)| {
-                                    let verdict = fair_v2_ingress_queue_gate_verdict(
-                                        source,
-                                        lane,
-                                        index,
-                                        &serve_projection,
-                                        &leader_wire_projection,
-                                        barrier_bypass,
-                                    );
-                                    (verdict != FairV2IngressQueueGateVerdict::Blocked).then(|| {
-                                        (
-                                            entry.admission_ordinal,
-                                            Arc::clone(&entry.inbound),
-                                            verdict == FairV2IngressQueueGateVerdict::Dependency,
-                                            entry.leader_wire_token.as_ref().is_some_and(|token| {
-                                                obsolete_leader_wire_tokens.contains(token)
-                                            }),
-                                        )
-                                    })
-                                })
+                            lane.entries.iter().enumerate().map(|(index, entry)| {
+                                let verdict = fair_v2_ingress_queue_gate_verdict(
+                                    source,
+                                    lane,
+                                    index,
+                                    &serve_projection,
+                                    &leader_wire_projection,
+                                    barrier_bypass,
+                                );
+                                (
+                                    entry.admission_ordinal,
+                                    Arc::clone(&entry.inbound),
+                                    verdict,
+                                    entry.leader_wire_token.as_ref().is_some_and(|token| {
+                                        obsolete_leader_wire_tokens.contains(token)
+                                    }),
+                                )
+                            })
                         })
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
             (ready_sources, candidates)
         };
-        let mut selected = None;
         // Preserve the durable physical prefix whenever its selected owner is
         // currently admissible. Only after downstream admission rejects that
         // entire strict set may a dependency cross the control barrier.
-        'sources: for (source_index, source_candidates) in candidates.iter().enumerate() {
-            for (admission_ordinal, inbound, dependency_bypass, obsolete) in source_candidates {
-                if !dependency_bypass && (*obsolete || predicate(inbound.as_ref())) {
-                    let disposition = if *obsolete {
-                        FairV2IngressDequeueDisposition::RetireObsolete
-                    } else {
-                        FairV2IngressDequeueDisposition::Admit
-                    };
-                    selected = Some((source_index, *admission_ordinal, disposition));
-                    break 'sources;
-                }
-            }
-        }
-        if selected.is_none() {
-            // Retained body-dependent control can depend on a matching
-            // Proposal or the exact selected Serve request which produces its
-            // missing body, and reducer control can depend on bounded body
-            // completion. No dependency replaces the durable owner; it only
-            // makes that owner admissible on a later turn.
-            'bypass: for (source_index, source_candidates) in candidates.iter().enumerate() {
-                for (admission_ordinal, inbound, dependency_bypass, obsolete) in source_candidates {
-                    if *dependency_bypass && (*obsolete || predicate(inbound.as_ref())) {
-                        let disposition = if *obsolete {
-                            FairV2IngressDequeueDisposition::RetireObsolete
-                        } else {
-                            FairV2IngressDequeueDisposition::Admit
-                        };
-                        selected = Some((source_index, *admission_ordinal, disposition));
-                        break 'bypass;
-                    }
-                }
-            }
-        }
+        let selected = select_fair_v2_ingress_candidate(
+            &candidates,
+            |(admission_ordinal, _, gate, obsolete)| (*admission_ordinal, *gate, *obsolete),
+            |(_, inbound, _, _)| predicate(inbound.as_ref()),
+        );
         let Some((selected_source_index, admission_ordinal, disposition)) = selected else {
             return Ok(None);
         };
@@ -7530,11 +7524,11 @@ impl SumeragiStartArgs {
 }
 #[cfg(test)]
 mod worker_launch_tests {
+    use super::*;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
-    use super::*;
     fn fail_spawn(
         _builder: std::thread::Builder,
         _work: SumeragiThreadWork,

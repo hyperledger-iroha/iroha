@@ -38,8 +38,6 @@
 //! best-effort guarantee, so no confidentiality or release claim follows.
 
 #![cfg(test)]
-use core::fmt;
-use crate::vega::sponge::keccak256;
 use super::{
     BATCH_ROWS_V1, FQ2_WIRE_BYTES_V1, HASH_BYTES_V1, OPENING_REPETITIONS_V1, PROOF_CAP_BYTES_V1,
     QPcsChallengeTupleV1, QPcsErrorV1, RELEASE_DOMAIN_LOG_V1, RELEASE_DOMAIN_SIZE_V1,
@@ -47,6 +45,8 @@ use super::{
     RESIDENT_CAP_BYTES_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, is_prime_u64, mod_add_v1,
     mod_pow_v1, mod_sub_v1, validate_challenge_tuples_v1,
 };
+use crate::vega::sponge::keccak256;
+use core::fmt;
 const MASKING_VERSION_V1: u8 = 1;
 const MASKED_ROWS_PER_REPETITION_V1: usize = 2;
 const MASKED_ROW_COUNT_V1: usize = OPENING_REPETITIONS_V1 * MASKED_ROWS_PER_REPETITION_V1;
@@ -882,8 +882,8 @@ impl RootSealedMaskedRowsV1 {
 }
 #[cfg(test)]
 mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     const TEST_MODULUS_V1: u64 = 97;
     const TEST_RING_DEGREE_V1: usize = 8;
     fn test_relation_owners_v1() -> ([Vec<u64>; 5], [Vec<u64>; 5]) {

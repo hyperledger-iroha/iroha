@@ -26282,7 +26282,10 @@ fn execute_trusted_internal_account_transaction_local_read(
     entrypoint_hash_literal: &str,
     format: ResponseFormat,
 ) -> Response {
-    // TODO: Replace the history snapshot with a routed-budget-aware Kura projection; cold block/finality can exceed App fanout decode, so retain non-source-bounded semantics for now.
+    // Known limitation: this history read still uses the bounded committed-transaction
+    // snapshot rather than a routed-budget-aware Kura projection. Cold block/finality
+    // materialization can exceed the App fanout decode budget, so this route retains
+    // non-source-bounded semantics until that projection exists.
     let (account_id, _) = match parse_exact_account_id_literal(account_literal) {
         Ok(parsed) => parsed,
         Err(error) => return error_response_with_format(error, format),
@@ -26332,7 +26335,9 @@ async fn execute_torii_read_request_locally(
     routing_decision: RoutingDecision,
     routed_by: &'static str,
 ) -> Response {
-    // TODO: Thread routed producer budgets into all local App handlers; singular account/asset/proof reads are bounded, while list/history/explorer/contract/other DTO families still need specific seams.
+    // Known limitation: singular account, asset, and proof reads have routed producer
+    // budgets, while list, history, explorer, contract, and other DTO families still
+    // require endpoint-specific producer seams.
     let request_decode_plan = match torii_routed_read_request_decode_plan(app) {
         Ok(plan) => plan,
         Err(response) => return response,

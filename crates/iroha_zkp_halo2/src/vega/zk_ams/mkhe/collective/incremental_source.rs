@@ -13,6 +13,11 @@
 //! the complete prepass before its corresponding output stage can be sealed.
 //! A late failure can leave only unauthorizing CAS orphans: neither a key
 //! authority nor a ciphertext manifest is issued.
+#[cfg(test)]
+use super::super::direct_object_transport::{
+    ZkAmsMkheDirectObjectPublishedBindingV1, ZkAmsMkheDirectObjectSealTokenV1,
+    ZkAmsMkheDirectObjectStagingTokenV1,
+};
 use super::super::{
     PlaintextModulus, bytes_mod_u64, cyclic_ntt,
     direct_object_transport::{
@@ -30,11 +35,6 @@ use super::super::{
 };
 use super::*;
 use crate::vega::VEGA_T256_SCALAR_MODULUS_BE_V1;
-#[cfg(test)]
-use super::super::direct_object_transport::{
-    ZkAmsMkheDirectObjectPublishedBindingV1, ZkAmsMkheDirectObjectSealTokenV1,
-    ZkAmsMkheDirectObjectStagingTokenV1,
-};
 // BEGIN PRIVATE INCREMENTAL COLLECTIVE ENCRYPTION PREREQUISITE V1
 const COLLECTIVE_RNS_COMPONENT_COUNT_V1: usize = 2;
 const STREAMING_COLLECTIVE_RNS_LIMBS_V1: usize = RELEASE_MODULI_V1.len();
@@ -1994,7 +1994,7 @@ impl StreamingCollectiveLimbReaderV1 {
         if self.consumed
             || destination.len() != self.ring_degree
             || scratch.len() < core::mem::size_of::<u64>()
-            || scratch.len() % core::mem::size_of::<u64>() != 0
+            || !scratch.len().is_multiple_of(core::mem::size_of::<u64>())
         {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
         }
@@ -3007,11 +3007,12 @@ impl ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_> {
         let (pointers, publications) = match kind {
             ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC0 => (
                 self.constant_limb_pointers,
-                self.constant_publication_receipts,
+                self.constant_publication_receipts(),
             ),
-            ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC1 => {
-                (self.linear_limb_pointers, self.linear_publication_receipts)
-            }
+            ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC1 => (
+                self.linear_limb_pointers,
+                self.linear_publication_receipts(),
+            ),
             _ => return Err(ZkAmsMkheErrorV1::InvalidCiphertext),
         };
         let pointer = *pointers
@@ -3040,7 +3041,7 @@ impl ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_> {
     /// Reread and authenticate one exact constant-component limb into caller
     /// storage. The fresh receipt must equal the manifest's post-publication
     /// receipt, including provider and immutable-snapshot identity.
-    pub(crate) fn read_constant_limb_into_v1<P>(
+    pub(in crate::vega::zk_ams::mkhe) fn read_constant_limb_into_v1<P>(
         &self,
         limb: usize,
         profile: &BgvProfile,
@@ -3063,7 +3064,7 @@ impl ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_> {
     /// Reread and authenticate one exact linear-component limb into caller
     /// storage. The fresh receipt must equal the manifest's post-publication
     /// receipt, including provider and immutable-snapshot identity.
-    pub(crate) fn read_linear_limb_into_v1<P>(
+    pub(in crate::vega::zk_ams::mkhe) fn read_linear_limb_into_v1<P>(
         &self,
         limb: usize,
         profile: &BgvProfile,
@@ -3617,12 +3618,6 @@ where
         || Ok(|_: &[[u8; 32]], _: &[i64], _: &[i64], _: &[i64], _: &[u8; 32]| Ok(())),
     )
 }
-#[path = "incremental_source_phase23.rs"]
-mod phase23_orchestrator;
-pub(super) use phase23_orchestrator::{
-    GlobalLookupCanonicalReopenSealV1, Phase23GlobalLookupSourceReopenedV1,
-    Phase23GlobalLookupSourceReplayV1,
-};
 #[cfg(test)]
 #[path = "incremental_source_tests.rs"]
 mod tests;

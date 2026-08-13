@@ -1,8 +1,8 @@
-use core::convert::Infallible;
-use std::path::{Path, PathBuf};
-use crate::vega::bulletproof_t256::ZeroizingT256ScalarCopyV1 as SecretScalarV1;
 use super::super::ACTIVE_LOOKUP_VALUES_V1;
 use super::*;
+use crate::vega::bulletproof_t256::ZeroizingT256ScalarCopyV1 as SecretScalarV1;
+use core::convert::Infallible;
+use std::path::{Path, PathBuf};
 const M_ORACLE_VERSION_V1: u8 = 1;
 const M_VALUES_V1: u64 = 1 << 15;
 const M_INITIAL_SLOTS_V1: u64 = 128;

@@ -7,7 +7,6 @@
 //! refer to the streaming entry points below, and remains fail-closed until an
 //! authenticated peak-residency run is installed for the exact bounded CAS
 //! worker.
-use core::{fmt, mem::size_of};
 use super::super::super::MaskedRelaxedRandomErrorV1;
 #[cfg(test)]
 use super::super::negacyclic_multiply;
@@ -65,6 +64,7 @@ use super::{
     wide_relation_challenge_weight, wide_response_parameters,
 };
 use crate::vega::sponge::Keccak256;
+use core::{fmt, mem::size_of};
 const STREAMING_RESOURCE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.decryption-streaming-resource";
 const DECRYPTION_PROOF_TAG_V1: [u8; 4] = *b"ZADP";
 const DECRYPTION_SPLIT_MANIFEST_TAG_V1: [u8; 4] = *b"ZDSM";
@@ -1109,6 +1109,10 @@ impl ZkAmsMkheStreamingFullRosterDecryptionResultV1 {
         self.result
     }
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed streaming transcript axes remain explicit to preserve authenticated read order"
+)]
 fn stream_ciphertext_component_into_hash_v1<P>(
     ciphertext: &ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_>,
     constant: bool,
@@ -2034,13 +2038,15 @@ where
         for coefficient in secret {
             secret_limb.push(signed_mod(*coefficient, modulus));
         }
-        let linear_receipt = ciphertext.read_linear_limb_into_v1(
-            limb,
-            profile,
-            publisher,
-            linear.as_mut_slice(),
-            scratch.as_mut_array(),
-        )?;
+        let linear_receipt = transaction.read_immutable_provider(|publisher| {
+            ciphertext.read_linear_limb_into_v1(
+                limb,
+                profile,
+                publisher,
+                linear.as_mut_slice(),
+                scratch.as_mut_array(),
+            )
+        })?;
         snapshot.observe(&linear_receipt)?;
         let mut share = negacyclic_multiply_staged_v1(
             linear.as_slice(),
@@ -3165,22 +3171,21 @@ impl StreamingSnapshotAccumulatorV1 {
         self.identity.ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
 }
-struct StreamingRnsObjectReaderV1<'a, P: ?Sized> {
-    provider: &'a mut P,
+struct StreamingRnsObjectReaderV1 {
     transaction: ZkAmsMkheDirectObjectReadTransactionV1,
     next_limb: usize,
     coefficient_count: usize,
 }
-impl<'a, P> StreamingRnsObjectReaderV1<'a, P>
-where
-    P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
-{
-    fn begin(
+impl StreamingRnsObjectReaderV1 {
+    fn begin<P>(
         expected_kind: ZkAmsMkheDirectObjectKindV1,
         pointer: ZkAmsMkheDirectObjectPointerV1,
         profile: &BgvProfile,
-        provider: &'a mut P,
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        provider: &mut P,
+    ) -> Result<Self, ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+    {
         profile.validate()?;
         let coefficient_count = profile
             .ring_degree
@@ -3196,24 +3201,27 @@ where
         let transaction =
             ZkAmsMkheDirectObjectReadTransactionV1::begin(expected_kind, pointer, provider)?;
         let mut reader = Self {
-            provider,
             transaction,
             next_limb: 0,
             coefficient_count,
         };
         let mut count = [0_u8; 4];
-        if reader.transaction.read_next(reader.provider, &mut count)? != count.len()
+        if reader.transaction.read_next(provider, &mut count)? != count.len()
             || usize::try_from(u32::from_be_bytes(count)).ok() != Some(coefficient_count)
         {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         Ok(reader)
     }
-    fn read_limb(
+    fn read_limb<P>(
         &mut self,
         profile: &BgvProfile,
         limb: usize,
-    ) -> Result<ZeroizingStagedU64VectorV1, ZkAmsMkheErrorV1> {
+        provider: &mut P,
+    ) -> Result<ZeroizingStagedU64VectorV1, ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+    {
         if limb != self.next_limb || profile.moduli.get(limb).is_none() {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
         }
@@ -3230,7 +3238,7 @@ where
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             if self
                 .transaction
-                .read_next(self.provider, &mut buffer.as_mut_slice()[..bytes])?
+                .read_next(provider, &mut buffer.as_mut_slice()[..bytes])?
                 != bytes
             {
                 return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -3251,10 +3259,14 @@ where
         self.next_limb += 1;
         Ok(values)
     }
-    fn finish(
+    fn finish<P>(
         self,
         profile: &BgvProfile,
-    ) -> Result<ZkAmsMkheDirectObjectReadReceiptV1, ZkAmsMkheErrorV1> {
+        provider: &mut P,
+    ) -> Result<ZkAmsMkheDirectObjectReadReceiptV1, ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+    {
         if self.next_limb != profile.moduli.len()
             || self.coefficient_count
                 != profile
@@ -3265,7 +3277,7 @@ where
         {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
-        self.transaction.finish(self.provider)
+        self.transaction.finish(provider)
     }
 }
 fn read_complete_object_v1<P>(
@@ -3408,10 +3420,10 @@ where
     update_streamed_rns_header(transcript, profile)?;
     let mut reader = StreamingRnsObjectReaderV1::begin(kind, pointer, profile, provider)?;
     for limb in 0..profile.moduli.len() {
-        let residues = reader.read_limb(profile, limb)?;
+        let residues = reader.read_limb(profile, limb, provider)?;
         update_residue_limb(transcript, residues.as_slice());
     }
-    reader.finish(profile)
+    reader.finish(profile, provider)
 }
 fn subtract_sparse_negacyclic_product_in_place(
     accumulator: &mut [u64],
@@ -3480,6 +3492,10 @@ fn add_share_limb_in_place(
     }
     Ok(())
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed decryption relation axes remain explicit to preserve transcript order"
+)]
 fn reconstruct_public_key_commitment_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     profile: &BgvProfile,
@@ -3537,7 +3553,7 @@ where
                 modulus,
             );
         }
-        let party_b_limb = party_b.read_limb(profile, limb)?;
+        let party_b_limb = party_b.read_limb(profile, limb, provider)?;
         subtract_sparse_negacyclic_product_in_place(
             commitment.as_mut_slice(),
             challenge,
@@ -3546,8 +3562,12 @@ where
         )?;
         update_residue_limb(transcript, commitment.as_slice());
     }
-    party_b.finish(profile)
+    party_b.finish(profile, provider)
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed decryption share axes remain explicit to preserve transcript order"
+)]
 fn reconstruct_share_commitment_and_aggregate_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     profile: &BgvProfile,
@@ -3602,7 +3622,7 @@ where
                 modulus,
             );
         }
-        let share_limb = share_reader.read_limb(profile, limb)?;
+        let share_limb = share_reader.read_limb(profile, limb, provider)?;
         subtract_sparse_negacyclic_product_in_place(
             commitment.as_mut_slice(),
             challenge,
@@ -3614,7 +3634,7 @@ where
         }
         update_residue_limb(transcript, commitment.as_slice());
     }
-    share_reader.finish(profile)
+    share_reader.finish(profile, provider)
 }
 /// Verify one native share relation without materializing native `a`/`b_i`
 /// polynomials or full RNS response vectors.
@@ -3946,10 +3966,10 @@ where
     set_hash.update(DECRYPTION_SET_DOMAIN_V1);
     set_hash.update(&statement.roster.roster_digest());
     set_hash.update(&statement.ciphertext_digest());
-    for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        let proof_pointer = direct_pointer_from_manifest(manifests[party_index].proof())
+    for (party_index, manifest) in manifests.iter().enumerate() {
+        let proof_pointer = direct_pointer_from_manifest(manifest.proof())
             .map_err(|_| binding_abort(party_index))?;
-        let share_pointer = direct_pointer_from_manifest(manifests[party_index].polynomial())
+        let share_pointer = direct_pointer_from_manifest(manifest.polynomial())
             .map_err(|_| binding_abort(party_index))?;
         let (proof_bytes, proof_receipt) = read_complete_object_v1(
             ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,

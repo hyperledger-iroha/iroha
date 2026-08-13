@@ -347,7 +347,7 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
         let Self {
             store,
             repaired,
-            mut installed,
+            installed,
         } = self;
         if !store.load().is_ok_and(|loaded| loaded == repaired) {
             return Err(ProductionRecoveredWalStorageError::new(
@@ -3304,7 +3304,7 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
             })
     }
 }
-impl<'registry> InstalledRecoveredWalControlSignRegistryCut<'registry> {
+impl InstalledRecoveredWalControlSignRegistryCut<'_> {
     /// Open and commit the exact control/Fetch/Serve/Producer recovery census.
     #[allow(clippy::result_large_err)]
     pub(super) fn open_with_exact_store_authority(
@@ -3485,7 +3485,7 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
             })
     }
 }
-impl<'registry> InstalledRecoveredWalDecisionFetchRegistryCut<'registry> {
+impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
     /// Open and commit the exact Decision-Fetch/Fetch/Serve/Producer census.
     #[allow(clippy::result_large_err)]
     pub(super) fn open_with_exact_store_authority(
@@ -3593,7 +3593,7 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
             })
     }
 }
-impl<'registry> InstalledRecoveredDecisionApplyRegistryCut<'registry> {
+impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
     /// Publish the exact prospective four-row successor and finish startup.
     ///
     /// Coordinator reconstruction, payload-store authentication, the complete
@@ -4227,7 +4227,7 @@ impl ConcreteLifecycleWorkRegistry {
         })
     }
 }
-impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter> {
+impl<'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'_, 'adapter> {
     /// Project the exact child while retaining registry and adapter borrows.
     pub(super) fn project_for_body_transition(
         &self,
@@ -4499,7 +4499,7 @@ impl ConcreteLifecycleWorkRegistry {
         })
     }
 }
-impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter> {
+impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
     /// Project the exact Broadcast candidate while retaining every owner.
     pub(super) fn project_for_transition(
         &self,
@@ -4670,9 +4670,7 @@ impl<'registry, 'adapter>
     }
 }
 #[cfg_attr(not(test), allow(dead_code))]
-impl<'registry, 'adapter>
-    BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter>
-{
+impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter> {
     /// Replace the exact recovered Sign with both durably published children.
     ///
     /// The combined projection separates only in this assertion-only tail.

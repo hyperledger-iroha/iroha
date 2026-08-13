@@ -63,12 +63,6 @@
 //! opened here.
 
 #![allow(dead_code)]
-use core::convert::Infallible;
-use crate::vega::{
-    MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-    bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
-    sponge::{Keccak256, keccak256},
-};
 use super::{
     BgvProfile, MKHE_VERSION_V1, PlaintextModulus, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
@@ -82,6 +76,15 @@ use super::{
     manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
+use crate::vega::{
+    MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+    bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+    sponge::{Keccak256, keccak256},
+};
+use core::convert::Infallible;
+#[path = "active_exact_binding/direct_common_a_v1.rs"]
+mod direct_common_a_v1;
+#[path = "active_exact_binding/direct_relation_wire_v1.rs"]
 mod direct_relation_wire_v1;
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
 const MAX_RELATION_WITNESSES_V1: usize = 6;
@@ -903,6 +906,10 @@ impl VerifiedPersistentWitnessBindingSetV1 {
     /// Copy one party's public commitment material out of this consumed,
     /// proof-verified set. The sibling decryption module retains the authority;
     /// this tuple is never accepted from a caller.
+    #[allow(
+        clippy::type_complexity,
+        reason = "fixed decryption material tuple preserves reviewed digest and commitment order"
+    )]
     pub(super) fn decryption_party_material(
         &self,
         party_index: usize,
@@ -1093,6 +1100,7 @@ pub(super) struct PersistentDirectRelationUseSelectorV1 {
 }
 impl PersistentDirectRelationUseSelectorV1 {
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(super) fn new(
         relation: PersistentDirectRelationV1,
         context_digest: [u8; 32],
@@ -1173,6 +1181,28 @@ impl PersistentDirectRelationUseSelectorV1 {
         }
         Ok(())
     }
+}
+/// Mint the only production RKG-round-one selector from exact CPK authority.
+///
+/// Sibling ceremony code supplies provenance-bearing roster and binding
+/// values; neither a raw common-`a` digest nor the opaque authority leaves
+/// this module.
+pub(super) fn mint_rkg_round_one_selector_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    bindings: &VerifiedPersistentWitnessBindingSetV1,
+    context: ZkAmsMkheDirectCeremonyContextV1,
+    prior_round_digest: [u8; 32],
+    contribution_statement_digest: [u8; 32],
+    proof_commitment_transcript_digest: [u8; 32],
+) -> Result<PersistentDirectRelationUseSelectorV1, ZkAmsMkheErrorV1> {
+    direct_common_a_v1::mint_rkg_round_one_selector_v1(
+        roster,
+        bindings,
+        context,
+        prior_round_digest,
+        contribution_statement_digest,
+        proof_commitment_transcript_digest,
+    )
 }
 /// Non-serializable, single-use authorization for one exact direct relation.
 ///
@@ -2470,6 +2500,7 @@ mod tests {
         assert!(audit.t256_membership_backend_implemented);
         assert!(audit.generator_basis_kat_pinned);
         assert_eq!(audit.blocker_mask, ALL_RELEASE_BLOCKERS_V1 & !0b11);
+        assert_eq!(audit.blocker_mask, 0xfc);
         assert!(!audit.release_available);
         assert_ne!(audit.digest, [0; 32]);
         for forged in [
@@ -3063,17 +3094,23 @@ mod tests {
             context_specific.verification_digest
         );
         let digest = |label: &[u8]| keccak256(label);
-        let rkg_one = PersistentDirectRelationUseSelectorV1::new(
-            PersistentDirectRelationV1::RkgRoundOne,
-            direct_context.digest(),
+        assert_eq!(
+            direct_common_a_v1::mint_mismatched_rkg_round_one_selector_for_test_v1(
+                &roster,
+                &set,
+                direct_context,
+                other_digit_context,
+                digest(b"direct-prior-one"),
+                digest(b"direct-h0-h1-statement"),
+                digest(b"direct-rkg-one-proof-commitments"),
+            ),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        );
+        let rkg_one = mint_rkg_round_one_selector_v1(
+            &roster,
+            &set,
+            direct_context,
             digest(b"direct-prior-one"),
-            0,
-            3,
-            0,
-            digest(b"direct-common-a"),
-            [0; 32],
-            [0; 32],
-            [0; 32],
             digest(b"direct-h0-h1-statement"),
             digest(b"direct-rkg-one-proof-commitments"),
         )
@@ -3110,6 +3147,78 @@ mod tests {
             wrapper_context.statement_digest()
         );
         assert_eq!(capability.ephemeral_record_index, 19);
+        assert!(
+            direct_common_a_v1::DirectCommonAReplayV1::begin(other_digit_context, &capability,)
+                .is_err()
+        );
+        let mut wrong_digit = set
+            .bind_direct_relation_use(&roster, 0, Some(&ephemeral), rkg_one)
+            .unwrap();
+        wrong_digit.selector.digit_index = wrong_digit.selector.digit_index.wrapping_add(1);
+        wrong_digit.use_digest = persistent_direct_relation_use_digest(&wrong_digit).unwrap();
+        assert!(
+            direct_common_a_v1::DirectCommonAReplayV1::begin(direct_context, &wrong_digit).is_err()
+        );
+        assert_eq!(
+            direct_common_a_v1::DirectCommonAReplayV1::begin(direct_context, &capability)
+                .unwrap()
+                .finish()
+                .map(|_| ()),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        let mut poisoned =
+            direct_common_a_v1::DirectCommonAReplayV1::begin(direct_context, &capability).unwrap();
+        assert_eq!(
+            poisoned.derive_next_limb_into(&mut [0_u64; 1]),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        let mut replay_workspace = vec![0_u64; RELEASE_RING_DEGREE_V1];
+        assert_eq!(
+            poisoned.derive_next_limb_into(&mut replay_workspace),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        assert_eq!(
+            poisoned.finish().map(|_| ()),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        let mut unwind_replay =
+            direct_common_a_v1::DirectCommonAReplayV1::begin(direct_context, &capability).unwrap();
+        unwind_replay.inject_unwind_on_next_derive_for_test();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unwind_replay
+                .derive_next_limb_into(&mut replay_workspace)
+                .unwrap();
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            unwind_replay.derive_next_limb_into(&mut replay_workspace),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        assert_eq!(
+            unwind_replay.finish().map(|_| ()),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        let mut replay =
+            direct_common_a_v1::DirectCommonAReplayV1::begin(direct_context, &capability).unwrap();
+        for _ in 0..38 {
+            replay.derive_next_limb_into(&mut replay_workspace).unwrap();
+        }
+        replay.finish().unwrap();
+        let mut wrong_expected = set
+            .bind_direct_relation_use(&roster, 0, Some(&ephemeral), rkg_one)
+            .unwrap();
+        wrong_expected.selector.common_a_statement_digest[0] ^= 1;
+        wrong_expected.use_digest = persistent_direct_relation_use_digest(&wrong_expected).unwrap();
+        let mut replay =
+            direct_common_a_v1::DirectCommonAReplayV1::begin(direct_context, &wrong_expected)
+                .unwrap();
+        for _ in 0..38 {
+            replay.derive_next_limb_into(&mut replay_workspace).unwrap();
+        }
+        assert_eq!(
+            replay.finish().map(|_| ()),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        );
         assert_eq!(
             verify_and_consume_direct_relation_use_v1(capability, &[0xff; 64]),
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
@@ -3129,9 +3238,12 @@ mod tests {
             digest(b"direct-rkg-two-proof-commitments"),
         )
         .unwrap();
+        let rkg_two_capability = set
+            .bind_direct_relation_use(&roster, 0, Some(&ephemeral), rkg_two)
+            .unwrap();
         assert!(
-            set.bind_direct_relation_use(&roster, 0, Some(&ephemeral), rkg_two)
-                .is_ok()
+            direct_common_a_v1::DirectCommonAReplayV1::begin(direct_context, &rkg_two_capability,)
+                .is_err()
         );
         let normalize = PersistentDirectRelationUseSelectorV1::new(
             PersistentDirectRelationV1::RkgNormalize,

@@ -1,6 +1,7 @@
 // Collective evaluated-key tests included from the parent module.
-use std::{cell::Cell, collections::BTreeSet};
 use super::*;
+use crate::vega::MaskedRelaxedRandomErrorV1;
+use std::{cell::Cell, collections::BTreeSet};
 const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
 const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
 fn tracked_liveness_peak<T>(operation: impl FnOnce() -> T) -> (T, u64) {
@@ -2298,10 +2299,7 @@ impl EvidenceTestRandom {
     }
 }
 impl MaskedRelaxedRandomSourceV1 for EvidenceTestRandom {
-    fn fill_bytes(
-        &mut self,
-        destination: &mut [u8],
-    ) -> Result<(), super::super::MaskedRelaxedRandomErrorV1> {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let mut written = 0;
         while written < destination.len() {
             let mut frame = [0_u8; 40];

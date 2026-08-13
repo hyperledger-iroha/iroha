@@ -38,7 +38,6 @@ pub(crate) use committee::{
     ValidatorIndex,
 };
 pub(crate) use quorum::{Quorum, QuorumError};
-pub(crate) use reducer::EquivocationKind;
 pub(crate) use reducer::{
     BodyState, DurableCommitReceipt, Effect, EquivocationEvidence, EquivocationKind, Event,
     IgnoreReason, Reducer, ReducerError, SignableMessage, StepDisposition, StepOutcome,

@@ -12,20 +12,6 @@
 //! closure is the only way a future RKG round can use them, and construction
 //! recomputes every commitment before retaining the opening.
 
-#![allow(dead_code)]
-use thiserror::Error;
-use crate::{
-    generalized_bulletproof::ProofRandomSource,
-    vega::{
-        VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-        bulletproof_t256::{
-            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZeroizingT256ScalarCopyV1,
-            ZeroizingT256ScalarVecV1, ZkAmsT256MembershipBoundV1, ZkAmsT256MembershipProofV1,
-            commit_zk_ams_t256_membership_chunk_v1,
-        },
-        sponge::Keccak256,
-    },
-};
 use super::{
     MKHE_VERSION_V1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
@@ -44,6 +30,21 @@ use super::{
         ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1,
     },
 };
+#[cfg(test)]
+use crate::vega::bulletproof_t256::ZkAmsT256MembershipProofV1;
+use crate::{
+    generalized_bulletproof::ProofRandomSource,
+    vega::{
+        VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+        bulletproof_t256::{
+            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZeroizingT256ScalarCopyV1,
+            ZeroizingT256ScalarVecV1, ZkAmsT256MembershipBoundV1,
+            commit_zk_ams_t256_membership_chunk_v1,
+        },
+        sponge::Keccak256,
+    },
+};
+use thiserror::Error;
 const RKG_EPHEMERAL_STATEMENT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-rkg-ephemeral-membership.statement";
 const RKG_EPHEMERAL_VERIFIED_SOURCE_DOMAIN_V1: &[u8] =

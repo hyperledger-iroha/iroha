@@ -4,17 +4,17 @@
 //! snapshots.  It exposes neither file paths nor keys.  All identities below
 //! are non-secret transcript bindings; only possession of a snapshot permits
 //! authenticated reads.
-use std::path::Path;
-use iroha_confidential_spool::{
-    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
-    ConfidentialSpoolWriterV1,
-};
-use crate::vega::sponge::Keccak256;
 use super::{
     SECRET_MAIN_FILE_BYTES_V1, SECRET_MAIN_PLAINTEXT_BYTES_V1, SECRET_MAIN_SLOT_COUNT_V1,
     SECRET_NONCE_FILE_BYTES_V1, SECRET_NONCE_PLAINTEXT_BYTES_V1, SECRET_NONCE_SLOT_COUNT_V1,
     SOURCE_VERSION_V1, ZkAmsMkheErrorV1,
 };
+use crate::vega::sponge::Keccak256;
+use iroha_confidential_spool::{
+    ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
+    ConfidentialSpoolWriterV1,
+};
+use std::path::Path;
 const WRITER_IDENTITY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.secret-source.spool-writer-identity";
 const PROVIDER_IDENTITY_DOMAIN_V1: &[u8] =

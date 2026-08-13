@@ -200,13 +200,13 @@ fn authenticate_section_v2(
     }
     let mut current = [EMPTY_FRONTIER_NODE_V2; MAX_FRONTIER_NODES_V2];
     let mut next = [EMPTY_FRONTIER_NODE_V2; MAX_FRONTIER_NODES_V2];
-    for position in 0..indices.len {
+    for (position, current_node) in current.iter_mut().take(indices.len).enumerate() {
         let index = indices.values[position];
         if index as usize >= length {
             return Err(SoundnessErrorV2::InvalidMerklePath);
         }
         let start = position * LEAF_BYTES_V2;
-        current[position] = FrontierNodeV2 {
+        *current_node = FrontierNodeV2 {
             index,
             digest: merkle_leaf_hash_v2(
                 parameter_digest,
@@ -393,8 +393,7 @@ fn verify_initial_equations_v2(
     if derive_batch_schedule_v2(batch_transcript)? != live.batch_schedule_digest {
         return Err(SoundnessErrorV2::InvalidChallenge);
     }
-    for limb in 0..LIMBS_V2 {
-        let field = parameters[limb];
+    for (limb, &field) in parameters.iter().enumerate() {
         let mut batch_coefficients = [[Fq2V1::ZERO; 2]; ROWS_PER_LIMB_V2];
         for (row, coefficients) in batch_coefficients.iter_mut().enumerate() {
             coefficients[0] = fq2_v1(derive_fq2_challenge_v2(
@@ -493,8 +492,7 @@ fn verify_fri_equations_v2(
         } else {
             Some(query_pair_indices_v2(&next_queries, half))
         };
-        for limb in 0..LIMBS_V2 {
-            let field = parameters[limb];
+        for (limb, &field) in parameters.iter().enumerate() {
             let layer_root = field.pow(
                 field.domain_root,
                 1_u128 << (u32::from(field.domain_log) - length.ilog2()),

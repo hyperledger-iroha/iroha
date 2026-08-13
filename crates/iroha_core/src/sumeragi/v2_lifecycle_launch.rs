@@ -1,14 +1,22 @@
 //! Sealed production launch from recovered lifecycle ownership into live I/O.
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     block::{CertifiedMergeLedgerReference, consensus_v2 as wire},
     peer::PeerId,
 };
+use std::{
+    collections::BTreeSet,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
+#[path = "v2_lifecycle_turn_driver.rs"]
+mod turn_driver;
+
+#[cfg(test)]
+#[path = "v2_lifecycle_turn_driver_tests.rs"]
+mod turn_driver_tests;
+
 use super::{
     PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
     ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
@@ -20,9 +28,12 @@ use super::{
     ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
     work_registry::RecoveredDecisionApplyTerminalPublicationError,
 };
+use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
+#[cfg(test)]
+use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
 use crate::{
     IrohaNetwork,
-    kura::Kura,
+    kura::{Kura, KuraV2CommitReceipt},
     state::State,
     sumeragi::{
         FairV2Ingress,
@@ -30,22 +41,22 @@ use crate::{
         serviced_candidate_store::{LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate},
         v2_apply::RecoveredDecisionApplyWorkerResultV1,
         v2_context::AuthenticatedGenesisBodyV1,
-        v2_effects::{EffectQueueConfig, V2EffectExecutor},
-        v2_lane_work::{MergeSidecarDeferralDisposition, V2LaneWorkAdapter, V2LaneWorkError},
+        v2_effects::{EffectQueueConfig, PostFinalityCleanupOutcome, V2EffectExecutor},
+        v2_lane_work::{
+            MergeSidecarDeferralDisposition, RetainedMergeSidecars, V2LaneWorkAdapter,
+            V2LaneWorkError,
+        },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
-            DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
-            PreparedRecoveredDecisionApplyCompletionV1,
+            CertifiedServeIngressGate, DurableExactOutputServiceOwner,
+            KuraReplicaAdvertRefreshOwner, PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
-            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleProposalExactOutputCaptureV1,
+            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleCompletionTakeV1,
+            RecoveredLifecycleProposalExactOutputCaptureV1, V2CleanupSupervisor,
         },
     },
 };
-#[cfg(not(test))]
-use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
-#[cfg(test)]
-use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
 /// All non-lifecycle dependencies consumed by one production height launch.
 ///
 /// The immutable height context, roster proofs, adapter, and body store are not
@@ -116,14 +127,17 @@ impl ProductionLifecycleLaunchInputsV1 {
         }
     }
 }
-/// RAII owner of the exact leader-wire gate installed for this sealed launch.
+/// RAII owner of both exact durable ingress gates installed for this launch.
 ///
-/// The ingress stays closed throughout this pre-activation tranche. Any later
-/// construction error, ordinary wrapper drop, or panic closes it again before
-/// detaching the exact gate, so no durable owner survives without its launch.
+/// Leader-wire recovery binds before runtime and service construction. The
+/// certified-Serve gate joins immediately after the exact service starts. The
+/// ingress stays closed throughout this pre-activation tranche; any later
+/// construction error, ordinary wrapper drop, or panic closes it before the
+/// gates detach in one queue transaction.
 struct ProductionLeaderWireIngressBindingV1 {
     ingress: Arc<FairV2Ingress>,
     gate: Option<Arc<LeaderWireLifecycleStoreGate>>,
+    certified_serve_gate: Option<CertifiedServeIngressGate>,
 }
 impl ProductionLeaderWireIngressBindingV1 {
     fn bind(
@@ -147,16 +161,54 @@ impl ProductionLeaderWireIngressBindingV1 {
         Ok(Self {
             ingress,
             gate: Some(gate),
+            certified_serve_gate: None,
         })
     }
+    /// Join the exact service-owned Serve gate to the retained leader gate.
+    fn bind_certified_serve(mut self, gate: CertifiedServeIngressGate) -> Result<Self, String> {
+        if self.gate.is_none() || self.certified_serve_gate.is_some() {
+            self.ingress.close();
+            return Err("production ingress binding changed its joint ownership".to_owned());
+        }
+        if let Err(error) = self.ingress.bind_certified_serve_gate(gate.clone()) {
+            self.ingress.close();
+            return Err(error);
+        }
+        self.certified_serve_gate = Some(gate);
+        Ok(self)
+    }
     fn retire(&mut self) -> Result<(), String> {
-        let Some(gate) = self.gate.as_ref() else {
-            return Ok(());
-        };
-        self.ingress.close();
-        self.ingress.unbind_leader_wire_lifecycle_gate(gate)?;
-        self.gate = None;
-        Ok(())
+        match (self.gate.as_ref(), self.certified_serve_gate.as_ref()) {
+            (None, None) => Ok(()),
+            (Some(gate), None) => {
+                self.ingress.close();
+                self.ingress.unbind_leader_wire_lifecycle_gate(gate)?;
+                self.gate = None;
+                Ok(())
+            }
+            (None, Some(gate)) => {
+                self.ingress.close();
+                self.ingress.unbind_certified_serve_gate(gate)?;
+                self.certified_serve_gate = None;
+                Ok(())
+            }
+            (Some(leader_wire_gate), Some(certified_serve_gate)) => {
+                self.ingress.close();
+                if let Err(error) = self
+                    .ingress
+                    .unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)
+                {
+                    // Joint validation failed before mutation. Never fall back
+                    // to split teardown across the shared carrier lanes.
+                    self.certified_serve_gate = None;
+                    self.gate = None;
+                    return Err(error);
+                }
+                self.certified_serve_gate = None;
+                self.gate = None;
+                Ok(())
+            }
+        }
     }
 }
 impl Drop for ProductionLeaderWireIngressBindingV1 {
@@ -164,21 +216,25 @@ impl Drop for ProductionLeaderWireIngressBindingV1 {
         if let Err(error) = self.retire() {
             iroha_logger::error!(
                 %error,
-                "failed to retire the sealed production leader-wire ingress gate"
+                "failed to retire the sealed production height ingress gates"
             );
         }
     }
 }
 /// Opaque running stack produced by the sole consuming lifecycle launch.
 ///
-/// Status publication and ingress activation are intentionally absent. A later
-/// runner cut must add one sealed final activation transition after startup
-/// effects, live-clock arming, and authenticated ingress opening all succeed.
+/// Construction does not publish status or open ingress. The separate
+/// consuming activation transition arms clocks, installs the completion
+/// observer, opens the exact retained ingress, and publishes only through a
+/// runner-owned status authority.
 #[must_use = "the launched lifecycle stack owns the active height"]
 pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     owner: ProductionLifecycleOwnerV1,
     executor: V2EffectExecutor<SerializedV2Runtime>,
     services: ProductionV2Services,
+    // Guarded completion/retry owners drop only after their exact service has
+    // stopped, so their fail-stop queue identities remain representable.
+    recovered_decision_apply_deferred: Option<RetainedRecoveredDecisionApplyDeferredV1>,
     // Dedicated persisted Fetch completion drops after services have stopped
     // its worker, while retaining the queue Arc and fail-stop guard.
     recovered_decision_fetch_body_completion:
@@ -186,6 +242,9 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     // Services drop before this completion and stop the worker. This guard then
     // drops while its own retained queue Arc still represents the exact owner.
     recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>,
+    // The wait retains the exact selector and service-generation fence. It is
+    // never split back into a caller-selected ordinal or raw queue witness.
+    recovered_ingress_capacity_wait: Option<super::PreparedProductionIngressCapacityWait>,
     #[allow(dead_code)]
     completion_observer_activation: Option<ProductionV2CompletionObserverActivationPermitV1>,
     // Rust drops fields in declaration order. Keep this last so the service
@@ -394,6 +453,60 @@ pub(in crate::sumeragi) struct ProductionV2CompletionObserverActivationPermitV1 
 struct ProductionV2CompletionObserverActivationPermitSealV1;
 impl Drop for ProductionV2CompletionObserverActivationPermitSealV1 {
     fn drop(&mut self) {}
+}
+/// Move-only authority for refreshing the live Certified-Serve retirement cut.
+///
+/// Only the lifecycle finalization transaction can mint this value. The
+/// production service must consume it while still coheld with the exact
+/// payload-store owner, after the height output handoff has been sealed. This
+/// prevents a sibling from reopening the store or authenticating a caller-
+/// supplied signer against a stale startup snapshot.
+#[must_use = "the Serve retirement permit must refresh the exact live payload census"]
+pub(in crate::sumeragi) struct ProductionLifecycleServeRetirementAuthenticationPermitV1 {
+    _seal: ProductionLifecycleServeRetirementAuthenticationPermitSealV1,
+}
+
+struct ProductionLifecycleServeRetirementAuthenticationPermitSealV1;
+
+impl Drop for ProductionLifecycleServeRetirementAuthenticationPermitSealV1 {
+    fn drop(&mut self) {}
+}
+
+/// Private proof that runner readiness and both durable ingress gates retired.
+struct ProductionLifecycleRetiredIngressPermitV1 {
+    _seal: ProductionLifecycleRetiredIngressPermitSealV1,
+}
+
+struct ProductionLifecycleRetiredIngressPermitSealV1;
+
+impl Drop for ProductionLifecycleRetiredIngressPermitSealV1 {
+    fn drop(&mut self) {}
+}
+
+/// Move-only authority for invoking the runner's exact finalized-output cut.
+///
+/// The runner helper is sibling-visible only so this lifecycle module can
+/// reuse the established handoff transaction. Its private seal prevents any
+/// other Sumeragi path from pairing raw services with arbitrary lane work.
+#[must_use = "finalized-output rollover authority must cross the exact handoff"]
+pub(in crate::sumeragi) struct ProductionLifecycleOutputRolloverPermitV1 {
+    _seal: ProductionLifecycleOutputRolloverPermitSealV1,
+}
+
+struct ProductionLifecycleOutputRolloverPermitSealV1;
+
+impl Drop for ProductionLifecycleOutputRolloverPermitSealV1 {
+    fn drop(&mut self) {}
+}
+
+#[cfg(test)]
+impl ProductionLifecycleServeRetirementAuthenticationPermitV1 {
+    /// Mint the closed permit only for direct payload-store behavior fixtures.
+    pub(in crate::sumeragi) fn for_test() -> Self {
+        Self {
+            _seal: ProductionLifecycleServeRetirementAuthenticationPermitSealV1,
+        }
+    }
 }
 impl LaunchedProductionLifecycleV1 {
     /// Sign, reserve, claim, and publish the recovered Decision Fetch request.
@@ -940,7 +1053,7 @@ impl LaunchedProductionLifecycleV1 {
                 restart!();
             }
         };
-        let output = match services
+        let mut output = match services
             .capture_recovered_lifecycle_proposal_exact_output(output_authority)
         {
             Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(output)) => output,
@@ -958,8 +1071,14 @@ impl LaunchedProductionLifecycleV1 {
                 restart!();
             }
         };
+        let Some(wal_permit) = output.prepare_wal_append_permit() else {
+            drop(body);
+            drop(preview);
+            drop(output);
+            restart!();
+        };
         if preview
-            .append_recovered_lifecycle_proposal_prepare_wal()
+            .append_recovered_lifecycle_proposal_prepare_wal(wal_permit)
             .is_err()
         {
             drop(body);
@@ -1246,15 +1365,31 @@ impl LaunchedProductionLifecycleV1 {
         ProductionRecoveredDecisionApplyCompletionV1,
         ProductionRecoveredDecisionApplyCompletionErrorV1,
     > {
-        let owner = &mut self.owner;
-        let executor = &mut self.executor;
-        let services = &mut self.services;
-        let drain = services
+        let drain = self
+            .services
             .drain_recovered_decision_apply_completion()
             .map_err(|_| ProductionRecoveredDecisionApplyCompletionErrorV1::Owner)?;
         let Some(completion) = drain.into_completion() else {
             return Ok(ProductionRecoveredDecisionApplyCompletionV1::None);
         };
+        self.settle_recovered_decision_apply_completion_owner(completion, lane_work)
+    }
+
+    /// Settle one already-classified recovered Apply completion.
+    ///
+    /// The unified Completion driver is the only production caller which can
+    /// supply this guarded token without probing the physical FIFO again.
+    fn settle_recovered_decision_apply_completion_owner(
+        &mut self,
+        completion: PreparedRecoveredDecisionApplyCompletionV1,
+        lane_work: &mut V2LaneWorkAdapter,
+    ) -> Result<
+        ProductionRecoveredDecisionApplyCompletionV1,
+        ProductionRecoveredDecisionApplyCompletionErrorV1,
+    > {
+        let owner = &mut self.owner;
+        let executor = &mut self.executor;
+        let services = &mut self.services;
         macro_rules! restart {
             ($failure:expr) => {{
                 owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -1376,6 +1511,598 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     #[error("launched lifecycle stack lost exact process ownership")]
     OwnershipMismatch,
 }
+/// Fail-stop failure while crossing the one-shot live-height boundary.
+#[derive(Debug, Error)]
+#[must_use = "failed lifecycle activation requires process restart"]
+pub(in crate::sumeragi) enum ProductionLifecycleActivationErrorV1 {
+    /// The process-wide output barrier was already closed.
+    #[error("canonical consensus output is closed")]
+    OutputClosed,
+    /// Pacemaker clocks could not be armed exactly once.
+    #[error("live lifecycle clocks could not be armed: {0}")]
+    RuntimeClock(#[source] super::super::v2_runtime::RuntimeClockError),
+    /// The armed reducer could not produce its exact activation status.
+    #[error("live lifecycle status could not be projected: {0}")]
+    Status(#[source] super::super::v2::AdapterError),
+    /// The launch lost its sole completion-observer permit or live worker.
+    #[error("live lifecycle completion observer could not activate: {0}")]
+    CompletionObserver(String),
+    /// The runner-owned ingress/status authority rejected the launched stack.
+    #[error("runner lifecycle activation failed: {0}")]
+    Runner(String),
+}
+
+/// Fail-stop failure while consuming an activated height into final rollover.
+#[derive(Debug, Error)]
+#[must_use = "failed lifecycle finalization requires process restart"]
+pub(in crate::sumeragi) enum ProductionLifecycleFinalizationErrorV1 {
+    /// Executor, lifecycle owner, or dedicated completion ownership is not quiescent.
+    #[error("activated lifecycle height is not ready for final rollover")]
+    NotReady,
+    /// The runner readiness owner no longer names the launched ingress.
+    #[error("activated lifecycle runner retirement failed: {0}")]
+    Runner(String),
+    /// The jointly bound ingress gates could not retire as one height owner.
+    #[error("activated lifecycle ingress-gate retirement failed: {0}")]
+    Ingress(String),
+    /// The process-wide output barrier was already closed.
+    #[error("canonical consensus output is closed during lifecycle finalization")]
+    OutputClosed,
+    /// The drained executor could not yield its exact Kura finality authority.
+    #[error("effect executor finalization failed: {0}")]
+    Executor(#[source] super::super::v2_effects::EffectExecutorError),
+    /// The serialized reducer rejected the exact Kura receipt/artifact pair.
+    #[error("serialized adapter finalization failed: {0}")]
+    Adapter(#[source] super::super::v2::AdapterError),
+    /// Lane/output rollover did not reach its one-shot durable handoff.
+    #[error("finalized lifecycle output rollover failed: {0}")]
+    OutputRollover(String),
+    /// The post-handoff registry or Certified-Serve census changed.
+    #[error("finalized lifecycle retirement census failed: {0}")]
+    RetirementCensus(String),
+}
+
+/// Activated height after ingress retirement and reducer/WAL finalization.
+///
+/// Services and the complete lifecycle owner remain sealed here until the
+/// existing lane/output transaction mints its durable handoff. There is no
+/// service, receipt, artifact, or owner parts accessor.
+#[must_use = "finalized lifecycle output rollover must be consumed"]
+pub(in crate::sumeragi) struct FinalizedProductionLifecycleRolloverV1 {
+    owner: ProductionLifecycleOwnerV1,
+    services: ProductionV2Services,
+    receipt: KuraV2CommitReceipt,
+    artifact: wire::finality::V2FinalityArtifact,
+    wal_retirement_warning: Option<String>,
+    retired_ingress: ProductionLifecycleRetiredIngressPermitV1,
+}
+
+/// Height after the exact service/transport output handoff is sealed.
+///
+/// This intermediate state still owns the live lifecycle stores. Its next
+/// consuming transition fsyncs all-row retirement before clean worker teardown
+/// becomes available.
+#[must_use = "post-handoff lifecycle stores must be retired"]
+pub(in crate::sumeragi) struct ProductionLifecyclePostOutputHandoffV1 {
+    owner: ProductionLifecycleOwnerV1,
+    services: ProductionV2Services,
+    receipt: KuraV2CommitReceipt,
+    wal_retirement_warning: Option<String>,
+    retired_ingress: ProductionLifecycleRetiredIngressPermitV1,
+    retained_serve_payloads:
+        BTreeSet<crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadId>,
+}
+
+/// Services whose output and lifecycle durability owners are fully retired.
+#[must_use = "cleanup-ready lifecycle services must be explicitly finished"]
+pub(in crate::sumeragi) struct ProductionLifecycleCleanupReadyV1 {
+    services: ProductionV2Services,
+    receipt: KuraV2CommitReceipt,
+    wal_retirement_warning: Option<String>,
+}
+
+/// Final local-cleanup diagnostics after every consensus owner was retired.
+#[derive(Clone, Debug)]
+#[must_use = "post-finality cleanup diagnostics must be observed"]
+pub(in crate::sumeragi) struct ProductionLifecycleFinalizationOutcomeV1 {
+    cleanup: PostFinalityCleanupOutcome,
+    wal_retirement_warning: Option<String>,
+}
+
+impl ProductionLifecycleFinalizationOutcomeV1 {
+    /// Borrow the adapter WAL/serviced-candidate cleanup warning, if retained.
+    pub(in crate::sumeragi) fn wal_retirement_warning(&self) -> Option<&str> {
+        self.wal_retirement_warning.as_deref()
+    }
+
+    /// Borrow the ordered service/body/chunk cleanup diagnostics.
+    pub(in crate::sumeragi) const fn cleanup(&self) -> &PostFinalityCleanupOutcome {
+        &self.cleanup
+    }
+}
+
+/// Opaque lifecycle stack after clocks, diagnostics, status, and ingress activate.
+#[must_use = "the activated lifecycle stack owns the live height"]
+pub(in crate::sumeragi) struct ActivatedProductionLifecycleV1 {
+    // Drop readiness/ingress ownership before the launched stack unbinds its
+    // durable gates. Finalization consumes the same authority explicitly.
+    runner_activation: super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1,
+    launched: LaunchedProductionLifecycleV1,
+}
+
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum ProductionLifecycleActivationPublicationV1 {
+    Runner(super::super::v2_runner::ProductionLifecycleRunnerActivationV1),
+    RecoveredCompleteTip {
+        runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        retirement: super::ledger::RetiredRecoveredCompleteTipActivationAuthorityV1,
+    },
+}
+
+impl ProductionLifecycleActivationPublicationV1 {
+    fn open_and_publish(
+        self,
+        ingress: &Arc<FairV2Ingress>,
+        status: wire::SumeragiV2Status,
+    ) -> Result<
+        super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1,
+        ProductionLifecycleActivationErrorV1,
+    > {
+        let result = match self {
+            Self::Runner(runner) => runner.open_and_publish(ingress, status),
+            Self::RecoveredCompleteTip { runner, retirement } => {
+                runner.open_and_publish(ingress, retirement, status)
+            }
+        };
+        result.map_err(|error| ProductionLifecycleActivationErrorV1::Runner(error.to_string()))
+    }
+}
+
+impl ProductionLifecycleOwnerV1 {
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn refresh_live_serve_retirement_cut(
+        &mut self,
+        services: &ProductionV2Services,
+        _retired_ingress: &ProductionLifecycleRetiredIngressPermitV1,
+    ) -> Result<
+        BTreeSet<crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadId>,
+        crate::sumeragi::v2_certified_serve_payload_store::CertifiedServeRetirementAuthenticationErrorV1,
+    >
+    {
+        let body_store_identity = self.body_store_identity.as_ref().ok_or(
+            crate::sumeragi::v2_certified_serve_payload_store::CertifiedServeRetirementAuthenticationErrorV1::ForeignServiceOwner,
+        )?;
+        if !self
+            .registry
+            .registry_mut()
+            .exactly_covers_finalization_work(&self.coordinator)
+        {
+            return Err(
+                crate::sumeragi::v2_certified_serve_payload_store::CertifiedServeRetirementAuthenticationErrorV1::InvalidLifecycleCensus,
+            );
+        }
+        let refreshed = services.authenticate_current_lifecycle_serve_retirement(
+            ProductionLifecycleServeRetirementAuthenticationPermitV1 {
+                _seal: ProductionLifecycleServeRetirementAuthenticationPermitSealV1,
+            },
+            &self.verified,
+            &self.payload_store,
+            body_store_identity,
+        )?;
+        let ledger = super::ledger::LifecycleLedgerV1::from_coordinator(&self.coordinator)
+            .map_err(|_| {
+                crate::sumeragi::v2_certified_serve_payload_store::CertifiedServeRetirementAuthenticationErrorV1::InvalidLifecycleCensus
+            })?;
+        let retained = super::open::authenticate_live_finalization_serve_census(
+            &self.verified,
+            &ledger,
+            &self.coordinator,
+            &refreshed,
+        )
+        .map_err(|_| {
+            crate::sumeragi::v2_certified_serve_payload_store::CertifiedServeRetirementAuthenticationErrorV1::InvalidLifecycleCensus
+        })?;
+        self.serve_payloads = refreshed;
+        Ok(retained)
+    }
+}
+
+impl LaunchedProductionLifecycleV1 {
+    /// Cross the ordinary/current/snapshot live-height boundary exactly once.
+    #[allow(dead_code)]
+    pub(in crate::sumeragi) fn activate(
+        self,
+        now: Instant,
+        runner: super::super::v2_runner::ProductionLifecycleRunnerActivationV1,
+    ) -> Result<ActivatedProductionLifecycleV1, ProductionLifecycleActivationErrorV1> {
+        self.activate_with(
+            now,
+            ProductionLifecycleActivationPublicationV1::Runner(runner),
+        )
+    }
+
+    /// Cross the CompleteTip boundary without separating retired H from H+1.
+    #[allow(dead_code)]
+    pub(super) fn activate_recovered_complete_tip(
+        self,
+        now: Instant,
+        runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        retirement: super::ledger::RetiredRecoveredCompleteTipActivationAuthorityV1,
+    ) -> Result<ActivatedProductionLifecycleV1, ProductionLifecycleActivationErrorV1> {
+        self.activate_with(
+            now,
+            ProductionLifecycleActivationPublicationV1::RecoveredCompleteTip { runner, retirement },
+        )
+    }
+
+    fn activate_with(
+        mut self,
+        now: Instant,
+        publication: ProductionLifecycleActivationPublicationV1,
+    ) -> Result<ActivatedProductionLifecycleV1, ProductionLifecycleActivationErrorV1> {
+        let output_guard = self.services.lifecycle_output_guard();
+        let activation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(ProductionLifecycleActivationErrorV1::OutputClosed)?;
+        self.executor
+            .arm_live_clocks(now)
+            .map_err(ProductionLifecycleActivationErrorV1::RuntimeClock)?;
+        let status = self
+            .executor
+            .successor_activation_status_snapshot()
+            .map_err(ProductionLifecycleActivationErrorV1::Status)?;
+        let observer = self.completion_observer_activation.take().ok_or_else(|| {
+            ProductionLifecycleActivationErrorV1::CompletionObserver(
+                "launched lifecycle lost its one-shot observer permit".to_owned(),
+            )
+        })?;
+        self.services
+            .activate_effect_completion_observer(observer)
+            .map_err(ProductionLifecycleActivationErrorV1::CompletionObserver)?;
+        let runner_activation =
+            publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)?;
+        activation.complete();
+        Ok(ActivatedProductionLifecycleV1 {
+            runner_activation,
+            launched: self,
+        })
+    }
+}
+
+impl ActivatedProductionLifecycleV1 {
+    /// Consume the activated height after executor and lifecycle work quiesce.
+    ///
+    /// Readiness closes before both ingress gates retire jointly. Only then is
+    /// the executor consumed and the adapter's exact WAL retired under one
+    /// fail-stop output operation. Every error consumes the height and leaves
+    /// service teardown armed for restart.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_finalized_rollover(
+        mut self,
+        _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<FinalizedProductionLifecycleRolloverV1, ProductionLifecycleFinalizationErrorV1>
+    {
+        if !self.launched.executor.ready_to_finish()
+            || self
+                .launched
+                .recovered_decision_fetch_body_completion
+                .is_some()
+            || self.launched.recovered_decision_apply_deferred.is_some()
+            || self.launched.recovered_lifecycle_sign_completion.is_some()
+            || self.launched.recovered_ingress_capacity_wait.is_some()
+            || self.launched.completion_observer_activation.is_some()
+            || !self
+                .launched
+                .owner
+                .registry
+                .registry_mut()
+                .exactly_covers_finalization_work(&self.launched.owner.coordinator)
+        {
+            return Err(ProductionLifecycleFinalizationErrorV1::NotReady);
+        }
+
+        let Self {
+            runner_activation,
+            mut launched,
+        } = self;
+        runner_activation
+            .retire(&launched.leader_wire_ingress_binding.ingress)
+            .map_err(|error| ProductionLifecycleFinalizationErrorV1::Runner(error.to_string()))?;
+        launched
+            .leader_wire_ingress_binding
+            .retire()
+            .map_err(ProductionLifecycleFinalizationErrorV1::Ingress)?;
+        let retired_ingress = ProductionLifecycleRetiredIngressPermitV1 {
+            _seal: ProductionLifecycleRetiredIngressPermitSealV1,
+        };
+
+        let LaunchedProductionLifecycleV1 {
+            owner,
+            executor,
+            services,
+            recovered_decision_apply_deferred,
+            recovered_decision_fetch_body_completion,
+            recovered_lifecycle_sign_completion,
+            recovered_ingress_capacity_wait,
+            completion_observer_activation,
+            leader_wire_ingress_binding,
+        } = launched;
+        debug_assert!(recovered_decision_apply_deferred.is_none());
+        debug_assert!(recovered_decision_fetch_body_completion.is_none());
+        debug_assert!(recovered_lifecycle_sign_completion.is_none());
+        debug_assert!(recovered_ingress_capacity_wait.is_none());
+        debug_assert!(completion_observer_activation.is_none());
+        drop(recovered_decision_apply_deferred);
+        drop(recovered_decision_fetch_body_completion);
+        drop(recovered_lifecycle_sign_completion);
+        drop(recovered_ingress_capacity_wait);
+        drop(completion_observer_activation);
+        drop(leader_wire_ingress_binding);
+
+        let (runtime, receipt, artifact) = executor
+            .into_finalized_parts()
+            .map_err(ProductionLifecycleFinalizationErrorV1::Executor)?;
+        let output_guard = services.lifecycle_output_guard();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(ProductionLifecycleFinalizationErrorV1::OutputClosed)?;
+        let finalized = runtime
+            .into_driver()
+            .finish_height(&receipt, &artifact)
+            .map_err(ProductionLifecycleFinalizationErrorV1::Adapter)?;
+        operation.complete();
+
+        Ok(FinalizedProductionLifecycleRolloverV1 {
+            owner,
+            services,
+            receipt,
+            artifact,
+            wal_retirement_warning: finalized.into_wal_retirement_warning(),
+            retired_ingress,
+        })
+    }
+
+    /// Exercise the exact empty-output post-handoff retirement transaction.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn retire_lifecycle_stores_for_test(
+        self,
+        receipt: KuraV2CommitReceipt,
+    ) -> Result<ProductionLifecycleCleanupReadyV1, String> {
+        let Self {
+            runner_activation,
+            mut launched,
+        } = self;
+        runner_activation
+            .retire(&launched.leader_wire_ingress_binding.ingress)
+            .map_err(|error| error.to_string())?;
+        launched
+            .leader_wire_ingress_binding
+            .retire()
+            .map_err(|error| error.to_string())?;
+        let retired_ingress = ProductionLifecycleRetiredIngressPermitV1 {
+            _seal: ProductionLifecycleRetiredIngressPermitSealV1,
+        };
+        launched
+            .services
+            .seal_empty_exact_output_for_lifecycle_retirement_test()?;
+        let retained_serve_payloads = launched
+            .owner
+            .refresh_live_serve_retirement_cut(&launched.services, &retired_ingress)
+            .map_err(|error| error.to_string())?;
+        let LaunchedProductionLifecycleV1 {
+            owner,
+            executor,
+            services,
+            recovered_decision_apply_deferred,
+            recovered_decision_fetch_body_completion,
+            recovered_lifecycle_sign_completion,
+            recovered_ingress_capacity_wait,
+            completion_observer_activation,
+            leader_wire_ingress_binding,
+        } = launched;
+        assert!(recovered_decision_apply_deferred.is_none());
+        assert!(recovered_decision_fetch_body_completion.is_none());
+        assert!(recovered_lifecycle_sign_completion.is_none());
+        assert!(recovered_ingress_capacity_wait.is_none());
+        assert!(completion_observer_activation.is_none());
+        drop(executor);
+        drop(recovered_decision_apply_deferred);
+        drop(recovered_decision_fetch_body_completion);
+        drop(recovered_lifecycle_sign_completion);
+        drop(recovered_ingress_capacity_wait);
+        drop(completion_observer_activation);
+        drop(leader_wire_ingress_binding);
+        ProductionLifecyclePostOutputHandoffV1 {
+            owner,
+            services,
+            receipt,
+            wal_retirement_warning: None,
+            retired_ingress,
+            retained_serve_payloads,
+        }
+        .retire_lifecycle_stores()
+        .map_err(|error| error.to_string())
+    }
+
+    /// Borrow the live owner/runtime/service triple only from the serialized runner.
+    ///
+    /// The callback cannot outlive this borrow or move fields out of the opaque
+    /// activated stack. This is the sole bridge intended for the ordinary live
+    /// loop while its fixed operations are migrated behind lifecycle methods.
+    #[allow(dead_code, clippy::type_complexity)]
+    pub(in crate::sumeragi) fn with_runner_runtime<R>(
+        &mut self,
+        _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        operation: impl FnOnce(
+            &mut ProductionLifecycleOwnerV1,
+            &mut V2EffectExecutor<SerializedV2Runtime>,
+            &mut ProductionV2Services,
+        ) -> R,
+    ) -> R {
+        operation(
+            &mut self.launched.owner,
+            &mut self.launched.executor,
+            &mut self.launched.services,
+        )
+    }
+}
+
+impl FinalizedProductionLifecycleRolloverV1 {
+    /// Borrow the exact Kura/finality pair while constructing its successor.
+    pub(in crate::sumeragi) const fn finality(
+        &self,
+    ) -> (&KuraV2CommitReceipt, &wire::finality::V2FinalityArtifact) {
+        (&self.receipt, &self.artifact)
+    }
+
+    /// Seal every finalized output owner before touching lifecycle stores.
+    #[allow(dead_code, clippy::too_many_arguments, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn rollover_outputs(
+        self,
+        _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        lane_work: V2LaneWorkAdapter,
+        successor: &wire::HeightContext,
+        control_queue_capacity: usize,
+    ) -> Result<
+        (
+            ProductionLifecyclePostOutputHandoffV1,
+            RetainedMergeSidecars,
+        ),
+        ProductionLifecycleFinalizationErrorV1,
+    > {
+        let Self {
+            mut owner,
+            services,
+            receipt,
+            artifact,
+            wal_retirement_warning,
+            retired_ingress,
+        } = self;
+        let retained = super::super::v2_runner::rollover_finalized_height_outputs_for_lifecycle(
+            ProductionLifecycleOutputRolloverPermitV1 {
+                _seal: ProductionLifecycleOutputRolloverPermitSealV1,
+            },
+            lane_work,
+            &services,
+            &receipt,
+            &artifact,
+            successor,
+            control_queue_capacity,
+        )
+        .map_err(ProductionLifecycleFinalizationErrorV1::OutputRollover)?;
+        let retained_serve_payloads = owner
+            .refresh_live_serve_retirement_cut(&services, &retired_ingress)
+            .map_err(|error| {
+                ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
+            })?;
+        Ok((
+            ProductionLifecyclePostOutputHandoffV1 {
+                owner,
+                services,
+                receipt,
+                wal_retirement_warning,
+                retired_ingress,
+                retained_serve_payloads,
+            },
+            retained,
+        ))
+    }
+}
+
+impl ProductionLifecyclePostOutputHandoffV1 {
+    /// Retire every payload, ledger row, logical owner, and concrete carrier.
+    ///
+    /// Payload tombstones publish first. The exact all-row LedgerV1 successor
+    /// then fsyncs before the assertion-only registry/coordinator consumption. An
+    /// armed output operation spans the complete cut, so an ambiguous payload
+    /// or ledger publication cannot return a retryable live owner.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn retire_lifecycle_stores(
+        self,
+    ) -> Result<ProductionLifecycleCleanupReadyV1, ProductionLifecycleFinalizationErrorV1> {
+        let Self {
+            owner,
+            services,
+            receipt,
+            wal_retirement_warning,
+            retired_ingress,
+            retained_serve_payloads,
+        } = self;
+        let output_guard = services.lifecycle_output_guard();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(ProductionLifecycleFinalizationErrorV1::OutputClosed)?;
+        let ProductionLifecycleOwnerV1 {
+            verified,
+            coordinator,
+            registry,
+            mut payload_store,
+            serve_payloads,
+            body_store,
+            body_store_identity,
+            kura_binding,
+            apply_service,
+            adapter_startup,
+        } = owner;
+        let current =
+            super::ledger::LifecycleLedgerV1::from_coordinator(&coordinator).map_err(|error| {
+                ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
+            })?;
+        let refreshed = payload_store
+            .retire_authenticated_cut(serve_payloads, &retained_serve_payloads)
+            .map_err(|error| {
+                ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
+            })?;
+        let reconciliation =
+            super::open::reconcile_complete_tip_serve_retirement(&current, refreshed).map_err(
+                |error| ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string()),
+            )?;
+        let staged = current
+            .stage_finalized_height_all_row_retirement(reconciliation)
+            .map_err(|error| {
+                ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
+            })?;
+        let publication = coordinator
+            .persist_exact_finalization_successor(staged)
+            .map_err(|error| {
+                ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
+            })?;
+
+        publication.consume_owners(registry);
+        drop(retired_ingress);
+        drop(verified);
+        drop(payload_store);
+        drop(body_store);
+        drop(body_store_identity);
+        drop(kura_binding);
+        drop(apply_service);
+        drop(adapter_startup);
+        operation.complete();
+        Ok(ProductionLifecycleCleanupReadyV1 {
+            services,
+            receipt,
+            wal_retirement_warning,
+        })
+    }
+}
+
+impl ProductionLifecycleCleanupReadyV1 {
+    /// Permit normal worker cleanup only after every durable handoff completed.
+    pub(in crate::sumeragi) fn finish_cleanup(
+        mut self,
+        cleanup_timeout: Duration,
+        supervisor: &mut V2CleanupSupervisor,
+    ) -> ProductionLifecycleFinalizationOutcomeV1 {
+        self.services.allow_clean_shutdown();
+        let cleanup = self
+            .services
+            .finish_height(self.receipt, cleanup_timeout, supervisor);
+        ProductionLifecycleFinalizationOutcomeV1 {
+            cleanup,
+            wal_retirement_warning: self.wal_retirement_warning,
+        }
+    }
+}
 impl ProductionLifecycleOwnerV1 {
     fn launch_local_identity_matches(
         roster: &[wire::ValidatorPower],
@@ -1494,6 +2221,7 @@ impl ProductionLifecycleOwnerV1 {
             .body_store
             .take()
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
+        let payload_store_identity = self.payload_store.instance_identity();
         let apply_service = self
             .apply_service
             .take()
@@ -1551,6 +2279,7 @@ impl ProductionLifecycleOwnerV1 {
             inputs.network,
             launch_storage.into_chunk_root(),
             body_store,
+            payload_store_identity.clone(),
             inputs.state,
             inputs.kura,
             apply_service,
@@ -1567,17 +2296,26 @@ impl ProductionLifecycleOwnerV1 {
         .map_err(ProductionLifecycleLaunchErrorV1::Services)?;
         if !services.matches_lifecycle_executor_output_guard(&executor)
             || !services.matches_lifecycle_body_store(&body_store_identity)
+            || !services.matches_lifecycle_payload_store(&payload_store_identity)
         {
             return Err(ProductionLifecycleLaunchErrorV1::OwnershipMismatch);
         }
+        let certified_serve_gate = services
+            .certified_serve_ingress_gate()
+            .map_err(ProductionLifecycleLaunchErrorV1::Services)?;
+        let leader_wire_ingress_binding = leader_wire_ingress_binding
+            .bind_certified_serve(certified_serve_gate)
+            .map_err(ProductionLifecycleLaunchErrorV1::Services)?;
         self.body_store_identity = Some(body_store_identity);
         construction.complete();
         Ok(LaunchedProductionLifecycleV1 {
             owner: self,
             executor,
             services,
+            recovered_decision_apply_deferred: None,
             recovered_decision_fetch_body_completion: None,
             recovered_lifecycle_sign_completion: None,
+            recovered_ingress_capacity_wait: None,
             completion_observer_activation: Some(
                 ProductionV2CompletionObserverActivationPermitV1 {
                     _seal: ProductionV2CompletionObserverActivationPermitSealV1,
@@ -1589,10 +2327,10 @@ impl ProductionLifecycleOwnerV1 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, HashOf};
-    use tempfile::TempDir;
     use super::*;
     use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test;
+    use iroha_crypto::{Hash, HashOf};
+    use tempfile::TempDir;
     #[test]
     fn launch_local_identity_requires_the_bound_key_and_exact_roster_position() {
         let key_pair = KeyPair::random();
@@ -1683,8 +2421,11 @@ mod tests {
         ingress
             .configure_roster([validator.clone()])
             .expect("one-validator launch binding geometry");
+        ingress.require_certified_serve_gate();
         ingress.require_leader_wire_lifecycle_gate();
         ingress.state.lock().leader_wire_max_chunk_count = 2;
+        let (first_serve_gate, first_ordinals) =
+            crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
         let (first_gate, first_restore) = empty_leader_wire_gate_for_binding_test(
             &directory,
             "explicit.wal",
@@ -1696,11 +2437,13 @@ mod tests {
             Arc::clone(&ingress),
             Arc::clone(&first_gate),
             first_restore,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            first_ordinals,
             context_id,
             HEIGHT,
         )
-        .expect("bind the exact launch gate");
+        .expect("bind the exact launch gate")
+        .bind_certified_serve(first_serve_gate.clone())
+        .expect("join the exact certified Serve gate");
         assert!(
             ingress
                 .state
@@ -1709,13 +2452,29 @@ mod tests {
                 .as_ref()
                 .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &first_gate))
         );
+        assert!(
+            ingress
+                .state
+                .lock()
+                .certified_serve_gate
+                .as_ref()
+                .is_some_and(|bound| bound.ptr_eq(&first_serve_gate))
+        );
         binding
             .retire()
-            .expect("explicit retirement detaches the exact launch gate");
+            .expect("explicit retirement detaches both exact launch gates");
         binding
             .retire()
             .expect("explicit retirement remains idempotent");
-        assert!(ingress.state.lock().leader_wire_lifecycle_gate.is_none());
+        {
+            let state = ingress.state.lock();
+            assert!(
+                state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none()
+            );
+        }
+
+        let (drop_serve_gate, drop_ordinals) =
+            crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
         let (drop_gate, drop_restore) = empty_leader_wire_gate_for_binding_test(
             &directory, "drop.wal", context_id, HEIGHT, &validator,
         );
@@ -1723,16 +2482,53 @@ mod tests {
             Arc::clone(&ingress),
             Arc::clone(&drop_gate),
             drop_restore,
+            drop_ordinals,
+            context_id,
+            HEIGHT,
+        )
+        .expect("rebind the exact launch gate")
+        .bind_certified_serve(drop_serve_gate)
+        .expect("rejoin the certified Serve gate");
+        drop(binding);
+        {
+            let state = ingress.state.lock();
+            assert!(
+                state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none(),
+                "Drop must detach both exact launch gates"
+            );
+        }
+
+        let (mismatched_serve_gate, _) =
+            crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
+        let (mismatch_gate, mismatch_restore) = empty_leader_wire_gate_for_binding_test(
+            &directory,
+            "mismatch.wal",
+            context_id,
+            HEIGHT,
+            &validator,
+        );
+        let mismatch = match ProductionLeaderWireIngressBindingV1::bind(
+            Arc::clone(&ingress),
+            mismatch_gate,
+            mismatch_restore,
             RuntimeLifecycleOrdinalSource::after_high_watermark(0),
             context_id,
             HEIGHT,
         )
-        .expect("rebind the exact launch gate");
-        drop(binding);
-        assert!(
-            ingress.state.lock().leader_wire_lifecycle_gate.is_none(),
-            "Drop must detach the exact launch gate"
-        );
+        .expect("bind the leader gate before the mismatched Serve join")
+        .bind_certified_serve(mismatched_serve_gate)
+        {
+            Ok(_) => panic!("a foreign lifecycle ordinal source passed the joint join"),
+            Err(error) => error,
+        };
+        assert!(mismatch.contains("actor-global lifecycle ordinal source"));
+        {
+            let state = ingress.state.lock();
+            assert!(
+                state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none(),
+                "a failed joint join must drop the retained leader binding"
+            );
+        }
         let (incumbent_gate, incumbent_restore) = empty_leader_wire_gate_for_binding_test(
             &directory,
             "incumbent.wal",
@@ -1740,15 +2536,20 @@ mod tests {
             HEIGHT,
             &validator,
         );
+        let (incumbent_serve_gate, incumbent_ordinals) =
+            crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
         ingress
             .bind_leader_wire_lifecycle_gate(
                 Arc::clone(&incumbent_gate),
                 incumbent_restore,
-                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+                incumbent_ordinals,
                 context_id,
                 HEIGHT,
             )
             .expect("bind the incumbent gate");
+        ingress
+            .bind_certified_serve_gate(incumbent_serve_gate.clone())
+            .expect("bind the incumbent certified Serve gate");
         ingress.open().expect("open the incumbent ingress");
         let (foreign_gate, foreign_restore) = empty_leader_wire_gate_for_binding_test(
             &directory,
@@ -1774,8 +2575,8 @@ mod tests {
             "failed binding must close ingress"
         );
         ingress
-            .unbind_leader_wire_lifecycle_gate(&incumbent_gate)
-            .expect("clean up the incumbent binding");
+            .unbind_height_ingress_gates(&incumbent_serve_gate, &incumbent_gate)
+            .expect("clean up both incumbent bindings");
     }
     #[test]
     fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
@@ -1789,9 +2590,18 @@ mod tests {
         let adjacent_store_source = include_str!("serviced_candidate_store.rs");
         let worker_source = include_str!("v2_worker.rs");
         let runner_source = include_str!("v2_runner.rs");
+        let finalized_output_source = include_str!("v2_runner/finalized_output_rollover.rs");
         let runner_tests_source = include_str!("v2_runner_tests.rs");
         let coordinator_source = include_str!("v2_lifecycle_coordinator.rs");
         let ledger_source = reviewed_lifecycle_ledger_source_for_test();
+        let payload_store_source = include_str!("v2_certified_serve_payload_store.rs");
+        let lifecycle_open_source = include_str!("v2_lifecycle_open.rs");
+        let registry_validate_source = concat!(
+            include_str!("v2_lifecycle_work_registry_validate_recovery.rs"),
+            include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs")
+        );
+        let lifecycle_startup_test_source =
+            include_str!("tests/v2_adapter_04b_lifecycle_startup.rs");
         let bound_launch = ledger_source
             .split_once("// COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_BEGIN")
             .expect("the bound CompleteTip launch has one sealed source region")
@@ -1820,12 +2630,26 @@ mod tests {
         assert!(bound_launch.contains(
             "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {\n    launched: super::launch::LaunchedProductionLifecycleV1,\n    retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,\n}"
         ));
+        let activation_impl = bound_launch
+            .find("impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1")
+            .expect("the launched H+1 join has one consuming activation implementation");
+        let activation_consume = bound_launch
+            .find("let Self {\n            launched,\n            retirement,\n        } = self;")
+            .expect(
+                "CompleteTip activation consumes the still-joined launched owner and retirement",
+            );
+        let typed_activation = bound_launch
+            .find("launched.activate_recovered_complete_tip(now, runner, retirement)")
+            .expect("CompleteTip activation enters only the typed publication boundary");
         assert!(
             bind < launch
                 && launch < consume
                 && consume < generic_launch
                 && generic_launch < retained
                 && retained < wrapper
+                && wrapper < activation_impl
+                && activation_impl < activation_consume
+                && activation_consume < typed_activation
         );
         for forbidden in [
             "set_v2_status",
@@ -1967,6 +2791,12 @@ mod tests {
         let worker = launch
             .find("ProductionV2Services::start_with_apply_service(")
             .expect("launch transfers the exact marker-replay service to the worker");
+        let certified_serve_gate = launch
+            .find("services\n            .certified_serve_ingress_gate()")
+            .expect("launch obtains the exact service-owned Serve gate");
+        let joint_ingress_bind = launch
+            .find(".bind_certified_serve(certified_serve_gate)")
+            .expect("launch joins both durable ingress gates before success");
         let worker_permit = launch
             .find("super::ProductionLifecycleApplyServiceLaunchPermitV1 {")
             .expect("launch mints the sole private Apply-service transfer permit");
@@ -2172,6 +3002,9 @@ mod tests {
                 && executor < genesis_gate
                 && genesis_gate < genesis
                 && genesis < worker
+                && worker < certified_serve_gate
+                && certified_serve_gate < joint_ingress_bind
+                && joint_ingress_bind < identity
                 && worker < identity
                 && identity < complete
         );
@@ -2185,6 +3018,7 @@ mod tests {
         ));
         assert!(launch.contains("leader_wire_ingress_binding,"));
         assert!(source.contains("impl Drop for ProductionLeaderWireIngressBindingV1"));
+        assert!(source.contains("certified_serve_gate: Option<CertifiedServeIngressGate>"));
         let launched_fields = source
             .split_once("pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {")
             .expect("launched wrapper has one declaration")
@@ -2221,6 +3055,10 @@ mod tests {
             .find("self.ingress.unbind_leader_wire_lifecycle_gate(gate)?")
             .expect("leader-wire retirement unbinds the exact retained gate");
         assert!(close < unbind);
+        let joint_unbind = leader_wire_drop
+            .find(".unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)")
+            .expect("completed launch retirement detaches both exact gates atomically");
+        assert!(close < joint_unbind);
         assert!(
             source.contains("impl Drop for ProductionV2CompletionObserverActivationPermitSealV1")
         );
@@ -2322,6 +3160,486 @@ mod tests {
         assert!(!worker_source.contains("ProductionV2CompletionObserverActivationPermitV1 {"));
         assert!(!launch.contains("activate_effect_completion_observer("));
         assert!(!runner_source.contains("activate_effect_completion_observer("));
+
+        let lifecycle_activation = source
+            .split_once("fn activate_with(")
+            .expect("the launched lifecycle has one consuming activation transaction")
+            .1
+            .split_once("impl ActivatedProductionLifecycleV1")
+            .expect("activation ends before the runner-borrowed live type state")
+            .0;
+        let activation_guard = lifecycle_activation
+            .find("begin_fail_stop_operation()")
+            .expect("activation arms the process-wide fail-stop boundary");
+        let clocks = lifecycle_activation
+            .find("arm_live_clocks(now)")
+            .expect("activation arms live clocks");
+        let status = lifecycle_activation
+            .find("successor_activation_status_snapshot()")
+            .expect("activation projects status only after clocks arm");
+        let observer = lifecycle_activation
+            .find("completion_observer_activation.take()")
+            .expect("activation consumes the sole observer permit");
+        let register_observer = lifecycle_activation
+            .find("activate_effect_completion_observer(observer)")
+            .expect("activation installs the completion observer");
+        let publish = lifecycle_activation
+            .find("publication.open_and_publish(")
+            .expect("activation delegates ingress and status to runner authority");
+        let complete = lifecycle_activation
+            .find("activation.complete()")
+            .expect("activation releases output only after publication");
+        let activated = lifecycle_activation
+            .find("ActivatedProductionLifecycleV1 {\n            runner_activation,\n            launched: self,")
+            .expect("activation returns the sole opaque live owner");
+        assert!(
+            activation_guard < clocks
+                && clocks < status
+                && status < observer
+                && observer < register_observer
+                && register_observer < publish
+                && publish < complete
+                && complete < activated
+        );
+        assert!(!lifecycle_activation.contains("set_v2_status"));
+        assert!(!lifecycle_activation.contains("into_parts"));
+
+        let activated_owner = source
+            .split_once("struct ActivatedProductionLifecycleV1")
+            .expect("activation returns one opaque owner type state")
+            .1
+            .split_once("enum ProductionLifecycleActivationPublicationV1")
+            .expect("the activated owner declaration ends before publication authority")
+            .0;
+        assert!(activated_owner.contains(
+            "runner_activation: super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1"
+        ));
+        assert!(activated_owner.contains("launched: LaunchedProductionLifecycleV1"));
+        assert!(
+            activated_owner.find("runner_activation:").unwrap()
+                < activated_owner.find("launched:").unwrap(),
+            "runner readiness must drop before the launched stack unbinds durable gates"
+        );
+        for forbidden in [
+            "pub launched:",
+            "pub(crate) launched:",
+            "pub(in crate::sumeragi) launched:",
+            "pub runner_activation:",
+            "pub(crate) runner_activation:",
+            "pub(in crate::sumeragi) runner_activation:",
+            "impl Clone for ActivatedProductionLifecycleV1",
+            "impl Copy for ActivatedProductionLifecycleV1",
+        ] {
+            assert!(!activated_owner.contains(forbidden));
+        }
+        let activated_borrow = source
+            .split_once("impl ActivatedProductionLifecycleV1")
+            .expect("the activated owner has one runner-borrow surface")
+            .1
+            .split_once("impl ProductionLifecycleOwnerV1")
+            .expect("the activated owner surface ends before launch helpers")
+            .0;
+        for required in [
+            "fn with_runner_runtime<R>(",
+            "_runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1",
+            "&mut self.launched.owner",
+            "&mut self.launched.executor",
+            "&mut self.launched.services",
+        ] {
+            assert!(activated_borrow.contains(required));
+        }
+        for forbidden in [
+            "into_parts",
+            "fn into_owner(",
+            "fn into_executor(",
+            "fn into_services(",
+            "pub launched:",
+            "pub(crate) launched:",
+        ] {
+            assert!(!activated_borrow.contains(forbidden));
+        }
+
+        let serve_retirement = source
+            .split_once("fn refresh_live_serve_retirement_cut(")
+            .expect("live Serve retirement has one launch-private join")
+            .1
+            .split_once("/// Cross the ordinary/current/snapshot live-height boundary")
+            .expect("live Serve retirement stays bounded before activation")
+            .0;
+        let registry_census = serve_retirement
+            .find("exactly_covers_finalization_work(&self.coordinator)")
+            .expect("retirement rejoins the exact live concrete registry");
+        let service_census = serve_retirement
+            .find("authenticate_current_lifecycle_serve_retirement(")
+            .expect("retirement authenticates through the exact launched service");
+        let ledger = serve_retirement
+            .find("LifecycleLedgerV1::from_coordinator(&self.coordinator)")
+            .expect("retirement derives the current ledger from the same owner");
+        let payload_census = serve_retirement
+            .find("authenticate_live_finalization_serve_census(")
+            .expect("retirement joins ledger rows and admission-wait payloads");
+        let install = serve_retirement
+            .find("self.serve_payloads = refreshed")
+            .expect("retirement replaces the stale startup cut only after authentication");
+        assert!(
+            registry_census < service_census
+                && service_census < ledger
+                && ledger < payload_census
+                && payload_census < install
+        );
+        assert!(
+            serve_retirement
+                .contains("_retired_ingress: &ProductionLifecycleRetiredIngressPermitV1")
+        );
+        assert!(!serve_retirement.contains("CertifiedServePayloadStoreV1::open("));
+        for authority in [
+            "ProductionLifecycleServeRetirementAuthenticationPermitV1",
+            "ProductionLifecycleRetiredIngressPermitV1",
+        ] {
+            assert!(!source.contains(&format!("impl Clone for {authority}")));
+            assert!(!source.contains(&format!("impl Copy for {authority}")));
+        }
+        let fixture_retirement = activated_borrow
+            .split_once("fn retire_lifecycle_stores_for_test(")
+            .expect("activation behavior has one consuming retirement fixture")
+            .1
+            .split_once("/// Borrow the live owner/runtime/service triple")
+            .expect("retirement fixture ends before the ordinary runner borrow")
+            .0;
+        let readiness_retire = fixture_retirement
+            .find("runner_activation\n            .retire(")
+            .expect("retirement clears runner readiness first");
+        let gates_retire = fixture_retirement
+            .find("leader_wire_ingress_binding\n            .retire()")
+            .expect("retirement detaches both ingress gates second");
+        let output_handoff = fixture_retirement
+            .find("seal_empty_exact_output_for_lifecycle_retirement_test()")
+            .expect("fixture seals its exact empty output handoff");
+        let refresh = fixture_retirement
+            .find("refresh_live_serve_retirement_cut(&launched.services, &retired_ingress)")
+            .expect("fixture refreshes Serve only after output handoff");
+        let retirement = fixture_retirement
+            .find(".retire_lifecycle_stores()")
+            .expect("fixture exercises the post-handoff durable retirement tail");
+        assert!(
+            readiness_retire < gates_retire
+                && gates_retire < output_handoff
+                && output_handoff < refresh
+                && refresh < retirement
+        );
+
+        let activated_finalization = activated_borrow
+            .split_once("fn into_finalized_rollover(")
+            .expect("activated owner has one consuming finalization")
+            .1
+            .split_once("/// Exercise the exact empty-output post-handoff retirement transaction")
+            .expect("production finalization ends before its behavior fixture")
+            .0;
+        let executor_ready = activated_finalization
+            .find("executor.ready_to_finish()")
+            .expect("finalization first proves exact executor quiescence");
+        let registry_ready = activated_finalization
+            .find("exactly_covers_finalization_work")
+            .expect("finalization first proves exact lifecycle-owner quiescence");
+        let runner_retire = activated_finalization
+            .find("runner_activation\n            .retire(")
+            .expect("finalization clears runner readiness and ingress");
+        let gate_retire = activated_finalization
+            .find("leader_wire_ingress_binding\n            .retire()")
+            .expect("finalization jointly retires both durable ingress gates");
+        let executor_consume = activated_finalization
+            .find("executor\n            .into_finalized_parts()")
+            .expect("finalization consumes the exact executor after gate retirement");
+        let operation = activated_finalization
+            .find("begin_fail_stop_operation()")
+            .expect("adapter finalization is fail-stop guarded");
+        let adapter_finish = activated_finalization
+            .find(".finish_height(&receipt, &artifact)")
+            .expect("the serialized adapter consumes exact Kura finality");
+        let operation_complete = activated_finalization
+            .find("operation.complete()")
+            .expect("adapter finalization completes the fail-stop operation last");
+        assert!(executor_ready < runner_retire && registry_ready < runner_retire);
+        assert!(
+            runner_retire < gate_retire
+                && gate_retire < executor_consume
+                && executor_consume < operation
+                && operation < adapter_finish
+                && adapter_finish < operation_complete
+        );
+
+        let rollover = source
+            .split_once("impl FinalizedProductionLifecycleRolloverV1")
+            .expect("finalized owner has one output-rollover implementation")
+            .1
+            .split_once("impl ProductionLifecyclePostOutputHandoffV1")
+            .expect("output rollover ends before lifecycle-store retirement")
+            .0;
+        let sealed_output = rollover
+            .find("rollover_finalized_height_outputs_for_lifecycle(")
+            .expect("finalized owner invokes the existing exact output handoff");
+        let output_permit = rollover
+            .find("ProductionLifecycleOutputRolloverPermitV1 {")
+            .expect("only the finalized owner mints the sibling-call permit");
+        let serve_refresh = rollover
+            .find("refresh_live_serve_retirement_cut(&services, &retired_ingress)")
+            .expect("Serve census refresh follows durable output handoff");
+        assert!(sealed_output < output_permit && output_permit < serve_refresh);
+        assert!(finalized_output_source.contains(
+            "_permit: super::v2_lifecycle_coordinator::ProductionLifecycleOutputRolloverPermitV1"
+        ));
+
+        let store_retirement = source
+            .split_once("impl ProductionLifecyclePostOutputHandoffV1")
+            .expect("post-output owner has one lifecycle-store implementation")
+            .1
+            .split_once("impl ProductionLifecycleCleanupReadyV1")
+            .expect("store retirement ends before clean worker teardown")
+            .0;
+        let retirement_operation = store_retirement
+            .find("begin_fail_stop_operation()")
+            .expect("store retirement arms process-wide fail-stop ownership");
+        let payload_retire = store_retirement
+            .find(".retire_authenticated_cut(serve_payloads, &retained_serve_payloads)")
+            .expect("the exact live payload cut retires before LedgerV1");
+        let ledger_stage = store_retirement
+            .find(".stage_finalized_height_all_row_retirement(reconciliation)")
+            .expect("all rows stage from the refreshed Serve cut");
+        let ledger_publish = store_retirement
+            .find(".persist_exact_finalization_successor(staged)")
+            .expect("the opaque staged successor fsyncs exactly once");
+        let owner_consume = store_retirement
+            .find("publication.consume_owners(registry)")
+            .expect("only the published token consumes logical and concrete owners");
+        let retirement_complete = store_retirement
+            .find("operation.complete()")
+            .expect("store retirement releases fail-stop ownership last");
+        assert!(
+            retirement_operation < payload_retire
+                && payload_retire < ledger_stage
+                && ledger_stage < ledger_publish
+                && ledger_publish < owner_consume
+                && owner_consume < retirement_complete
+        );
+        let cleanup = source
+            .split_once("impl ProductionLifecycleCleanupReadyV1")
+            .expect("cleanup-ready owner has one consuming cleanup")
+            .1
+            .split_once("impl ProductionLifecycleOwnerV1")
+            .expect("cleanup-ready surface ends before launch construction")
+            .0;
+        assert!(
+            cleanup
+                .find("self.services.allow_clean_shutdown()")
+                .expect("only cleanup-ready state permits normal service Drop")
+                < cleanup
+                    .find(".finish_height(self.receipt, cleanup_timeout, supervisor)")
+                    .expect("clean service teardown follows explicit permission")
+        );
+
+        for state in [
+            "FinalizedProductionLifecycleRolloverV1",
+            "ProductionLifecyclePostOutputHandoffV1",
+            "ProductionLifecycleCleanupReadyV1",
+            "StagedFinalizationRetirementV1",
+            "PublishedFinalizationRetirementV1",
+            "ProductionLifecycleOutputRolloverPermitV1",
+        ] {
+            assert!(!source.contains(&format!("impl Clone for {state}")));
+            assert!(!source.contains(&format!("impl Copy for {state}")));
+            assert!(!ledger_source.contains(&format!("impl Clone for {state}")));
+            assert!(!ledger_source.contains(&format!("impl Copy for {state}")));
+            let declaration_source = if source.contains(&format!("struct {state}")) {
+                source
+            } else {
+                ledger_source
+            };
+            let start = declaration_source
+                .find(&format!("struct {state}"))
+                .unwrap_or_else(|| panic!("missing opaque finalization state {state}"));
+            let prefix = &declaration_source[..start];
+            let declaration_start = prefix.rfind("\n\n").unwrap_or(0);
+            let declaration_end = declaration_source[start..]
+                .find("\n}")
+                .map(|offset| start + offset)
+                .expect("opaque finalization declaration is closed");
+            let declaration = &declaration_source[declaration_start..declaration_end];
+            assert!(!declaration.contains("Clone"));
+            assert!(!declaration.contains("Copy"));
+            assert!(!declaration.contains("pub owner:"));
+            assert!(!declaration.contains("pub coordinator:"));
+            assert!(!declaration.contains("pub services:"));
+            assert!(!declaration.contains("pub current:"));
+            assert!(!declaration.contains("pub retired:"));
+        }
+        let published_retirement = ledger_source
+            .split_once("fn persist_exact_finalization_successor(")
+            .expect("coordinator has one consuming finalization publication")
+            .1
+            .split_once("#[cfg(test)]")
+            .expect("finalization publication ends before test helpers")
+            .0;
+        let consume_coordinator = published_retirement
+            .find("self,")
+            .expect("publication consumes the exact coordinator instance");
+        let exact_source = published_retirement
+            .find("LifecycleLedgerV1::from_coordinator(&self)? != current")
+            .expect("publication rejoins the staged source to that coordinator");
+        let persist = published_retirement
+            .find("store.persist_exact_successor(&current, &retired)?")
+            .expect("publication fsyncs the exact staged successor");
+        let reload = published_retirement
+            .find("store.load()? != retired")
+            .expect("publication revalidates the linked store after fsync");
+        let sealed = published_retirement
+            .find("coordinator: self")
+            .expect("published token retains the exact consumed coordinator");
+        assert!(
+            consume_coordinator < exact_source
+                && exact_source < persist
+                && persist < reload
+                && reload < sealed
+        );
+        assert!(
+            lifecycle_startup_test_source
+                .contains("production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout")
+        );
+        assert!(
+            lifecycle_startup_test_source
+                .contains(".retire_lifecycle_stores_for_test(finality_receipt)")
+        );
+        assert!(
+            lifecycle_startup_test_source
+                .contains("cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)")
+        );
+        let finalization_behavior = lifecycle_startup_test_source
+            .split_once(
+                "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+            )
+            .expect("marker replay has one production finalization behavior fixture")
+            .1
+            .split_once("fn expect_recovered_open_error")
+            .expect("production finalization behavior ends before recovery helpers")
+            .0;
+        let status_guard = finalization_behavior
+            .find("let _status_guard = crate::sumeragi::status::rbc_status_test_guard()")
+            .expect("the production finalization fixture serializes global status mutation");
+        let genesis_transaction = finalization_behavior
+            .find("TransactionBuilder::new_genesis(")
+            .expect("the production finalization fixture uses a genesis-domain transaction");
+        let genesis_key = finalization_behavior
+            .find("Algorithm::Ed25519")
+            .expect("the genesis transaction uses an allowed non-consensus signing key");
+        let genesis_da = finalization_behavior
+            .find("block_builder.set_da_proof_policies(Some(proof_policy_bundle))")
+            .expect("the production finalization genesis seals its active DA policy");
+        let genesis_signature = finalization_behavior
+            .find(".try_build_with_signature(0, genesis_key.private_key())")
+            .expect("the configured genesis authority signs at index zero");
+        let genesis_policy = finalization_behavior
+            .find("BlockSignaturePolicy::GenesisAuthority(")
+            .expect("the recovered body store retains the genesis signature policy");
+        let decision = finalization_behavior
+            .find("WalRecordV2::Decision(decision)")
+            .expect("the finalization fixture starts from a durable Decision");
+        let launch = finalization_behavior
+            .find("let mut launched = owner")
+            .expect("the recovered Decision owner launches through production");
+        let dispatch = finalization_behavior
+            .find(".dispatch_recovered_decision_apply(")
+            .expect("the recovered Apply uses the lifecycle scheduler");
+        let settle = finalization_behavior
+            .find("settle_recovered_decision_apply_completion(&mut lane_work)")
+            .expect("the recovered Apply publishes exact finality");
+        let activation = finalization_behavior
+            .find("let activated = launched")
+            .expect("the completed recovered height activates through the runner seal");
+        let finalize = finalization_behavior
+            .find(".into_finalized_rollover(&mut runner)")
+            .expect("the activated owner runs the production finalization transition");
+        let retain_decision = finalization_behavior
+            .find(".retain_merge_sidecars_for_global_view(")
+            .expect("the lane owner retains the ordinary exact Decision carrier");
+        let output = finalization_behavior
+            .find(".rollover_outputs(&mut runner, lane_work, &successor, 64)")
+            .expect("the exact service and lane owners seal output together");
+        let stores = finalization_behavior
+            .find(".retire_lifecycle_stores()")
+            .expect("lifecycle stores retire only after output handoff");
+        let workers = finalization_behavior
+            .find("cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)")
+            .expect("clean worker teardown is the final behavior step");
+        assert!(
+            status_guard < genesis_key
+                && genesis_key < genesis_transaction
+                && genesis_transaction < genesis_da
+                && genesis_da < genesis_signature
+                && genesis_signature < genesis_policy
+                && genesis_policy < decision
+                && decision < launch
+                && launch < dispatch
+                && dispatch < settle
+                && settle < activation
+                && activation < finalize
+                && finalize < retain_decision
+                && retain_decision < output
+                && output < stores
+                && stores < workers
+        );
+        assert!(registry_validate_source.contains("broadcast.is_unpaired()"));
+        assert!(
+            registry_validate_source
+                .contains("carrier.pairs_exact_next_sign(next_sign, next_sign_digest)")
+        );
+
+        let current_payload_census = payload_store_source
+            .split_once("fn authenticate_current_for_lifecycle_retirement(")
+            .expect("Serve store has one current retirement census")
+            .1
+            .split_once("/// Compare this opened payload owner")
+            .expect("current retirement census stays bounded")
+            .0;
+        for required in [
+            "self.reload_payload_census_strict()?",
+            "payloads.keys().copied().collect::<BTreeSet<_>>() != self.indexed",
+            ".authenticate_for_complete_tip_retirement(verified, local_signer)",
+            "self.validate_authenticated_cut(&authenticated)?",
+        ] {
+            assert!(current_payload_census.contains(required));
+        }
+        let live_serve_join = lifecycle_open_source
+            .split_once("fn authenticate_live_finalization_serve_census(")
+            .expect("Serve retirement has one ledger/wait join")
+            .1
+            .split_once("/// Seal the final post-mutation Serve cut")
+            .expect("live Serve join stays bounded")
+            .0;
+        for required in [
+            "LifecycleLedgerV1::from_coordinator(coordinator)",
+            "authenticate_complete_tip_serve_census(ledger, recovered)?",
+            "WaitSource::Capacity(class)",
+            "receipt.exactly_matches_pending(payload.request())",
+            "prepare_certified_serve_admission(",
+            "candidate != waiting.candidate",
+            "owned != recovered_ids",
+        ] {
+            assert!(live_serve_join.contains(required));
+        }
+        let finalization_registry = registry_validate_source
+            .split_once("fn exactly_covers_finalization_work(")
+            .expect("registry has one finalization-only census")
+            .1
+            .split_once("fn exactly_covers_ready_work_with_extra(")
+            .expect("finalization census delegates to the shared exact coverage")
+            .0;
+        assert!(
+            finalization_registry
+                .contains("exactly_covers_ready_work_with_extra(coordinator, extra, None, true)")
+        );
+        assert!(
+            registry_validate_source.contains("broadcast.matches_current_finalization_record(")
+        );
+
         let runner_dependency_permit = runner_source
             .split_once(
                 "pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1",
@@ -2351,6 +3669,182 @@ mod tests {
         ] {
             assert!(!runner_dependency_permit.contains(forbidden));
         }
+        let ordinary_activation = runner_dependency_permit
+            .split_once("struct ProductionLifecycleRunnerActivationV1")
+            .expect("runner retains one ordinary activation authority")
+            .1
+            .split_once("struct ProductionLifecycleCompleteTipRunnerActivationV1")
+            .expect("ordinary activation ends before the CompleteTip authority")
+            .0;
+        for required in [
+            "_seal: ProductionLifecycleRunnerActivationSealV1",
+            "ingress_ready: Arc<AtomicBool>",
+            "block_ingress: Arc<FairV2Ingress>",
+            "status: ProductionLifecycleRunnerStatusAuthorityV1",
+            "struct ProductionLifecycleRunnerActivationSealV1",
+            "impl Drop for ProductionLifecycleRunnerActivationSealV1",
+            "fn current_height(",
+            "fn applied(",
+            "fn snapshot_bootstrap(",
+            "CurrentHeight",
+            "Applied",
+            "SnapshotBootstrap",
+            "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
+            "self.ingress_ready.store(false, Ordering::Release)",
+            "self.block_ingress.open()",
+            "status::set_v2_status(successor)",
+            "status::activate_v2_successor_height(",
+            "status::activate_snapshot_bootstrap_v2_height(",
+            "self.block_ingress.close()",
+            "self.ingress_ready.store(true, Ordering::Release)",
+            "ProductionLifecycleActivatedRunnerAuthorityV1 {",
+            "ingress_ready: self.ingress_ready",
+            "block_ingress: self.block_ingress",
+        ] {
+            assert!(ordinary_activation.contains(required));
+        }
+        let close_readiness = ordinary_activation
+            .find("self.ingress_ready.store(false, Ordering::Release)")
+            .unwrap();
+        let exact_ingress = ordinary_activation.find("Arc::ptr_eq").unwrap();
+        let reject_close = ordinary_activation
+            .find("self.block_ingress.close()")
+            .unwrap();
+        let open_ingress = ordinary_activation
+            .find("self.block_ingress.open()")
+            .unwrap();
+        let publish_status = ordinary_activation
+            .find("let publication = match self.status")
+            .unwrap();
+        let release_readiness = ordinary_activation
+            .rfind("self.ingress_ready.store(true, Ordering::Release)")
+            .unwrap();
+        assert!(
+            close_readiness < exact_ingress
+                && exact_ingress < reject_close
+                && reject_close < open_ingress
+                && open_ingress < publish_status
+                && publish_status < release_readiness
+        );
+        for forbidden in [
+            "impl Clone for ProductionLifecycleRunnerActivationV1",
+            "impl Copy for ProductionLifecycleRunnerActivationV1",
+            "pub(in crate::sumeragi) fn current_height(",
+            "pub(crate) fn current_height(",
+            "pub fn current_height(",
+            "pub(in crate::sumeragi) fn applied(",
+            "pub(in crate::sumeragi) fn snapshot_bootstrap(",
+            "fn into_parts(",
+        ] {
+            assert!(!ordinary_activation.contains(forbidden));
+        }
+
+        let complete_tip_activation = runner_dependency_permit
+            .split_once("struct ProductionLifecycleCompleteTipRunnerActivationV1")
+            .expect("runner retains one CompleteTip activation authority")
+            .1
+            .split_once("struct ProductionLifecycleActivatedRunnerAuthorityV1")
+            .expect("CompleteTip activation ends before the live runner borrow key")
+            .0;
+        for required in [
+            "_seal: ProductionLifecycleCompleteTipRunnerActivationSealV1",
+            "struct ProductionLifecycleCompleteTipRunnerActivationSealV1",
+            "impl Drop for ProductionLifecycleCompleteTipRunnerActivationSealV1",
+            "fn mint_for_recovered_runner(",
+            "ProductionLifecycleActivatedRunnerAuthorityV1 {",
+            "ingress_ready: self.ingress_ready",
+            "block_ingress: self.block_ingress",
+        ] {
+            assert!(complete_tip_activation.contains(required));
+        }
+        let close_readiness = complete_tip_activation
+            .find("self.ingress_ready.store(false, Ordering::Release)")
+            .unwrap();
+        let exact_ingress = complete_tip_activation.find("Arc::ptr_eq").unwrap();
+        let retirement_join = complete_tip_activation
+            .find("retirement.authorizes_successor_status(&successor)")
+            .unwrap();
+        let open_ingress = complete_tip_activation
+            .find("self.block_ingress.open()")
+            .unwrap();
+        let publish_status = complete_tip_activation
+            .find("status::activate_recovered_complete_tip_v2_height(retirement, successor)")
+            .unwrap();
+        let release_readiness = complete_tip_activation
+            .find("self.ingress_ready.store(true, Ordering::Release)")
+            .unwrap();
+        assert!(
+            close_readiness < exact_ingress
+                && exact_ingress < retirement_join
+                && retirement_join < open_ingress
+                && open_ingress < publish_status
+                && publish_status < release_readiness
+        );
+        assert_eq!(
+            complete_tip_activation
+                .matches("self.block_ingress.close()")
+                .count(),
+            3,
+            "mismatch, invalid retirement, and publication failure each close exact ingress"
+        );
+        for forbidden in [
+            "impl Clone for ProductionLifecycleCompleteTipRunnerActivationV1",
+            "impl Copy for ProductionLifecycleCompleteTipRunnerActivationV1",
+            "pub(in crate::sumeragi) fn mint_for_recovered_runner(",
+            "pub(crate) fn mint_for_recovered_runner(",
+            "pub fn mint_for_recovered_runner(",
+            "fn into_parts(",
+        ] {
+            assert!(!complete_tip_activation.contains(forbidden));
+        }
+        let activated_runner = runner_dependency_permit
+            .split_once("struct ProductionLifecycleActivatedRunnerAuthorityV1")
+            .expect("activation retains one exact readiness/ingress owner")
+            .1
+            .split_once("struct ProductionLifecycleActiveRunnerBorrowV1")
+            .expect("activated runner ownership ends before the live borrow key")
+            .0;
+        for required in [
+            "_seal: ProductionLifecycleActivatedRunnerAuthoritySealV1",
+            "ingress_ready: Arc<AtomicBool>",
+            "block_ingress: Arc<FairV2Ingress>",
+            "impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1",
+            "fn retire(",
+            "self.ingress_ready.store(false, Ordering::Release)",
+            "self.block_ingress.close()",
+            "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
+            "impl Drop for ProductionLifecycleActivatedRunnerAuthorityV1",
+        ] {
+            assert!(activated_runner.contains(required));
+        }
+        for forbidden in [
+            "impl Clone for ProductionLifecycleActivatedRunnerAuthorityV1",
+            "impl Copy for ProductionLifecycleActivatedRunnerAuthorityV1",
+            "fn into_parts(",
+            "pub ingress_ready:",
+            "pub block_ingress:",
+        ] {
+            assert!(!activated_runner.contains(forbidden));
+        }
+        assert_eq!(
+            activated_runner
+                .matches("self.ingress_ready.store(false, Ordering::Release)")
+                .count(),
+            2
+        );
+        assert_eq!(
+            activated_runner
+                .matches("self.block_ingress.close()")
+                .count(),
+            2
+        );
+        let runner_borrow = runner_dependency_permit
+            .split_once("struct ProductionLifecycleActiveRunnerBorrowV1")
+            .expect("runner owns one live borrow key")
+            .1;
+        assert!(runner_borrow.contains("fn mint_for_recovered_runner() -> Self"));
+        assert!(!runner_borrow.contains("pub(in crate::sumeragi) fn mint_for_recovered_runner"));
+        assert!(!runner_borrow.contains("fn into_parts("));
         assert!(runner_tests_source.contains(
             "fn recovered_lifecycle_factory_dependency_permit_retains_the_exact_local_signer()"
         ));
@@ -2744,6 +4238,7 @@ mod tests {
             .unwrap();
         assert!(services < completion && completion < ingress);
         assert_recovered_vote_broadcast_and_sign_settlement_is_restart_closed();
+        assert_recovered_proposal_prepare_wal_settlement_is_restart_closed();
         assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart_closed();
     }
     fn assert_recovered_vote_broadcast_and_sign_settlement_is_restart_closed() {
@@ -2755,7 +4250,7 @@ mod tests {
             .expect("recovered Prepare Vote has one combined settlement")
             .1
             .split_once(
-                "/// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.",
+                "/// Fsync an initial Proposal `PrepareIntent`, then publish both successors.",
             )
             .expect("combined Vote settlement stays bounded")
             .0;
@@ -2803,6 +4298,85 @@ mod tests {
         assert!(!settlement.contains("project_proposal_exact_output_authority"));
         assert!(!settlement.contains("capture_recovered_lifecycle_proposal_exact_output"));
         assert!(!settlement.contains("output.commit_after_publication()"));
+        let tail = &settlement[transition_commit..];
+        assert!(!tail.contains("return "));
+        assert!(!tail.contains(".is_err()"));
+        assert!(!tail.contains('?'));
+    }
+    fn assert_recovered_proposal_prepare_wal_settlement_is_restart_closed() {
+        let source = include_str!("v2_lifecycle_launch.rs");
+        let settlement = source
+            .split_once(
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_prepare_wal(",
+            )
+            .expect("initial recovered Proposal has one WAL-first transaction")
+            .1
+            .split_once(
+                "/// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.",
+            )
+            .expect("initial Proposal WAL transaction stays bounded")
+            .0;
+        let completion = settlement
+            .find("recovered_lifecycle_sign_completion.take()")
+            .expect("take the guarded Proposal completion once");
+        let body = settlement
+            .find("prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)")
+            .expect("preflight the exact future Prepare Sign and body");
+        let shape = settlement
+            .find("RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal")
+            .expect("accept only the initial Proposal persistence shape");
+        let output_projection = settlement
+            .find("preview.project_proposal_exact_output_authority()")
+            .expect("seal output from the same pre-WAL preview");
+        let output_capture = settlement
+            .find("capture_recovered_lifecycle_proposal_exact_output(output_authority)")
+            .expect("reserve Proposal control and chunks before WAL I/O");
+        let wal_permit = settlement
+            .find("output.prepare_wal_append_permit()")
+            .expect("borrow the WAL authority from the still-armed output reservation");
+        let wal = settlement
+            .find("append_recovered_lifecycle_proposal_prepare_wal(wal_permit)")
+            .expect("append and fsync the exact PrepareIntent");
+        let registry = settlement
+            .find("prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(")
+            .expect("seal the post-WAL two-child registry successor");
+        let transition = settlement
+            .find("prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(")
+            .expect("stage the exact two-child Ledger successor");
+        let fsync = settlement
+            .find("transition.persist_exact_successor().is_err()")
+            .expect("fsync the two-child Ledger successor");
+        let transition_commit = settlement
+            .find("transition.commit_after_publication();")
+            .expect("publish coordinator, registry, and adapter after Ledger fsync");
+        let worker_commit = settlement
+            .find("completion.acknowledge_after_publication();")
+            .expect("retire the guarded worker after durable publication");
+        let output_commit = settlement
+            .find("output.commit_after_publication();")
+            .expect("enqueue the pre-WAL output reservation last");
+        assert!(
+            completion < body
+                && body < shape
+                && shape < output_projection
+                && output_projection < output_capture
+                && output_capture < wal_permit
+                && wal_permit < wal
+                && wal < registry
+                && registry < transition
+                && transition < fsync
+                && fsync < transition_commit
+                && transition_commit < worker_commit
+                && worker_commit < output_commit
+        );
+        assert!(
+            settlement
+                .contains("RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)")
+        );
+        assert!(settlement.contains("*recovered_lifecycle_sign_completion = Some(completion)"));
+        assert!(!settlement.contains("output.abort_before_publication()"));
+        let post_wal = &settlement[wal..transition_commit];
+        assert!(post_wal.matches("drop(output);").count() >= 3);
         let tail = &settlement[transition_commit..];
         assert!(!tail.contains("return "));
         assert!(!tail.contains(".is_err()"));

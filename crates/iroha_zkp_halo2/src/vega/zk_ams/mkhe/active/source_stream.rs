@@ -34,8 +34,8 @@ impl IndexedActiveSourcePolynomialV1 {
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         if native_digest == [0; 32]
             || wire_digest == [0; 32]
-            || native_limb_digests.iter().any(|digest| *digest == [0; 32])
-            || wire_limb_digests.iter().any(|digest| *digest == [0; 32])
+            || native_limb_digests.contains(&[0; 32])
+            || wire_limb_digests.contains(&[0; 32])
         {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
@@ -56,6 +56,10 @@ impl IndexedActiveSourcePolynomialV1 {
     }
 }
 /// Small indexed form of one of the three source-statement families.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "fixed indexed-source variants remain allocation-free and preserve reviewed protocol field layout"
+)]
 pub(in super::super) enum IndexedActiveSourceStatementV1 {
     RkgRoundOne {
         public_a: IndexedActiveSourcePolynomialV1,
@@ -586,6 +590,10 @@ fn derive_rkg_common_a_limb_v1(
     }
     Ok(output)
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed protocol axes remain explicit to preserve reviewed binding order"
+)]
 fn validate_indexed_common_a<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     profile: &super::super::BgvProfile,
@@ -607,7 +615,7 @@ fn validate_indexed_common_a<R: std::io::Read + std::io::Seek>(
             digit,
             limb,
         )?;
-        if &*observed != &*expected {
+        if *observed != *expected {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
     }
@@ -1104,6 +1112,10 @@ fn read_limb_multiplier<R: std::io::Read + std::io::Seek>(
         LimbMultiplierV1::ScaledIdentity(_) => Ok(None),
     }
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed protocol axes remain explicit to preserve reviewed relation order"
+)]
 fn verify_relation_output<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     hash: &mut Keccak256,

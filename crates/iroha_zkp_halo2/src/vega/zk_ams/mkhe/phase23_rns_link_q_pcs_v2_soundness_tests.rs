@@ -1,7 +1,6 @@
 use super::super::{Fq2ParametersV1, Fq2V1};
 use super::*;
-use crate::vega::sponge::shake256;
-use sha2::{Digest as _, Sha256};
+use crate::vega::{microsoft_mc::dependency_free_sha256_for_tests, sponge::shake256};
 const SOURCE_DIGEST: [u8; 32] = [0x22; 32];
 const ALGEBRA_DIGEST: [u8; 32] = [0x33; 32];
 const INITIAL_ROOT: [u8; 32] = [0x44; 32];
@@ -369,11 +368,11 @@ fn authentication_cap_witness_queries(auth_only: bool) -> [u32; QUERY_COUNT_V2] 
     queries
 }
 fn sha256_query_array(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    for query in queries {
-        digest.update(query.to_be_bytes());
+    let mut encoded = [0_u8; QUERY_COUNT_V2 * 4];
+    for (destination, query) in encoded.chunks_exact_mut(4).zip(queries) {
+        destination.copy_from_slice(&query.to_be_bytes());
     }
-    digest.finalize().into()
+    dependency_free_sha256_for_tests(&encoded)
 }
 fn manual_fri_geometry(mut queries: [u32; QUERY_COUNT_V2]) -> (usize, usize) {
     let mut opened = 0_usize;

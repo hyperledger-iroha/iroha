@@ -140,7 +140,7 @@ fn release_geometry_accounting_and_false_gates_are_exact() {
 }
 #[test]
 fn canonical_u32_sum_is_authenticated_and_invalid_input_poisoned() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::testing::TestDirectory::new("m-table-canonical-sum");
     let mut writer = begin_m_table_v1(
         [0x21; 32],
         MProducerSealV1::TestOnly {
@@ -237,7 +237,7 @@ fn continue_oracle_v1(
 }
 #[test]
 fn independent_round12_through_plane_round_kat_pins_m_fold_and_masks() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::testing::TestDirectory::new("m-table-round12-kat");
     let public = [0x31; 32];
     let pair = round12_pair_v1(directory.path(), public);
     let multiplicity = round12_m_v1(directory.path(), public);

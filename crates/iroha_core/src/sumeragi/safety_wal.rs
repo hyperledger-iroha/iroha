@@ -6,13 +6,6 @@
 //! hash chained so corruption before the final, incomplete crash tail fails closed. Recovery
 //! verifies frames incrementally and fixed height-local record/payload ceilings are enforced both
 //! while opening and before append I/O, keeping valid replay memory bounded.
-use std::{
-    ffi::{OsStr, OsString},
-    fs::{self, File},
-    io::{self, Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    sync::Arc,
-};
 use super::v2_core::{
     SAFETY_WAL_FILE_HEADER_LEN as FILE_HEADER_LEN, SAFETY_WAL_FRAME_HEADER_LEN as FRAME_HEADER_LEN,
     SAFETY_WAL_FRAME_MAGIC as FRAME_MAGIC, SAFETY_WAL_HASH_LEN as HASH_LEN,
@@ -21,13 +14,22 @@ use super::v2_core::{
     WalIoStage, WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,
 };
 #[cfg(test)]
-use super::v2_core::{SAFETY_WAL_FILE_MAGIC as FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION};
+use super::v2_core::{
+    SAFETY_WAL_FILE_MAGIC as FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION,
+};
 #[cfg(any(test, not(all(unix, not(target_os = "espidf")))))]
 use std::fs::OpenOptions;
 #[cfg(all(unix, not(target_os = "espidf")))]
 use std::path::Component;
 #[cfg(all(unix, not(target_os = "espidf")))]
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    ffi::{OsStr, OsString},
+    fs::{self, File},
+    io::{self, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use thiserror::Error;
 #[cfg(test)]
 const FILE_HEADER_PREFIX_LEN: usize = FILE_MAGIC.len() + 2 + 2 + HASH_LEN + HASH_LEN;
@@ -176,6 +178,13 @@ pub(crate) enum SafetyWalError {
         path: PathBuf,
     },
     /// This platform cannot provide descriptor-relative adjacent-store ownership.
+    #[cfg_attr(
+        all(unix, not(target_os = "espidf")),
+        allow(
+            dead_code,
+            reason = "unsupported-platform branch is compiled only for parity"
+        )
+    )]
     #[error("sumeragi safety WAL storage binding is unsupported at {path}: {reason}")]
     UnsupportedStorageBinding {
         /// WAL path.

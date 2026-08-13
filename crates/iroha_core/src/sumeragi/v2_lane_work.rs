@@ -6,48 +6,6 @@
 //! receipts as bounded transport/validity inputs. A certified lane session is
 //! persisted only after a canonical global block anchors the exact ownership;
 //! a losing global proposal can therefore never advance the durable lane tip.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    sync::Arc,
-    time::{Duration, Instant},
-};
-#[cfg(test)]
-use std::sync::{Barrier, mpsc};
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
-use iroha_data_model::{
-    block::{
-        AutonomousLanePayloadEnvelopeV1, BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
-        consensus::{
-            CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
-            LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
-            LanePayloadAvailabilityQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership,
-        },
-        consensus_v2 as wire, decode_versioned_signed_block,
-    },
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    merge::{
-        LaneDrainCertificateBodyV1, MAX_MERGE_EXECUTION_ENTRYPOINTS,
-        MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES,
-        MERGE_COMMITTEE_SIGNATURE_VERSION_V2, MergeCommitteeSignature, MergeLedgerEntry,
-        MergeQuorumCertificate, MergeSignerProof,
-    },
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
-    peer::PeerId,
-};
-#[cfg(test)]
-use iroha_p2p::network::{
-    NetworkReplyFlushAckTestFixture, NetworkReplyRouteError, NetworkReplyRouteTestFixture,
-};
-use iroha_p2p::{
-    Priority,
-    network::{NetworkReplyRoute, NetworkReplyRoutes},
-};
-use iroha_primitives::{numeric::Quantity, time::TimeSource};
-use norito::codec::Encode as _;
-use thiserror::Error;
 #[cfg(test)]
 use super::v2_worker::durable_exact_output_handoff_owner_pair;
 use super::{
@@ -99,6 +57,20 @@ use super::{
         DurableExactOutputTransportOwner, ExactFanoutOwnership, ProductionV2Services,
     },
 };
+#[cfg(test)]
+use crate::lane_consensus::LaneAutonomousArtifactError;
+#[cfg(test)]
+use crate::merge_sidecar::{
+    CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
+    CertifiedMergeSidecarStreamEpochV1,
+};
+#[cfg(test)]
+use crate::native_amx::{
+    MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD, MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD,
+    MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
+};
+#[cfg(test)]
+use crate::queue::{RouteLeg, RouteLegRole};
 use crate::{
     block::BlockBuilder,
     kura::{
@@ -152,20 +124,48 @@ use crate::{
     },
     state::{PendingQueuePlanAdmissionDisposition, State, WorldReadOnly},
 };
-#[cfg(test)]
-use crate::lane_consensus::LaneAutonomousArtifactError;
-#[cfg(test)]
-use crate::merge_sidecar::{
-    CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
-    CertifiedMergeSidecarStreamEpochV1,
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
+use iroha_data_model::{
+    block::{
+        AutonomousLanePayloadEnvelopeV1, BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
+        consensus::{
+            CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
+            LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
+            LanePayloadAvailabilityQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            SumeragiLanePayloadOwnership,
+        },
+        consensus_v2 as wire, decode_versioned_signed_block,
+    },
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    merge::{
+        LaneDrainCertificateBodyV1, MAX_MERGE_EXECUTION_ENTRYPOINTS,
+        MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES,
+        MERGE_COMMITTEE_SIGNATURE_VERSION_V2, MergeCommitteeSignature, MergeLedgerEntry,
+        MergeQuorumCertificate, MergeSignerProof,
+    },
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+    peer::PeerId,
 };
 #[cfg(test)]
-use crate::native_amx::{
-    MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD, MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD,
-    MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
+use iroha_p2p::network::{
+    NetworkReplyFlushAckTestFixture, NetworkReplyRouteError, NetworkReplyRouteTestFixture,
 };
+use iroha_p2p::{
+    Priority,
+    network::{NetworkReplyRoute, NetworkReplyRoutes},
+};
+use iroha_primitives::{numeric::Quantity, time::TimeSource};
+use norito::codec::Encode as _;
 #[cfg(test)]
-use crate::queue::{RouteLeg, RouteLegRole};
+use std::sync::{Barrier, mpsc};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use thiserror::Error;
 // Keep compact-QC preflight at least as strict as State's full-entry admission
 // before allocating transport. These are first-release protocol caps, not
 // runtime tuning knobs.
@@ -3390,6 +3390,77 @@ impl V2LaneWorkAdapter {
         adapter.activate_for_test_without_lane_drain_queue()?;
         Ok(adapter)
     }
+
+    /// Open the exact service-paired empty lane owner used by lifecycle rollover tests.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn lifecycle_finalization_fixture_for_test(
+        context: wire::HeightContext,
+        local_peer: PeerId,
+        key_pair: KeyPair,
+        state: Arc<State>,
+        kura: Arc<Kura>,
+        output_guard: Arc<ConsensusOutputGuard>,
+        exact_output_handoff_owner: DurableExactOutputTransportOwner,
+    ) -> Result<Self, V2LaneWorkError> {
+        let nonzero = NonZeroUsize::new(8).expect("non-zero lifecycle lane fixture bound");
+        let limits = V2LaneWorkLimits::new(
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+            iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            MergeSidecarLimits::defaults(),
+            MergeSigningGuardLimits::defaults(),
+            NativeAmxSigningGuardLimits::new(
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            )
+            .expect("default Native AMX signing limits"),
+        );
+        let authenticated_genesis_nexus_amx_context = (state.committed_height() == 0
+            && context.height == 1
+            && context.parent_commit_qc.is_none()
+            && context.snapshot_bootstrap.is_none())
+        .then(|| {
+            AuthenticatedGenesisNexusAmxContext::Staged(StagedGenesisNexusAmxContext::for_test(
+                context.nexus_amx_context_hash,
+            ))
+        });
+        let mut adapter = Self::new_with_output_guard_and_transport_for_test(
+            context,
+            local_peer,
+            key_pair,
+            false,
+            state,
+            kura,
+            limits,
+            authenticated_genesis_nexus_amx_context,
+            None,
+            output_guard,
+            exact_output_handoff_owner,
+            None,
+            None,
+        )?;
+        adapter.activate_for_test_without_lane_drain_queue()?;
+        Ok(adapter)
+    }
+
     /// Open one production adapter and retain process-local sidecar ownership
     /// from the immediately preceding height.
     #[allow(clippy::too_many_arguments)]
@@ -16281,19 +16352,6 @@ fn proposal_from_ownership(
 #[cfg(test)]
 /// Shared durable-lane fixtures and lane-work unit tests.
 pub(super) mod tests {
-    use std::{
-        borrow::Cow,
-        cell::Cell,
-        collections::{BTreeMap, BTreeSet},
-        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        sync::{
-            Arc, Barrier, Mutex,
-            atomic::{AtomicUsize, Ordering},
-            mpsc,
-        },
-        thread,
-        time::{Duration, Instant},
-    };
     use super::*;
     use crate::{
         block::{CommittedBlock, ValidBlock},
@@ -16317,7 +16375,6 @@ pub(super) mod tests {
         },
         tx::AcceptedTransaction,
     };
-    use mv::storage::StorageReadOnly as _;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, Level, Registrable,
@@ -16345,6 +16402,20 @@ pub(super) mod tests {
             signed::{TransactionResult, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
+    };
+    use mv::storage::StorageReadOnly as _;
+    use std::{
+        borrow::Cow,
+        cell::Cell,
+        collections::{BTreeMap, BTreeSet},
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+        sync::{
+            Arc, Barrier, Mutex,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
+        thread,
+        time::{Duration, Instant},
     };
     #[test]
     fn pair_only_application_evidence_repair_counts_as_progress() {

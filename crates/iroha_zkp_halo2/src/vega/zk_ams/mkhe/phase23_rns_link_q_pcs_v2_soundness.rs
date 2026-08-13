@@ -3,12 +3,12 @@
 //! This bounded, non-authorizing child shares one exact challenge schedule
 //! between prover and verifier, checks canonical relations and multiproofs,
 //! and remains production-uninhabited behind uninhabited replay authorities.
-use core::{convert::Infallible, fmt};
-use crate::vega::sponge::{Shake256Reader, keccak256};
 use super::{
     Fq2ParametersV1 as BatchFieldV2, Fq2V1 as BatchValueV2, RELEASE_MODULI_V1, mod_add_v1,
     mod_mul_v1, mod_pow_v1,
 };
+use crate::vega::sponge::{Shake256Reader, keccak256};
+use core::{convert::Infallible, fmt};
 const VERSION_V2: u8 = 2;
 const LIMBS_V2: usize = 38;
 const REPETITIONS_V2: usize = 5;
@@ -532,8 +532,7 @@ fn validate_relations_v2(
     if encoded.len() != EVALUATION_BYTES_V2 {
         return Err(SoundnessErrorV2::Truncated);
     }
-    for limb in 0..LIMBS_V2 {
-        let modulus = RELEASE_MODULI_V1[limb];
+    for (limb, &modulus) in RELEASE_MODULI_V1.iter().enumerate() {
         for repetition in 0..REPETITIONS_V2 {
             let relation = limb * REPETITIONS_V2 + repetition;
             let offset = relation * 16;
@@ -710,6 +709,10 @@ impl ProverQuotientRootBoundV2 {
     }
 }
 impl ProverBatchChallengesV2 {
+    #[allow(
+        clippy::type_complexity,
+        reason = "fixed transcript-state tuple preserves reviewed batch-stage ordering"
+    )]
     pub(super) fn context_v2(&self) -> Result<([u8; 32], [u8; 32], [u8; 32]), SoundnessErrorV2> {
         let live = self.live.as_ref().ok_or(SoundnessErrorV2::Poisoned)?;
         Ok((
@@ -848,6 +851,10 @@ impl ProverBatchRowsCompleteV2 {
     }
 }
 impl ProverFriLayer0ChallengesV2 {
+    #[allow(
+        clippy::type_complexity,
+        reason = "fixed transcript-state tuple preserves reviewed FRI-stage ordering"
+    )]
     pub(super) fn context_v2(
         &self,
     ) -> Result<([u8; 32], [u8; 32], [u8; 32], [u8; 32], [u8; 32]), SoundnessErrorV2> {
@@ -937,6 +944,10 @@ impl ProverFriLayer0ChallengesV2 {
     }
 }
 impl ProverFriLayer0FoldCompleteV2 {
+    #[allow(
+        clippy::type_complexity,
+        reason = "fixed transcript-state tuple preserves reviewed fold-complete ordering"
+    )]
     pub(super) const fn context_v2(&self) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
         (
             self.pre_layer_transcript,
@@ -1326,9 +1337,14 @@ mod prover_fri_rounds_v2;
 pub(super) use prover_fri_rounds_v2::*;
 #[path = "phase23_rns_link_q_pcs_v2_soundness/prover_canonical_proof_v2.rs"]
 mod prover_canonical_proof_v2;
+#[cfg(test)]
+#[allow(
+    unused_imports,
+    reason = "canonical-proof helpers are retained while their spool-backed test owner is parked"
+)]
 pub(super) use prover_canonical_proof_v2::*;
-#[path = "phase23_rns_link_q_pcs_v2_verifier.rs"]
-mod verifier;
 #[cfg(test)]
 #[path = "phase23_rns_link_q_pcs_v2_soundness_tests.rs"]
 mod tests;
+#[path = "phase23_rns_link_q_pcs_v2_verifier.rs"]
+mod verifier;

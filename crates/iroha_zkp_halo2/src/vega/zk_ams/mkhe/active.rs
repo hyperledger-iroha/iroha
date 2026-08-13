@@ -16,7 +16,6 @@
 //! proof because its release witness bound cannot fit in `i64`. The readiness
 //! gate remains closed until both families are wired to canonical records and
 //! release KATs.
-use std::sync::Arc;
 use super::packing::{
     ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
     zk_ams_t256_galois_key_schedule_v1,
@@ -32,6 +31,7 @@ use crate::vega::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1,
     sponge::{Keccak256, keccak256, shake256},
 };
+use std::sync::Arc;
 #[path = "active/source_stream.rs"]
 mod source_stream;
 pub(super) use source_stream::{

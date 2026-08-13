@@ -4,15 +4,13 @@
 //! immutable context and safety WAL before processing network traffic, routes
 //! authenticated control and body messages, schedules bounded proposal work,
 //! and performs an explicit Kura-authorized rollover after application.
-use std::{
-    collections::BTreeSet,
-    num::{NonZeroU64, NonZeroUsize},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
-};
+#![cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "runner ownership seams remain test-sealed until cutover"
+    )
+)]
 use super::v2_core::{
     CanonicalIdentityProjection, EventTag, Generation, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_KIND_FINALITY_ARTIFACT, ProductionSuccessorPredecessorBindingProjection,
@@ -24,18 +22,6 @@ use super::v2_core::{
     check_production_terminal_application_transition,
     production_successor_predecessor_binding_kernel,
 };
-#[cfg(test)]
-use iroha_config::parameters::actual::SUMERAGI_V2_CONFIG_FORMAT_VERSION;
-use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
-use iroha_crypto::{Hash, HashOf, KeyPair};
-use iroha_data_model::{
-    Encode as _,
-    account::AccountId,
-    block::{BlockHeader, SignedBlock, consensus_v2 as wire},
-    events::{EventBox, pipeline::PipelineEventBox},
-    peer::PeerId,
-};
-use thiserror::Error;
 #[cfg(test)]
 use super::v2_recovery::RecoveredCompleteTipActivationAuthority;
 use super::{
@@ -67,7 +53,9 @@ use super::{
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
         EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
-        PostFinalityCleanupTarget, V2EffectExecutor, network_ingress_is_certified_fence_escape,
+        PostFinalityCleanupTarget, V2EffectExecutor,
+        certified_body_request_is_superseded_after_decision,
+        network_ingress_is_certified_fence_escape, v2_ingress_head_can_drain,
     },
     v2_first_release_recovery::{
         CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
@@ -110,6 +98,27 @@ use crate::{
     queue::{GlobalQueueSelectionLease, Queue},
     state::{PendingCertifiedMergeSelection, State},
 };
+#[cfg(test)]
+use iroha_config::parameters::actual::SUMERAGI_V2_CONFIG_FORMAT_VERSION;
+use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
+use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_data_model::{
+    Encode as _,
+    account::AccountId,
+    block::{BlockHeader, SignedBlock, consensus_v2 as wire},
+    events::{EventBox, pipeline::PipelineEventBox},
+    peer::PeerId,
+};
+use std::{
+    collections::BTreeSet,
+    num::{NonZeroU64, NonZeroUsize},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+use thiserror::Error;
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
 const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
@@ -148,6 +157,277 @@ impl RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
         self.local_signer
     }
 }
+
+/// Runner-private one-shot authority for activating a launched lifecycle height.
+///
+/// The permit retains the exact process readiness flag and fair-ingress Arc.
+/// Its status authority is either the currently recovered height, an applied
+/// predecessor handoff, or audited-snapshot bootstrap. CompleteTip uses the
+/// separate authority below because its retired predecessor must remain joined
+/// to the launched H+1 owner until this exact publication boundary.
+#[must_use = "runner activation authority must be consumed by the launched lifecycle"]
+pub(in crate::sumeragi) struct ProductionLifecycleRunnerActivationV1 {
+    _seal: ProductionLifecycleRunnerActivationSealV1,
+    ingress_ready: Arc<AtomicBool>,
+    block_ingress: Arc<FairV2Ingress>,
+    status: ProductionLifecycleRunnerStatusAuthorityV1,
+}
+
+struct ProductionLifecycleRunnerActivationSealV1;
+
+impl Drop for ProductionLifecycleRunnerActivationSealV1 {
+    fn drop(&mut self) {}
+}
+
+enum ProductionLifecycleRunnerStatusAuthorityV1 {
+    CurrentHeight,
+    Applied {
+        expected_predecessor: DurableV2PredecessorIdentity,
+        authority: DurableSuccessorActivationAuthority,
+    },
+    SnapshotBootstrap {
+        authority: SnapshotSuccessorActivationAuthority,
+    },
+}
+
+impl ProductionLifecycleRunnerActivationV1 {
+    /// Mint the current-height activation at the future atomic runner cutover.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn current_height(ingress_ready: Arc<AtomicBool>, block_ingress: Arc<FairV2Ingress>) -> Self {
+        Self {
+            _seal: ProductionLifecycleRunnerActivationSealV1,
+            ingress_ready,
+            block_ingress,
+            status: ProductionLifecycleRunnerStatusAuthorityV1::CurrentHeight,
+        }
+    }
+
+    /// Mint an applied-predecessor successor activation without exposing parts.
+    #[allow(dead_code)]
+    fn applied(
+        ingress_ready: Arc<AtomicBool>,
+        block_ingress: Arc<FairV2Ingress>,
+        expected_predecessor: DurableV2PredecessorIdentity,
+        authority: DurableSuccessorActivationAuthority,
+    ) -> Self {
+        Self {
+            _seal: ProductionLifecycleRunnerActivationSealV1,
+            ingress_ready,
+            block_ingress,
+            status: ProductionLifecycleRunnerStatusAuthorityV1::Applied {
+                expected_predecessor,
+                authority,
+            },
+        }
+    }
+
+    /// Mint an audited-snapshot successor activation without exposing parts.
+    #[allow(dead_code)]
+    fn snapshot_bootstrap(
+        ingress_ready: Arc<AtomicBool>,
+        block_ingress: Arc<FairV2Ingress>,
+        authority: SnapshotSuccessorActivationAuthority,
+    ) -> Self {
+        Self {
+            _seal: ProductionLifecycleRunnerActivationSealV1,
+            ingress_ready,
+            block_ingress,
+            status: ProductionLifecycleRunnerStatusAuthorityV1::SnapshotBootstrap { authority },
+        }
+    }
+
+    /// Open the exact retained ingress, publish status, then release readiness.
+    pub(in crate::sumeragi) fn open_and_publish(
+        self,
+        launched_ingress: &Arc<FairV2Ingress>,
+        successor: wire::SumeragiV2Status,
+    ) -> Result<ProductionLifecycleActivatedRunnerAuthorityV1, V2RunnerError> {
+        self.ingress_ready.store(false, Ordering::Release);
+        if !Arc::ptr_eq(&self.block_ingress, launched_ingress) {
+            self.block_ingress.close();
+            return Err(V2RunnerError::LifecycleActivationIngressMismatch);
+        }
+        self.block_ingress.open().map_err(ingress_capacity_error)?;
+        let publication = match self.status {
+            ProductionLifecycleRunnerStatusAuthorityV1::CurrentHeight => {
+                super::status::set_v2_status(successor);
+                Ok(())
+            }
+            ProductionLifecycleRunnerStatusAuthorityV1::Applied {
+                expected_predecessor,
+                authority,
+            } => super::status::activate_v2_successor_height(
+                expected_predecessor,
+                authority,
+                successor,
+            )
+            .map_err(V2RunnerError::from),
+            ProductionLifecycleRunnerStatusAuthorityV1::SnapshotBootstrap { authority } => {
+                super::status::activate_snapshot_bootstrap_v2_height(authority, successor)
+                    .map_err(V2RunnerError::from)
+            }
+        };
+        if let Err(error) = publication {
+            self.block_ingress.close();
+            return Err(error);
+        }
+        self.ingress_ready.store(true, Ordering::Release);
+        Ok(ProductionLifecycleActivatedRunnerAuthorityV1 {
+            _seal: ProductionLifecycleActivatedRunnerAuthoritySealV1,
+            ingress_ready: self.ingress_ready,
+            block_ingress: self.block_ingress,
+        })
+    }
+
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn current_height_for_test(
+        ingress_ready: Arc<AtomicBool>,
+        block_ingress: Arc<FairV2Ingress>,
+    ) -> Self {
+        Self::current_height(ingress_ready, block_ingress)
+    }
+}
+
+/// Runner-private activation half for an exact launched CompleteTip successor.
+#[must_use = "CompleteTip runner activation must consume its launched retirement join"]
+pub(in crate::sumeragi) struct ProductionLifecycleCompleteTipRunnerActivationV1 {
+    _seal: ProductionLifecycleCompleteTipRunnerActivationSealV1,
+    ingress_ready: Arc<AtomicBool>,
+    block_ingress: Arc<FairV2Ingress>,
+}
+
+struct ProductionLifecycleCompleteTipRunnerActivationSealV1;
+
+impl Drop for ProductionLifecycleCompleteTipRunnerActivationSealV1 {
+    fn drop(&mut self) {}
+}
+
+impl ProductionLifecycleCompleteTipRunnerActivationV1 {
+    /// Mint only at the future branch which binds retired H to launched H+1.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn mint_for_recovered_runner(
+        ingress_ready: Arc<AtomicBool>,
+        block_ingress: Arc<FairV2Ingress>,
+    ) -> Self {
+        Self {
+            _seal: ProductionLifecycleCompleteTipRunnerActivationSealV1,
+            ingress_ready,
+            block_ingress,
+        }
+    }
+
+    /// Publish only through the still-sealed retired CompleteTip authority.
+    pub(in crate::sumeragi) fn open_and_publish(
+        self,
+        launched_ingress: &Arc<FairV2Ingress>,
+        retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
+        successor: wire::SumeragiV2Status,
+    ) -> Result<ProductionLifecycleActivatedRunnerAuthorityV1, V2RunnerError> {
+        self.ingress_ready.store(false, Ordering::Release);
+        if !Arc::ptr_eq(&self.block_ingress, launched_ingress) {
+            self.block_ingress.close();
+            return Err(V2RunnerError::LifecycleActivationIngressMismatch);
+        }
+        if !retirement.authorizes_successor_status(&successor) {
+            self.block_ingress.close();
+            return Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid {
+                predecessor: retirement.predecessor(),
+            });
+        }
+        self.block_ingress.open().map_err(ingress_capacity_error)?;
+        if let Err(error) =
+            super::status::activate_recovered_complete_tip_v2_height(retirement, successor)
+        {
+            self.block_ingress.close();
+            return Err(error.into());
+        }
+        self.ingress_ready.store(true, Ordering::Release);
+        Ok(ProductionLifecycleActivatedRunnerAuthorityV1 {
+            _seal: ProductionLifecycleActivatedRunnerAuthoritySealV1,
+            ingress_ready: self.ingress_ready,
+            block_ingress: self.block_ingress,
+        })
+    }
+
+    #[cfg(test)]
+    fn for_test(ingress_ready: Arc<AtomicBool>, block_ingress: Arc<FairV2Ingress>) -> Self {
+        Self::mint_for_recovered_runner(ingress_ready, block_ingress)
+    }
+}
+
+/// Move-only post-activation ownership of runner readiness and exact ingress.
+///
+/// The activated lifecycle stack retains this authority until finalization.
+/// Dropping it first clears readiness and closes ingress, so the later durable
+/// gate teardown cannot leave a carrierless queue advertised as live.
+#[must_use = "activated runner authority must remain with the lifecycle height"]
+pub(in crate::sumeragi) struct ProductionLifecycleActivatedRunnerAuthorityV1 {
+    _seal: ProductionLifecycleActivatedRunnerAuthoritySealV1,
+    ingress_ready: Arc<AtomicBool>,
+    block_ingress: Arc<FairV2Ingress>,
+}
+
+struct ProductionLifecycleActivatedRunnerAuthoritySealV1;
+
+impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1 {
+    fn drop(&mut self) {}
+}
+
+impl ProductionLifecycleActivatedRunnerAuthorityV1 {
+    /// Consume the exact readiness owner before lifecycle gate retirement.
+    #[allow(dead_code)]
+    pub(in crate::sumeragi) fn retire(
+        self,
+        launched_ingress: &Arc<FairV2Ingress>,
+    ) -> Result<(), V2RunnerError> {
+        self.ingress_ready.store(false, Ordering::Release);
+        self.block_ingress.close();
+        if !Arc::ptr_eq(&self.block_ingress, launched_ingress) {
+            return Err(V2RunnerError::LifecycleActivationIngressMismatch);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProductionLifecycleActivatedRunnerAuthorityV1 {
+    fn drop(&mut self) {
+        self.ingress_ready.store(false, Ordering::Release);
+        self.block_ingress.close();
+    }
+}
+
+/// Process-local borrow key for driving an activated lifecycle stack.
+///
+/// Only the serialized runner can mint this key. Repeated mutable borrows keep
+/// owner, executor, and services inside the activated type state and cannot
+/// move any of them into a shadow scheduler.
+#[must_use = "the active runner borrow key must remain with the height loop"]
+pub(in crate::sumeragi) struct ProductionLifecycleActiveRunnerBorrowV1 {
+    _seal: ProductionLifecycleActiveRunnerBorrowSealV1,
+}
+
+struct ProductionLifecycleActiveRunnerBorrowSealV1;
+
+impl Drop for ProductionLifecycleActiveRunnerBorrowSealV1 {
+    fn drop(&mut self) {}
+}
+
+impl ProductionLifecycleActiveRunnerBorrowV1 {
+    /// Mint beside the activated owner at the future atomic runner cutover.
+    #[allow(dead_code)]
+    fn mint_for_recovered_runner() -> Self {
+        Self {
+            _seal: ProductionLifecycleActiveRunnerBorrowSealV1,
+        }
+    }
+
+    /// Mint the same opaque runner borrow for a production-shaped lifecycle test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test() -> Self {
+        Self::mint_for_recovered_runner()
+    }
+}
+
 /// Cadence-derived process-local deadline for closed-ingress interrupted-tip recovery.
 #[derive(Clone, Copy, Debug)]
 struct PendingTipRecoveryDeadline {
@@ -3350,6 +3630,18 @@ pub(in crate::sumeragi) fn lifecycle_ingress_rank_snapshot_for_test(
         _linearity: LifecycleRunnerRankSnapshotLinearity,
     }
 }
+
+/// Mint the exact first Completion observation for a lifecycle worker fixture.
+#[cfg(test)]
+pub(in crate::sumeragi) fn lifecycle_completion_rank_snapshot_for_test(
+    context: &wire::HeightContext,
+) -> LifecycleRunnerRankSnapshot {
+    let turns = OuterIngressTurns::new(1, context.id(), context.height);
+    turns
+        .lifecycle_rank_snapshot(LifecycleRunnerRankTarget::Completion)
+        .expect("the outer cursor starts at its immediate Completion turn")
+}
+
 #[cfg(test)]
 const fn outer_ingress_turn_index(turn: OuterIngressTurn) -> u8 {
     match turn {
@@ -3364,63 +3656,6 @@ fn outer_ingress_turns(
     height: wire::Height,
 ) -> OuterIngressTurns {
     OuterIngressTurns::new(limit, context_id, height)
-}
-fn v2_ingress_head_can_drain(
-    inbound: &InboundBlockMessage,
-    executor: &V2EffectExecutor,
-    terminal_subject: Option<wire::BlockSubject>,
-) -> bool {
-    let BlockMessage::V2(message) = inbound.message() else {
-        return true;
-    };
-    if message.validate_version().is_err() {
-        return true;
-    }
-    if terminal_subject.is_some() && v2_payload_is_terminal_reducer_control(&message.payload) {
-        // These messages are consumed and discarded once Decision is
-        // installed. They must not remain behind a full terminal reducer
-        // prefix and starve exact lane-completion traffic in fair ingress.
-        return true;
-    }
-    if let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
-        && certified_body_request_is_superseded_after_decision(
-            request,
-            terminal_subject,
-            executor.context().height,
-        )
-    {
-        // Losing current-height requests are discarded without consuming a
-        // certified-body response slot, so they cannot pin fair ingress.
-        return true;
-    }
-    let Some(ingress_ownership) = inbound.ingress_ownership() else {
-        // Drain the malformed local carrier so the mutating seam can reject it
-        // instead of blocking the fair queue forever.
-        return true;
-    };
-    if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership) {
-        return false;
-    }
-    true
-}
-fn certified_body_request_is_superseded_after_decision(
-    request: &wire::CertifiedBodyRequest,
-    terminal_subject: Option<wire::BlockSubject>,
-    active_height: wire::Height,
-) -> bool {
-    terminal_subject
-        .is_some_and(|decided| request.round.height == active_height && request.subject != decided)
-}
-const fn v2_payload_is_terminal_reducer_control(payload: &wire::ConsensusMessageV2Payload) -> bool {
-    matches!(
-        payload,
-        wire::ConsensusMessageV2Payload::Proposal(_)
-            | wire::ConsensusMessageV2Payload::Vote(_)
-            | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
-            | wire::ConsensusMessageV2Payload::TimeoutVote(_)
-            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-    )
 }
 fn is_remote_block_sync_rejection(error: &V2BlockSyncError) -> bool {
     matches!(
@@ -4309,6 +4544,9 @@ pub(super) enum V2RunnerError {
         /// Exact retired durable predecessor whose successor was rejected.
         predecessor: DurableV2PredecessorIdentity,
     },
+    /// The runner activation permit named another fair-ingress instance.
+    #[error("launched lifecycle changed the runner-owned fair-ingress instance")]
+    LifecycleActivationIngressMismatch,
     /// Reducer/WAL adapter failed.
     #[error(transparent)]
     Adapter(#[from] super::v2::AdapterError),

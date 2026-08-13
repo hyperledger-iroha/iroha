@@ -1,10 +1,10 @@
+use super::*;
 use core::mem::size_of;
 use std::{
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-use super::*;
 fn release_context_v1() -> ZkAmsPhase23RnsLinkContextV1 {
     ZkAmsPhase23RnsLinkContextV1::new(
         [0x11; 32],

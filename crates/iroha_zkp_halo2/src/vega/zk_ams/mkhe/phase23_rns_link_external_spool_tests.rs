@@ -1,9 +1,9 @@
+use super::*;
 use std::{
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-use super::*;
 static NEXT_TEST_DIRECTORY_V1: AtomicU64 = AtomicU64::new(0);
 struct TestDirectoryV1(PathBuf);
 impl TestDirectoryV1 {

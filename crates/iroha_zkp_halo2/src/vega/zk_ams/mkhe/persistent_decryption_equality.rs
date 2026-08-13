@@ -24,6 +24,10 @@
 mod persistent_decryption_direct_equality_v1;
 #[path = "persistent_decryption_response_link.rs"]
 mod persistent_decryption_response_link;
+#[cfg(test)]
+use super::decryption::ZkAmsMkheDecryptionStatementV1;
+#[cfg(test)]
+use super::direct_object_transport::validate_zk_ams_mkhe_direct_object_v1;
 use super::{
     ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
@@ -61,10 +65,6 @@ use super::{
     zk_ams_mkhe_security_certificate_v1,
 };
 use crate::vega::{VegaT256PointV1 as Point, sponge::Keccak256};
-#[cfg(test)]
-use super::decryption::ZkAmsMkheDecryptionStatementV1;
-#[cfg(test)]
-use super::direct_object_transport::validate_zk_ams_mkhe_direct_object_v1;
 const TRANSITIVE_EQUATION_CONTRACT_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.persistent-decryption-equations:b_i=-a*s_i+t*e_i;share_i=c_1*s_i+t*z_i;same-secret-response";
 const SHORT_SOLUTION_ASSUMPTION_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.persistent-decryption-short-solution-assumption:shared-cpk-equation:ternary-s:centered-binomial-e:sis-binding:certificate-required";
 const CONTRIBUTION_SET_DOMAIN_V1: &[u8] =

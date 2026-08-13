@@ -10,11 +10,6 @@
 //! The frozen release certificate deliberately remains open.  A small-profile
 //! KAT exercises the complete native path, but it is not evidence for the
 //! release degree, roster, memory ceiling, or wall-clock budget.
-use core::fmt;
-#[cfg(test)]
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use once_cell::sync::Lazy;
 #[cfg(test)]
 use super::phase23::{
     ZkAmsPhase23ChallengeContextV1, zk_ams_phase23_challenge_v1, zk_ams_phase23_fold_linear_v1,
@@ -52,6 +47,11 @@ use crate::vega::{
     r1cs::{Instance, RelaxedInstance, Shape, SparseMatrix},
     sponge::Keccak256,
 };
+use core::fmt;
+use once_cell::sync::Lazy;
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::sync::Arc;
 pub(super) const PHASE23_ENCRYPTED_VERSION_V1: u8 = 1;
 pub(super) const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
 const PHASE23_MAX_ROWS_V1: u32 = 1_048_576;

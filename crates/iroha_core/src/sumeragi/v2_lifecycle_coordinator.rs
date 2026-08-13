@@ -79,6 +79,11 @@ pub(crate) fn reviewed_lifecycle_ledger_source_for_test() -> &'static str {
                 );
             include_str!("v2_lifecycle_ledger.rs")
                 .replacen(
+                    "include!(\"v2_lifecycle_ledger_operations.rs\");\n",
+                    include_str!("v2_lifecycle_ledger_operations.rs"),
+                    1,
+                )
+                .replacen(
                     "include!(\"v2_lifecycle_ledger_store.rs\");\n",
                     include_str!("v2_lifecycle_ledger_store.rs"),
                     1,
@@ -116,9 +121,16 @@ use body_pipeline_transition::{
     durable_validate_payload_is_exact,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
+#[allow(unused_imports)]
 pub(in crate::sumeragi) use launch::{
-    LaunchedProductionLifecycleV1, ProductionLifecycleLaunchErrorV1,
-    ProductionLifecycleLaunchInputsV1, ProductionRecoveredDecisionApplyCompletionErrorV1,
+    ActivatedProductionLifecycleV1, FinalizedProductionLifecycleRolloverV1,
+    LaunchedProductionLifecycleV1, ProductionLifecycleActivationErrorV1,
+    ProductionLifecycleCleanupReadyV1, ProductionLifecycleFinalizationErrorV1,
+    ProductionLifecycleFinalizationOutcomeV1, ProductionLifecycleLaunchErrorV1,
+    ProductionLifecycleLaunchInputsV1, ProductionLifecycleOutputRolloverPermitV1,
+    ProductionLifecyclePostOutputHandoffV1,
+    ProductionLifecycleServeRetirementAuthenticationPermitV1,
+    ProductionRecoveredDecisionApplyCompletionErrorV1,
     ProductionRecoveredDecisionApplyCompletionV1, ProductionRecoveredDecisionApplyRetryV1,
     ProductionRecoveredDecisionFetchStoreSettlementFailureV1,
     ProductionRecoveredDecisionFetchStoreSettlementV1,
@@ -163,10 +175,18 @@ pub(crate) use ledger::{
     substitute_recovered_decision_fetch_replay_authority_for_test,
 };
 pub(super) use open::TerminalValidateNoSuccessorClaim;
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "release-bound lifecycle error seam")
+)]
 pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};
 #[cfg(test)]
 pub(crate) use projection::CertifiedServeAdmissionBoundaryError;
 pub(in crate::sumeragi) use projection::lifecycle_context;
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "reviewed certified-serve test seam")
+)]
 pub(crate) use projection::{
     AdapterEffectAdmissionError, CertifiedServeAdmissionError,
     CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,
@@ -174,6 +194,10 @@ pub(crate) use projection::{
 pub(in crate::sumeragi) use replay_authority::LifecycleReplayAuthorityV1;
 pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLineageV1;
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "reviewed replay-evidence namespace")
+)]
 pub(in crate::sumeragi) use replay_authority::{
     DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
     InvalidBodyReportReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
@@ -190,6 +214,7 @@ pub(crate) use replay_authority::{
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use scheduler_inputs::{
     AuthenticatedSchedulerInputsFactory, PreparedProductionIngressCapacityWait,
+    ProductionCompletionReadyWorkV1, ProductionIngressCapacityRetry,
     ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
     ProductionIngressTurnPreparation, ProductionSchedulerInputsError, QueuedProductionIngressFetch,
 };
@@ -204,14 +229,18 @@ pub(in crate::sumeragi) use scheduler_inputs::{
 };
 #[cfg(test)]
 use schema::MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "reviewed scheduler schema namespace")
+)]
 pub(crate) use schema::{
     AdmissionDecision, AdmissionRejection, AdmissionRequest, CandidateAdmission, CapacityClass,
     CausalRoot, CoordinatorFault, InitialLifecycleState, LeaseId, LifecycleContext,
     LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord, LifecycleRound, LifecycleStage,
-    LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId, PhysicalReplacement,
-    PhysicalSlot, PhysicalSlotId, PredecessorScope, ProducerTurnAdmission, ReadyEvent,
-    SchedulerEpisodeUniverse, SchedulerInputs, SchedulerRank, TerminalOutcome, TurnLease,
-    TurnOutcome, TurnPlan, WaitSource, WaitToken,
+    LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId, PhysicalGeometry,
+    PhysicalReplacement, PhysicalSlot, PhysicalSlotId, PredecessorScope, ProducerTurnAdmission,
+    ReadyEvent, SchedulerEpisodeUniverse, SchedulerInputs, SchedulerRank, TerminalOutcome,
+    TurnLease, TurnOutcome, TurnPlan, WaitSource, WaitToken,
 };
 use schema::{
     CapacityAdmissionWait, CapacityGeometry, DurableContinuation, DurablePayloadReference,
@@ -221,9 +250,13 @@ use schema::{
     lower_enter_view_ordinals, serve_and_producer_keys_match,
 };
 #[cfg(test)]
-pub(crate) use schema::{NonCandidateEffect, PhysicalGeometry, RetryAction, SchedulerReadyInputs};
+pub(crate) use schema::{NonCandidateEffect, RetryAction, SchedulerReadyInputs};
 #[cfg(test)]
 pub(crate) use selector::CertifiedFetchReadyPublicationError;
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "reviewed persistence selector namespace")
+)]
 pub(crate) use selector::{
     CertifiedFetchBodyPersistenceCompletion, CertifiedFetchBodyPersistenceCompletionError,
     CertifiedFetchBodyPersistencePreparationError, CertifiedFetchBodyPersistencePreparationFailure,
@@ -231,17 +264,29 @@ pub(crate) use selector::{
     LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal, LifecycleIngressSelectorError,
     PreparedLifecycleIngressSelector,
 };
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "reviewed recovered-fetch selector namespace")
+)]
 pub(in crate::sumeragi) use selector::{
     CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
     RecoveredDecisionFetchBodyPersistenceCompletionV1, RecoveredDecisionFetchBodyPersistenceIdV1,
     RecoveredDecisionFetchBodyPersistencePreparationErrorV1,
     RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchExactDequeueErrorV1,
 };
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "reviewed recovered-WAL projection namespace")
+)]
 pub(in crate::sumeragi) use wal_recovery::{
     AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
     AuthenticatedRecoveredWalVoteProjection, RecoveredDecisionApplyPendingLineageV1,
     RecoveredDecisionFetchStoreAdapterAuthorityV1, RecoveredDecisionFetchStoreProjectionV1,
 };
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "reviewed recovered-WAL successor namespace")
+)]
 pub(in crate::sumeragi) use wal_recovery::{
     RecoveredLifecycleSignBroadcastProjectionPermitV1,
     RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
@@ -250,6 +295,10 @@ pub(in crate::sumeragi) use wal_recovery::{
 pub(in crate::sumeragi) use work_registry::RecoveredDecisionApplyRegistryProjectionPermit;
 #[cfg(test)]
 pub(in crate::sumeragi) use work_registry::RecoveredLifecycleSignClassV1;
+#[cfg_attr(
+    not(test),
+    allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")
+)]
 pub(crate) use work_registry::{
     AuthenticatedRecoveredWalValidateLifecycleRepair,
     DurableAuthenticatedRecoveredWalValidateLifecycleRepair, ExactStoreRecoveredWalPersistError,
