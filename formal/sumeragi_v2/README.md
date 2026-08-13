@@ -1554,7 +1554,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`.
+`e331947691b76e5b15ca2b34ba31ce3803ea91a80147844612fb554d5cdf8403`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1674,16 +1674,18 @@ view-scoped. Proposal control and chunks now enter the Rust exact-output
 corridor through one aggregate capacity/FIFO plan. A rejected plan changes no
 fanout, index, or first-send state; the recovered path returns its move-only
 body-store/output-guard-bound authority for retry, while a successful plan
-installs both fanouts together. The formal checker seals this production
-ordering and its mutation regressions. For the already-WAL-ahead recovered
+installs both fanouts together. A source-fidelity contract statically binds
+this ordering and its mutation regressions. For the already-WAL-ahead recovered
 Proposal shape, that reservation now spans the exact two-child LedgerV1 fsync;
 the post-fsync tail installs Broadcast plus the independent next Sign, parks
 only Broadcast process-locally, acknowledges the worker, and commits the batch.
-The source guard now also binds a frame-exact Proposal-to-Prepare or
+The source guard also binds a frame-exact Proposal-to-Prepare or
 Prepare-to-Commit classifier and an affine cold reducer replay which must
-reproduce both children. The complete two-carrier census splice and Proposal
-chunk reconstruction remain required refinements.
-The deductive model is unchanged.
+reproduce both children. Source machinery for the complete two-carrier census
+splice and Proposal chunk reconstruction exists, but production runner
+settlement and refanout do not yet invoke it, so the cold Proposal path remains
+unreachable. The deductive model is unchanged; this source-fidelity boundary
+promotes no theorem, proof-ledger row, or evidence gate.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence

@@ -109,6 +109,23 @@ require_exact_token() {
   fi
 }
 
+require_exact_fragment() {
+  local path="$1"
+  local fragment="$2"
+  local expected_count="$3"
+  local observed_count
+  observed_count="$(
+    awk -v needle="$fragment" '
+      index($0, needle) { count += 1 }
+      END { print count + 0 }
+    ' "$path"
+  )"
+  if [[ "$observed_count" != "$expected_count" ]]; then
+    echo "required multilane release inventory fragment has the wrong count in ${path}: ${fragment} (expected ${expected_count}, found ${observed_count})" >&2
+    exit 1
+  fi
+}
+
 require_exact_digest_occurrences() {
   local path="$1"
   local digest="$2"
@@ -292,16 +309,28 @@ done
 for sdk_diagnostics_suite in \
   '    ("python", 121),' \
   '    ("javascript", 88),' \
-  '    ("swift", 17),' \
-  '    ("kotlin", 26),' \
-  '    ("java", 24),'; do
+  '    ("swift", 33),' \
+  '    ("kotlin", 42),' \
+  '    ("java", 41),'; do
   require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
 done
-for sdk_diagnostics_test_count in 121 88 17 26 24; do
+for sdk_diagnostics_test_count in 121 88 33 42 41; do
   require_exact_token \
     "$sdk_diagnostics_harness" \
     "    observed_test_count=${sdk_diagnostics_test_count}"
 done
+require_exact_fragment \
+  "$sdk_diagnostics_harness" \
+  "SumeragiV2WireFixtureTests'" \
+  1
+require_exact_fragment \
+  "$sdk_diagnostics_harness" \
+  "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest" \
+  1
+require_exact_fragment \
+  "$sdk_diagnostics_harness" \
+  "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests" \
+  1
 require_exact_token \
   "$sdk_diagnostics_harness" \
   '      assert_node_tap "$javascript_transcript" 44'
@@ -952,8 +981,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "07da36398f20bccca0d535ebad55cf21"
-    "c1239e1773369ba063af7bed643eb9bf"
+    "e331947691b76e5b15ca2b34ba31ce38"
+    "03ea91a80147844612fb554d5cdf8403"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "

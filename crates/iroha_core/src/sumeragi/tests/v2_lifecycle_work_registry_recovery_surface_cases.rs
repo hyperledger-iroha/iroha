@@ -1399,7 +1399,7 @@
             assert!(body.contains("cold_proposal_output: None"));
         }
 
-        let registry = include_str!("../v2_lifecycle_work_registry.rs");
+        let registry = reviewed_lifecycle_work_registry_source_for_test();
         let single = registry
             .split_once("fn prepare_recovered_lifecycle_sign_broadcast_successor")
             .expect("single successor preparation exists")

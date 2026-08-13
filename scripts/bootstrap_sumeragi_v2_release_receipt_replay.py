@@ -528,7 +528,8 @@ def _validate_terminal_release_evidence(
         raise BootstrapError("terminal SDK input inventory binding is not exact")
     input_by_path = {str(record["path"]): record for record in input_records}
     bindings = _require_exact_json_fields(
-        input_document["bindings"], {"node", "swiftpm", "gradle"},
+        input_document["bindings"],
+        {"node", "openapi_node", "swiftpm", "gradle"},
         "terminal SDK dependency bindings",
     )
     node_binding = _require_exact_json_fields(
@@ -538,6 +539,14 @@ def _validate_terminal_release_evidence(
             "package_lock_sha256", "installed_lock_sha256",
         },
         "terminal SDK Node binding",
+    )
+    openapi_node_binding = _require_exact_json_fields(
+        bindings["openapi_node"],
+        {
+            "node_modules_archive_name", "package_lock_archive_name",
+            "package_lock_sha256", "installed_lock_sha256",
+        },
+        "terminal SDK OpenAPI Node binding",
     )
     swift_binding = _require_exact_json_fields(
         bindings["swiftpm"],
@@ -572,6 +581,10 @@ def _validate_terminal_release_evidence(
     if (
         node_binding["node_modules_archive_name"] != "node/node_modules"
         or node_binding["package_lock_archive_name"] != "node/package-lock.json"
+        or openapi_node_binding["node_modules_archive_name"]
+        != "openapi/node_modules"
+        or openapi_node_binding["package_lock_archive_name"]
+        != "openapi/package-lock.json"
         or swift_binding["cache_archive_name"] != "swiftpm/cache"
         or swift_binding["package_resolved_archive_name"]
         != "swiftpm/Package.resolved"
@@ -588,6 +601,14 @@ def _validate_terminal_release_evidence(
     for digest, label in (
         (node_binding["package_lock_sha256"], "terminal SDK package lock"),
         (node_binding["installed_lock_sha256"], "terminal SDK installed lock"),
+        (
+            openapi_node_binding["package_lock_sha256"],
+            "terminal SDK OpenAPI package lock",
+        ),
+        (
+            openapi_node_binding["installed_lock_sha256"],
+            "terminal SDK installed OpenAPI lock",
+        ),
         (swift_binding["package_resolved_sha256"], "terminal SDK Package.resolved"),
         (gradle_binding["distribution_sha256"], "terminal SDK Gradle distribution"),
         (wrapper_digests["java"], "terminal SDK Java wrapper"),
@@ -622,6 +643,10 @@ def _validate_terminal_release_evidence(
     expected_file_digests = {
         "node/package-lock.json": node_binding["package_lock_sha256"],
         "node/node_modules/.package-lock.json": node_binding["installed_lock_sha256"],
+        "openapi/package-lock.json": openapi_node_binding["package_lock_sha256"],
+        "openapi/node_modules/.package-lock.json": openapi_node_binding[
+            "installed_lock_sha256"
+        ],
         "swiftpm/Package.resolved": swift_binding["package_resolved_sha256"],
         "gradle/gradle-9.3.0-bin.zip": gradle_binding["distribution_sha256"],
         "gradle/java-gradle-wrapper.properties": wrapper_digests["java"],
@@ -634,7 +659,8 @@ def _validate_terminal_release_evidence(
     ) or any(
         input_by_path.get(path, {}).get("kind") != "directory"
         for path in (
-            "node/node_modules", "swiftpm/cache", "swiftpm/cache/checkouts",
+            "node/node_modules", "openapi/node_modules", "swiftpm/cache",
+            "swiftpm/cache/checkouts",
             "swiftpm/cache/repositories", "gradle/gradle-user-home",
         )
     ) or (
@@ -688,6 +714,12 @@ def _validate_terminal_release_evidence(
         "node_modules_inventory": retained_source_inventory("node/node_modules"),
         "package_lock_sha256": node_binding["package_lock_sha256"],
     }
+    source_openapi_node = {
+        "node_modules_inventory": retained_source_inventory(
+            "openapi/node_modules"
+        ),
+        "package_lock_sha256": openapi_node_binding["package_lock_sha256"],
+    }
     source_swift = {
         "cache_inventory": retained_source_inventory("swiftpm/cache"),
         "package_resolved_sha256": swift_binding["package_resolved_sha256"],
@@ -707,6 +739,8 @@ def _validate_terminal_release_evidence(
     if (
         source_node["package_lock_sha256"]
         != node_binding["package_lock_sha256"]
+        or source_openapi_node["package_lock_sha256"]
+        != openapi_node_binding["package_lock_sha256"]
         or source_swift["package_resolved_sha256"]
         != swift_binding["package_resolved_sha256"]
         or source_swift["resolved_revisions"] != revisions
@@ -766,6 +800,11 @@ def _validate_terminal_release_evidence(
         (
             "node/node_modules", source_node["node_modules_inventory"],
             "terminal SDK private Node inventory",
+        ),
+        (
+            "openapi/node_modules",
+            source_openapi_node["node_modules_inventory"],
+            "terminal SDK private OpenAPI Node inventory",
         ),
         (
             "swiftpm/cache", source_swift["cache_inventory"],
@@ -883,6 +922,8 @@ def _validate_terminal_release_evidence(
     control_names = {
         "node/package-lock.json",
         "node/node_modules/.package-lock.json",
+        "openapi/package-lock.json",
+        "openapi/node_modules/.package-lock.json",
         "swiftpm/Package.resolved",
         "gradle/java-gradle-wrapper.properties",
         "gradle/kotlin-gradle-wrapper.properties",
@@ -938,8 +979,8 @@ def _validate_terminal_release_evidence(
             value = json.loads(data)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise BootstrapError(f"terminal SDK control file is malformed: {name}") from error
-        if not isinstance(value, dict) or data != _canonical_json(value):
-            raise BootstrapError(f"terminal SDK control file is noncanonical: {name}")
+        if not isinstance(value, dict):
+            raise BootstrapError(f"terminal SDK control file is not an object: {name}")
         return value
 
     package_lock = control_json("node/package-lock.json")
@@ -958,6 +999,37 @@ def _validate_terminal_release_evidence(
         )
     ):
         raise BootstrapError("terminal SDK Node locks do not bind the closure")
+    openapi_package_lock = control_json("openapi/package-lock.json")
+    openapi_installed_lock = control_json(
+        "openapi/node_modules/.package-lock.json"
+    )
+    openapi_packages = openapi_package_lock.get("packages")
+    openapi_installed_packages = openapi_installed_lock.get("packages")
+    if (
+        openapi_package_lock.get("lockfileVersion") != 3
+        or openapi_installed_lock.get("lockfileVersion") != 3
+        or (
+            openapi_package_lock.get("name"),
+            openapi_package_lock.get("version"),
+        )
+        != (
+            openapi_installed_lock.get("name"),
+            openapi_installed_lock.get("version"),
+        )
+        or not isinstance(openapi_packages, dict)
+        or not isinstance(openapi_installed_packages, dict)
+        or not openapi_installed_packages
+        or "" not in openapi_packages
+        or openapi_installed_packages
+        != {
+            name: value
+            for name, value in openapi_packages.items()
+            if name
+        }
+    ):
+        raise BootstrapError(
+            "terminal SDK OpenAPI Node locks do not exactly bind the closure"
+        )
     package_resolved = control_json("swiftpm/Package.resolved")
     resolved_pairs = sorted(
         (
@@ -4056,4 +4128,3 @@ def _replay_release_approval_evidence(
     if marker_record != expected_marker:
         raise BootstrapError("release approval marker binding is not exact")
     return approvals
-

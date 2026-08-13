@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RESOLVER = ROOT / "ci" / "resolve_sumeragi_v2_sdk_source_closure.py"
 MANIFEST = ROOT / "ci" / "sumeragi_v2_sdk_source_closure.json"
 NATIVE_HARNESS = ROOT / "ci" / "run_native_amx_v2_grouped_sdk_parity.sh"
+OPENAPI_GATE = ROOT / "ci" / "check_openapi_spec.sh"
 DIAGNOSTICS_HARNESS = ROOT / "ci" / "run_sumeragi_v2_sdk_diagnostics.sh"
 NATIVE_FIXTURE = ROOT / "fixtures" / "sumeragi_v2" / "native_amx_v2_grouped.json"
 WIRE_FIXTURE = ROOT / "fixtures" / "sumeragi_v2" / "wire_v2.tsv"
@@ -81,6 +82,8 @@ def _fixture_manifest() -> dict[str, Any]:
                 "fixtures/sumeragi_v2/wire_v2.tsv",
             ],
             "native-suite": [
+                "artifacts/openapi/allowed_signers.json",
+                "ci/check_openapi_spec.sh",
                 "ci/run_native_amx_v2_grouped_sdk_parity.sh",
             ],
             "production": [
@@ -120,6 +123,7 @@ def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 def _source_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     (tmp_path / "ci").mkdir()
+    (tmp_path / "artifacts" / "openapi").mkdir(parents=True)
     (tmp_path / "fixtures" / "sumeragi_v2").mkdir(parents=True)
     (tmp_path / "sdk" / "javascript").mkdir(parents=True)
     (tmp_path / "sdk" / "python").mkdir(parents=True)
@@ -130,6 +134,14 @@ def _source_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     (tmp_path / "ci" / "run_native_amx_v2_grouped_sdk_parity.sh").write_text(
         "#!/usr/bin/env bash\n",
         encoding="utf-8",
+    )
+    shutil.copyfile(
+        OPENAPI_GATE,
+        tmp_path / "ci" / "check_openapi_spec.sh",
+    )
+    shutil.copyfile(
+        ROOT / "artifacts" / "openapi" / "allowed_signers.json",
+        tmp_path / "artifacts" / "openapi" / "allowed_signers.json",
     )
     (tmp_path / "ci" / "run_sumeragi_v2_sdk_diagnostics.sh").write_text(
         "#!/usr/bin/env bash\n",
@@ -254,7 +266,7 @@ def test_resolver_emits_sorted_paths_records_and_stable_content_digest(
     assert paths.returncode == 0, paths.stderr
     observed_paths = paths.stdout.splitlines()
     assert observed_paths == sorted(observed_paths)
-    assert len(observed_paths) == len(set(observed_paths)) == 5
+    assert len(observed_paths) == len(set(observed_paths)) == 7
 
     records = _run_resolver(
         tmp_path,
@@ -290,7 +302,29 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
-    assert len(grouped_records.stdout.splitlines()) == 1_351
+    grouped_record_lines = grouped_records.stdout.splitlines()
+    assert len(grouped_record_lines) == 1_353
+    assert sum(
+        line.startswith("ci/check_openapi_spec.sh\t")
+        for line in grouped_record_lines
+    ) == 1
+    assert sum(
+        line.startswith("artifacts/openapi/allowed_signers.json\t")
+        for line in grouped_record_lines
+    ) == 1
+    harness = NATIVE_HARNESS.read_text(encoding="utf-8")
+    assert 'bash "${repo_root}/ci/check_openapi_spec.sh"' in harness
+    assert harness.count("observed_test_count=7") == 1
+    assert "assert_openapi_replay_marker" in harness
+    assert "openapi_require_signed=0" in harness
+    assert "openapi_require_signed=1" in harness
+    assert (
+        'OPENAPI_NODE_BIN="$sdk_openapi_node_bin" \\\n'
+        '        OPENAPI_NODE_MODULES_ROOT="$sdk_openapi_node_modules_root" \\\n'
+        '        OPENAPI_REQUIRE_SIGNED="$openapi_require_signed" \\\n'
+        '        bash "${repo_root}/ci/check_openapi_spec.sh"'
+        in harness
+    )
 
     _source_fixture(tmp_path)
     grouped_before = _native_digest(tmp_path)
@@ -305,6 +339,34 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     assert grouped_after.returncode == diagnostics_after.returncode == 0
     assert grouped_after.stdout == grouped_before.stdout
     assert diagnostics_after.stdout != diagnostics_before.stdout
+
+    openapi_gate = tmp_path / "ci" / "check_openapi_spec.sh"
+    openapi_gate.write_bytes(
+        openapi_gate.read_bytes() + b"# tracked OpenAPI gate drift\n"
+    )
+    grouped_after_openapi_drift = _native_digest(tmp_path)
+    diagnostics_after_openapi_drift = _diagnostics_digest(tmp_path)
+    assert (
+        grouped_after_openapi_drift.returncode
+        == diagnostics_after_openapi_drift.returncode
+        == 0
+    )
+    assert grouped_after_openapi_drift.stdout != grouped_after.stdout
+    assert diagnostics_after_openapi_drift.stdout == diagnostics_after.stdout
+
+    allowed_signers = tmp_path / "artifacts" / "openapi" / "allowed_signers.json"
+    allowed_signers.write_bytes(
+        allowed_signers.read_bytes() + b" "
+    )
+    grouped_after_signer_drift = _native_digest(tmp_path)
+    diagnostics_after_signer_drift = _diagnostics_digest(tmp_path)
+    assert (
+        grouped_after_signer_drift.returncode
+        == diagnostics_after_signer_drift.returncode
+        == 0
+    )
+    assert grouped_after_signer_drift.stdout != grouped_after_openapi_drift.stdout
+    assert diagnostics_after_signer_drift.stdout == diagnostics_after_openapi_drift.stdout
 
 
 @pytest.mark.parametrize(
@@ -627,6 +689,14 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
             "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift"
         ),
         module.PurePosixPath(
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
+            "SumeragiV2WireFixtureTest.kt"
+        ),
+        module.PurePosixPath(
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
+            "SumeragiV2WireFixtureTests.java"
+        ),
+        module.PurePosixPath(
             "python/iroha_torii_client/tests/sumeragi_exact_json_test_support.py"
         ),
         module.PurePosixPath(
@@ -712,6 +782,18 @@ def test_release_sdk_harnesses_require_only_authenticated_private_dependencies()
                 'node --test --test-reporter=tap \\\n'
                 '      "${javascript_package_root_first}/test/' in source
             )
+    native = NATIVE_HARNESS.read_text(encoding="utf-8")
+    assert 'sdk_openapi_node_modules_root="$sdk_input_root/openapi/node_modules"' in native
+    assert 'sdk_openapi_node_modules_root="${repo_root}/tools/openapi/node_modules"' in native
+    assert 'document.get("bindings", {}).get("openapi_node")' in native
+    assert 'sdk_openapi_node_bin="${IROHA_RELEASE_NODE_BIN:-}"' in native
+    assert 'protected OpenAPI Node executable disagrees with runtime inventory' in native
+    assert "authenticated OpenAPI Node control metadata changed" in native
+    assert 'node_record.get("mode") != format(stat.S_IMODE(metadata.st_mode), "04o")' in native
+    assert "metadata.st_uid != os.geteuid()" in native
+    assert '"openapi/node_modules", "package_lock_sha256"' not in native
+    assert '"openapi/package-lock.json", "package_lock_sha256"' in native
+    assert 'OpenAPI Node copied-input inventory has omissions or extras' in native
 
 
 def _sdk_dependency_fixture(
@@ -766,6 +848,40 @@ def _sdk_dependency_fixture(
     )
     (node_modules / "node_modules/example/index.js").write_text(
         "export const value = 1;\n", encoding="utf-8"
+    )
+    openapi_package_lock = {
+        "lockfileVersion": 3,
+        "name": "openapi-fixture",
+        "packages": {
+            "": {"name": "openapi-fixture", "version": "1.0.0"},
+            "node_modules/openapi-example": {"version": "2.0.0"},
+        },
+        "requires": True,
+        "version": "1.0.0",
+    }
+    openapi_installed_lock = {
+        "lockfileVersion": 3,
+        "name": "openapi-fixture",
+        "packages": {
+            "node_modules/openapi-example": {"version": "2.0.0"},
+        },
+        "requires": True,
+        "version": "1.0.0",
+    }
+    openapi_package_lock_path = repository / "tools/openapi/package-lock.json"
+    openapi_package_lock_path.parent.mkdir(parents=True)
+    openapi_package_lock_path.write_text(
+        _canonical_json(openapi_package_lock), encoding="utf-8"
+    )
+    openapi_root = external / "tools/openapi"
+    openapi_root.mkdir(parents=True, mode=0o700)
+    openapi_node_modules = _private_directory(openapi_root / "node_modules")
+    (openapi_node_modules / "node_modules/openapi-example").mkdir(parents=True)
+    (openapi_node_modules / ".package-lock.json").write_text(
+        _canonical_json(openapi_installed_lock), encoding="utf-8"
+    )
+    (openapi_node_modules / "node_modules/openapi-example/index.js").write_text(
+        "export const openapiValue = 2;\n", encoding="utf-8"
     )
 
     revision = "1" * 40
@@ -868,7 +984,14 @@ def _sdk_dependency_fixture(
                 package_lock_path.read_bytes()
             ).hexdigest(),
         },
-        "schema_version": 2,
+        "openapi_node": {
+            "node_modules_root": str(openapi_node_modules),
+            "node_modules_inventory": source_inventory(openapi_node_modules),
+            "package_lock_sha256": hashlib.sha256(
+                openapi_package_lock_path.read_bytes()
+            ).hexdigest(),
+        },
+        "schema_version": 3,
         "swiftpm": {
             "cache_root": str(swift_cache),
             "cache_inventory": source_inventory(swift_cache),
@@ -936,6 +1059,17 @@ def test_sdk_dependency_bundle_withholds_paths_and_uses_new_inodes(
     archived_node = output / "sdk-inputs/node/node_modules/node_modules/example/index.js"
     assert source_node.stat().st_ino != archived_node.stat().st_ino
     assert stat.S_IMODE(archived_node.stat().st_mode) == 0o400
+    source_openapi_node = (
+        external / "tools/openapi/node_modules/node_modules/openapi-example/index.js"
+    )
+    archived_openapi_node = (
+        output
+        / "sdk-inputs/openapi/node_modules/node_modules/openapi-example/index.js"
+    )
+    assert source_openapi_node.stat().st_ino != archived_openapi_node.stat().st_ino
+    assert stat.S_IMODE(archived_openapi_node.stat().st_mode) == 0o400
+    assert inventory["bindings"]["openapi_node"]["node_modules_archive_name"] \
+        == "openapi/node_modules"
 
     archived_swift = output / "sdk-inputs/swiftpm/cache/checkouts/example/.git/HEAD"
     working_swift = output / "sdk-work/swiftpm/checkouts/example/.git/HEAD"
@@ -1007,6 +1141,42 @@ def test_sdk_dependency_bundle_rejects_hardlinked_inputs(tmp_path: Path) -> None
         match="Node node_modules source inventory differs",
     ):
         helper.copy_sdk_dependencies(*arguments)
+
+    helper, arguments, external, _ = _sdk_dependency_fixture(
+        _private_directory(tmp_path / "openapi-lock-mismatch")
+    )
+    openapi_modules = external / "tools/openapi/node_modules"
+    installed_path = openapi_modules / ".package-lock.json"
+    installed = json.loads(installed_path.read_text(encoding="utf-8"))
+    installed["packages"]["node_modules/ambient"] = {"version": "9.9.9"}
+    installed_path.write_text(_canonical_json(installed), encoding="utf-8")
+    manifest_path = arguments[0]
+    assert isinstance(manifest_path, Path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    records, file_bytes = helper._sdk_sanitized_snapshot(
+        openapi_modules, "fixture changed OpenAPI source inventory",
+    )
+    document["openapi_node"]["node_modules_inventory"] = {
+        "file_bytes": file_bytes,
+        "format": helper.SDK_SOURCE_INVENTORY_FORMAT,
+        "record_count": len(records),
+        "records": records,
+        "records_sha256": helper._sdk_records_sha256(records),
+        "schema_version": 1,
+    }
+    manifest_path.chmod(0o600)
+    manifest_path.write_bytes(helper._canonical_payload(document))
+    manifest_path.chmod(0o400)
+    rebound = (
+        manifest_path,
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        *arguments[2:],
+    )
+    with pytest.raises(
+        helper.CacheCopyError,
+        match="OpenAPI Node closure is not exactly bound",
+    ):
+        helper.copy_sdk_dependencies(*rebound)
 
     helper, arguments, external, _ = _sdk_dependency_fixture(
         _private_directory(tmp_path / "dirty-swift")

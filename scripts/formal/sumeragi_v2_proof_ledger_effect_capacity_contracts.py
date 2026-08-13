@@ -199,13 +199,22 @@ match owners.get(&identity) {
         retained_owners,
         """
 for pending in self.pending_applications.values() {
-    insert(pending.task.ownership())?;
+    insert(&pending.ownership)?;
 }
 if let Some(finality) = &self.finality_completion {
-    insert(&finality.ownership)?;
+    match &finality.ownership {
+        FinalityCompletionOwner::Runtime(ownership) => insert(ownership)?,
+        FinalityCompletionOwner::RecoveredDecisionApply(key)
+            if key.matches_height_context(&self.context) => {}
+        FinalityCompletionOwner::RecoveredDecisionApply(_) => {
+            return Err(EffectExecutorError::Contract(
+                "recovered Apply finality changed its height context".to_owned(),
+            ));
+        }
+    }
 }
 """,
-        "durable Apply tombstone must retain the same candidate owner after completion",
+        "pending and durable Apply ownership must retain the exact runtime owner while recovered finality stays bound to this height context",
         errors,
     )
 
@@ -595,7 +604,7 @@ if let Some(finality) = self.finality_completion.as_ref() {
         """
 let same_decision = existing.task.tag == tag
     && existing.task.subject == subject
-    && existing.task.ownership() == &ownership
+    && existing.ownership == ownership
     && existing
         .task
         .certificate
@@ -634,7 +643,7 @@ return services
         effects_path,
         complete_application,
         """
-let ownership = task.ownership().clone();
+let ownership = pending.ownership.clone();
 if let Err(error) = self
     .runtime
     .enqueue_application_completed_with_owner(tag, subject, &ownership)
@@ -650,7 +659,7 @@ self.finality_completion = Some(FinalityCompletion {
     tag,
     receipt: completion.receipt,
     artifact: completion.artifact,
-    ownership,
+    ownership: FinalityCompletionOwner::Runtime(ownership),
 });
 """,
         "durable finality tombstone must retain the completed Apply owner",

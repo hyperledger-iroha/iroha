@@ -2617,7 +2617,7 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
             "    Claimed {\n",
             "enum CertifiedServeRuntimeEpisodeState {\n"
             "    Claimed {\n",
-            "distinct ready, one-owner claimed, and irreversible complete states",
+            "distinct ready, one-owner claimed, and sealed complete states",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2627,15 +2627,31 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "self.carrier_ordinal == Some(barrier.carrier_ordinal)",
-            "self.carrier_ordinal.is_some()",
-            "episode claims must retain the selected physical carrier occurrence",
+            "struct V2IoCompletionOwnership {\n"
+            "    retained_at: Instant,\n"
+            "    service_debt: u64,\n"
+            "    requires_runtime_capacity: bool,\n"
+            "    runtime_lifecycle_ordinal: Option<u128>,\n"
+            "    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,\n"
+            "    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,\n"
+            "    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,\n"
+            "}\n",
+            "struct V2IoCompletionOwnership {\n"
+            "    retained_at: Instant,\n"
+            "    service_debt: u64,\n"
+            "    requires_runtime_capacity: bool,\n"
+            "    runtime_lifecycle_ordinal: Option<u128>,\n"
+            "    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,\n"
+            "    recovered_lifecycle_sign: Option<RecoveredDecisionApplyDispatchKeyV1>,\n"
+            "    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,\n"
+            "}\n",
+            "all three exact recovered dispatch keys",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "&& self.handed_off.is_some()",
-            "&& true",
-            "episode claims must retain the live fair-ingress handoff",
+            "            Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),\n",
+            "            Self::RecoveredLifecycleSign(_) => None,\n",
+            "including recovered Apply, Sign, and Fetch",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2645,9 +2661,9 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "                        } if existing == command_ordinal => Some(command_ordinal),\n",
-            "                        } if existing <= command_ordinal => Some(command_ordinal),\n",
-            "already-selected owner",
+            "                    let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();\n",
+            "                    let recovered_lifecycle_sign_key = command.recovered_decision_apply_key();\n",
+            "generic owner, all three recovered dispatch keys",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2656,16 +2672,34 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
             "later causal, Control, Completion, and priority work must be blocked",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                        .certified_serve_runtime_predecessor_capacity_available(serve_barrier)\n",
-            "                        .certified_serve_runtime_predecessor_capacity_unchecked(serve_barrier)\n",
-            "serialized predecessor step must require both an older owner and physical capacity",
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn send_tracked_completion_with_lifecycle_ordinal(\n"
+            "    sender: &mpsc::SyncSender<V2IoCompletion>,\n"
+            "    admission: &V2IoAdmission,\n"
+            "    completion: V2IoCompletion,\n"
+            "    runtime_lifecycle_ordinal: Option<u128>,\n"
+            ") -> Result<(), mpsc::SendError<V2IoCompletion>> {\n"
+            "    let recovered_decision_apply = completion.recovered_decision_apply_key();\n"
+            "    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();\n"
+            "    let recovered_decision_fetch = completion.recovered_decision_fetch_key();\n",
+            "fn send_tracked_completion_with_lifecycle_ordinal(\n"
+            "    sender: &mpsc::SyncSender<V2IoCompletion>,\n"
+            "    admission: &V2IoAdmission,\n"
+            "    completion: V2IoCompletion,\n"
+            "    runtime_lifecycle_ordinal: Option<u128>,\n"
+            ") -> Result<(), mpsc::SendError<V2IoCompletion>> {\n"
+            "    let recovered_decision_apply = completion.recovered_decision_apply_key();\n"
+            "    let recovered_lifecycle_sign = completion.recovered_decision_apply_key();\n"
+            "    let recovered_decision_fetch = completion.recovered_decision_fetch_key();\n",
+            "blocking completion publication must derive every recovered key",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                        .finish_certified_serve_runtime_episode_turn(\n",
-            "                        .finish_certified_serve_runtime_episode_turn_unchecked(\n",
-            "re-publish/recheck the full owner set before settlement",
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "    recovered_decision_fetch_bodies:\n"
+            "        BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,\n",
+            "    recovered_decision_fetch_bodies:\n"
+            "        BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,\n",
+            "separate exact owner maps for recovered Apply, Sign, and Fetch work",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
@@ -2746,17 +2780,21 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
             "every claimed turn must re-publish/recheck the full owner set before settlement",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "            else {\n"
-            "                // Exact admission won the queue-locked race after the\n"
-            "                // observation above. Restart at the dedicated target turn.\n"
-            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "                continue;\n"
-            "            };\n",
-            "            else {\n"
-            "                continue;\n"
-            "            };\n",
-            "queue-locked handoff to an exact target which won the admission race must retain the finite wake bound",
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "                    PendingServiceCompletion::Io {\n"
+            "                        completion: V2IoCompletion::RecoveredDecisionApply(_),\n"
+            "                        ..\n"
+            "                    } => {\n"
+            "                        return Err(executor.external_service_failed(\n"
+            "                            \"recovered Decision Apply completion crossed the generic executor drain\",\n"
+            "                            self,\n"
+            "                        ));\n"
+            "                    }\n",
+            "                    PendingServiceCompletion::Io {\n"
+            "                        completion: V2IoCompletion::RecoveredDecisionApply(_),\n"
+            "                        ..\n"
+            "                    } => Ok(()),\n",
+            "dedicated V2IoCompletion::RecoveredDecisionApply",
         ),
     ),
 )
@@ -2826,12 +2864,16 @@ def test_local_runner_service_contract_source_fidelity_is_current(
     )
 
     assert errors == [], errors
-    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    runner_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs"
+    )
+    canonical_cursor = runner_path.read_text(encoding="utf-8")
     mutate_rust_item_source_in_context(
         module,
         runner_path,
-        "next",
-        (("impl", "Iterator", "for", "OuterIngressTurns"),),
+        "advance_current",
+        (("impl", "OuterIngressTurns"),),
         "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
         "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
     )
@@ -2843,6 +2885,40 @@ def test_local_runner_service_contract_source_fidelity_is_current(
     assert any(
         "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns"
         in error
+        for error in errors
+    ), errors
+    runner_path.write_text(canonical_cursor, encoding="utf-8")
+
+    worker_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    mutate_rust_item_source_in_context(
+        module,
+        worker_path,
+        "drain_completions_with_lifecycle",
+        (("impl", "ProductionV2Services"),),
+        "CompletionDrainPolicy::Fair,",
+        "CompletionDrainPolicy::IoOnly,",
+    )
+    mutated_helpers = tuple(
+        item
+        for item in module.rust_items(
+            worker_path.read_text(encoding="utf-8"),
+            "drain_completions_with_lifecycle",
+        )
+        if item.brace_context == (("impl", "ProductionV2Services"),)
+    )
+    assert len(mutated_helpers) == 1
+    module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256[
+        "ProductionV2Services::drain_completions_with_lifecycle"
+    ] = module._rust_item_token_sha256(mutated_helpers[0])
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+    assert any(
+        "ordinary lifecycle completion service must delegate to the fixed "
+        "finite fair-policy scan" in error
+        and "exact reviewed token digest" not in error
         for error in errors
     ), errors
 
@@ -3039,7 +3115,7 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
             "",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2.rs",
+            "crates/iroha_core/src/sumeragi/v2_adapter_inline_producer_recovery_02_tests.rs",
             "assert_restored_stage_seven_retirement_does_not_resurrect",
             """if !reserve_completion {
             assert!(

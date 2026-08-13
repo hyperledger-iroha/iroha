@@ -160,7 +160,7 @@ VALIDATION_ACK_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 )
 VALIDATION_ACK_COMPONENT_SHA256 = (
-    "1a69a1cb8b1f0b0bb580762e8b569200ac9b9c85d463bf23913d3ed892d5004d"
+    "74e55a2d544b76342d57f24eb901c4432b10e484a6044fbfcc7c8d7878288578"
 )
 VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
@@ -1603,179 +1603,9 @@ def _validator_diagnostic_prefix(path: Path, name: str) -> tuple[bytes, dict[str
         os.close(parent_fd)
 
 
-def publish_validation_failure(
-    invocation_root: Path,
-    bootstrap_evidence: Path,
-    cleanup_base: Path,
-    cleanup_prefix: str,
-    source_manifest_sha256: str,
-    validator_exit_status: int,
-) -> None:
-    """Retain bounded validator diagnostics only after quiescent root cleanup."""
+def _validation_component(source: Path) -> dict[str, object]:
+    """Load the exact authenticated receipt-validation helper component."""
 
-    for path, label in (
-        (invocation_root, "release invocation root"),
-        (bootstrap_evidence, "bootstrap evidence root"),
-        (cleanup_base, "cleanup base"),
-    ):
-        _normalized_absolute(path, label)
-    if (
-        invocation_root.parent != cleanup_base
-        or not invocation_root.name.startswith(cleanup_prefix)
-        or _overlap(invocation_root, bootstrap_evidence)
-        or not re.fullmatch(r"[0-9a-f]{64}", source_manifest_sha256)
-        or type(validator_exit_status) is not int
-        or not 1 <= validator_exit_status <= 255
-    ):
-        raise CacheCopyError("receipt validation failure inputs are not exact")
-    bootstrap_fd, bootstrap_identity = _open_directory(
-        bootstrap_evidence, "bootstrap evidence root"
-    )
-    try:
-        if (
-            bootstrap_identity.st_uid != os.geteuid()
-            or stat.S_IMODE(bootstrap_identity.st_mode) != 0o700
-        ):
-            raise CacheCopyError("bootstrap evidence root is not owner-private")
-        forbidden = {
-            "BOOTSTRAP_RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json",
-            "receipt-validation-ack.json", "release-retained-inventory.json",
-            "release-runner-private-provenance.json",
-            "release-runner-result.json", "sealed-identity.json",
-        }
-        if any(
-            _optional_entry_stat(bootstrap_fd, name, f"forbidden success evidence {name}")
-            is not None
-            for name in forbidden
-        ):
-            raise CacheCopyError("receipt validation failure follows published success evidence")
-    finally:
-        os.close(bootstrap_fd)
-
-    identity_path = bootstrap_evidence / "candidate-identity.json"
-    completion_path = bootstrap_evidence / "BOOTSTRAP_COMPLETED.json"
-    validator_path = bootstrap_evidence / "validate-receipt.py"
-    identity_payload, _ = _read_regular(identity_path, "candidate identity")
-    try:
-        identity = json.loads(identity_payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CacheCopyError("candidate identity is malformed") from error
-    identity_keys = {
-        "schema_version", "head_commit", "head_tree", "index_tree",
-        "workspace_source_manifest_sha256", "cargo_lock_sha256",
-    }
-    if (
-        not isinstance(identity, dict)
-        or set(identity) != identity_keys
-        or type(identity.get("schema_version")) is not int
-        or identity["schema_version"] != 1
-        or any(
-            not isinstance(identity.get(name), str)
-            or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", identity[name]) is None
-            for name in ("head_commit", "head_tree", "index_tree")
-        )
-        or any(
-            not isinstance(identity.get(name), str)
-            or re.fullmatch(r"[0-9a-f]{64}", identity[name]) is None
-            for name in ("workspace_source_manifest_sha256", "cargo_lock_sha256")
-        )
-        or identity_payload != _canonical_payload(identity)
-    ):
-        raise CacheCopyError("candidate identity contract is not exact")
-    validator_sha256, _, _ = _digest_regular(
-        validator_path, "archived receipt validator"
-    )
-    completion_sha256, _, _ = _digest_regular(
-        completion_path, "bootstrap completion"
-    )
-    receipt_sha256, receipt_size = _stable_regular_digest(
-        invocation_root / "output" / "release" / "RELEASE_COMPLETED.json",
-        "unverified aggregate receipt",
-    )
-    stream_payloads: dict[str, bytes] = {}
-    stream_records: dict[str, dict[str, object]] = {}
-    for name in ("stdout", "stderr"):
-        payload, record = _validator_diagnostic_prefix(
-            invocation_root / f"receipt-validator.{name}", name
-        )
-        stream_payloads[name] = payload
-        stream_records[name] = record
-
-    publications: list[tuple[Path, tuple[os.stat_result, os.stat_result]]] = []
-    try:
-        cleanup_invocation(cleanup_base, invocation_root, cleanup_prefix)
-        base_fd, _ = _open_directory(cleanup_base, "cleanup base")
-        try:
-            if _optional_entry_stat(
-                base_fd, invocation_root.name, "cleaned release invocation"
-            ) is not None:
-                raise CacheCopyError("release invocation survived validator failure cleanup")
-        finally:
-            os.close(base_fd)
-        _revalidate_directory_path(
-            bootstrap_evidence, bootstrap_identity, "bootstrap evidence root"
-        )
-        marker = {
-            "format": VALIDATOR_FAILURE_FORMAT,
-            "schema_version": 2,
-            "result": "release-failed",
-            "stage": "protected-receipt-validation",
-            "profile": "release",
-            "bootstrap_completion_sha256": completion_sha256,
-            "candidate_identity": {
-                "sha256": hashlib.sha256(identity_payload).hexdigest(),
-                "head_commit": identity["head_commit"],
-                "head_tree": identity["head_tree"],
-            },
-            "sealed_source_manifest_sha256": source_manifest_sha256,
-            "receipt": {
-                "disclosure": "unverified-no-retention",
-                "sha256": receipt_sha256,
-                "size_bytes": receipt_size,
-            },
-            "validator": {
-                "archive_name": "validate-receipt.py",
-                "sha256": validator_sha256,
-                "exit_status": validator_exit_status,
-            },
-            "argv": {
-                "profile": "release",
-                "python_flags": ["-I", "-S"],
-                "validator": "protected:validate-receipt.py",
-                "operation": "verify-existing-and-ack",
-                "invocation_binding": "not-published-validation-failed",
-            },
-            "diagnostics": stream_records,
-            "invocation_cleanup": "complete",
-        }
-        marker_payload = _canonical_payload(marker)
-        if len(marker_payload) > VALIDATOR_FAILURE_MARKER_BYTES:
-            raise CacheCopyError("receipt validation failure marker exceeds its bound")
-        for name in ("stdout", "stderr"):
-            path = bootstrap_evidence / str(stream_records[name]["name"])
-            publications.append((path, _publish_inventory(path, stream_payloads[name])))
-        marker_path = bootstrap_evidence / "RECEIPT_VALIDATION_FAILED.json"
-        publications.append((marker_path, _publish_inventory(marker_path, marker_payload)))
-        for path, _ in publications:
-            payload, metadata = _read_regular(path, f"published {path.name}")
-            if stat.S_IMODE(metadata.st_mode) != 0o400 or metadata.st_nlink != 1:
-                raise CacheCopyError(f"published {path.name} metadata changed")
-            if path == marker_path:
-                if payload != marker_payload:
-                    raise CacheCopyError("receipt validation failure marker changed")
-            else:
-                name = "stdout" if path.name.endswith(".stdout") else "stderr"
-                if payload != stream_payloads[name]:
-                    raise CacheCopyError(f"receipt validator {name} copy changed")
-    except BaseException:
-        for path, metadata in reversed(publications):
-            _remove_published(path, metadata)
-        raise
-
-
-
-
-def _validation_ack(ack_held: dict[str, object], receipt_held: dict[str, object], source: Path, bootstrap_evidence: Path, source_manifest_sha256: str, candidate_root: Path, scaling_evidence_manifest: Path, expected_signer_fingerprint: str, expected_scaling_trial_harness_sha256: str, expected_scaling_configuration_sha256: str, expected_scaling_irohad_sha256: str, expected_scaling_iroha_cli_sha256: str) -> tuple[str, int]:
     component_name = VALIDATION_ACK_COMPONENT_FILES[0]
     sealed_component = source / "scripts" / component_name
     if sealed_component.exists() or sealed_component.is_symlink():
@@ -1793,12 +1623,43 @@ def _validation_ack(ack_held: dict[str, object], receipt_held: dict[str, object]
         or not stat.S_ISREG(metadata.st_mode)
         or metadata.st_nlink != 1
     ):
-        raise CacheCopyError("validation acknowledgment component metadata is not exact")
+        raise CacheCopyError(
+            "validation acknowledgment component metadata is not exact"
+        )
     if hashlib.sha256(payload).hexdigest() != VALIDATION_ACK_COMPONENT_SHA256:
         raise CacheCopyError("validation acknowledgment component digest mismatch")
     namespace = dict(globals())
     exec(compile(payload, str(component), "exec"), namespace)
-    implementation = namespace.get("_validation_ack")
+    return namespace
+
+
+def publish_validation_failure(
+    invocation_root: Path,
+    bootstrap_evidence: Path,
+    cleanup_base: Path,
+    cleanup_prefix: str,
+    source_manifest_sha256: str,
+    validator_exit_status: int,
+) -> None:
+    """Run the authenticated validation-failure publication component."""
+
+    implementation = _validation_component(
+        invocation_root / "source"
+    ).get("publish_validation_failure")
+    if not callable(implementation) or implementation is publish_validation_failure:
+        raise CacheCopyError(
+            "validation failure publication component entry point is invalid"
+        )
+    implementation(
+        invocation_root, bootstrap_evidence, cleanup_base, cleanup_prefix,
+        source_manifest_sha256, validator_exit_status,
+    )
+
+
+
+
+def _validation_ack(ack_held: dict[str, object], receipt_held: dict[str, object], source: Path, bootstrap_evidence: Path, source_manifest_sha256: str, candidate_root: Path, scaling_evidence_manifest: Path, expected_signer_fingerprint: str, expected_scaling_trial_harness_sha256: str, expected_scaling_configuration_sha256: str, expected_scaling_irohad_sha256: str, expected_scaling_iroha_cli_sha256: str) -> tuple[str, int]:
+    implementation = _validation_component(source).get("_validation_ack")
     if not callable(implementation) or implementation is _validation_ack:
         raise CacheCopyError("validation acknowledgment component entry point is invalid")
     return implementation(ack_held, receipt_held, source, bootstrap_evidence, source_manifest_sha256, candidate_root, scaling_evidence_manifest, expected_signer_fingerprint, expected_scaling_trial_harness_sha256, expected_scaling_configuration_sha256, expected_scaling_irohad_sha256, expected_scaling_iroha_cli_sha256)
@@ -3020,21 +2881,30 @@ def _sdk_source_manifest(
     if (
         not isinstance(document, dict)
         or set(document) != {
-            "format", "schema_version", "git", "node", "swiftpm", "gradle",
+            "format", "schema_version", "git", "node", "openapi_node",
+            "swiftpm", "gradle",
         }
         or document.get("format") != SDK_SOURCE_FORMAT
         or type(document.get("schema_version")) is not int
-        or document["schema_version"] != 2
+        or document["schema_version"] != 3
         or payload != _canonical_payload(document)
     ):
         raise CacheCopyError("SDK dependency source manifest contract is not exact")
     git = document["git"]
-    node, swiftpm, gradle = document["node"], document["swiftpm"], document["gradle"]
+    node = document["node"]
+    openapi_node = document["openapi_node"]
+    swiftpm = document["swiftpm"]
+    gradle = document["gradle"]
     if (
         not isinstance(git, dict)
         or set(git) != {"executable", "sha256"}
         or not isinstance(node, dict)
         or set(node) != {
+            "node_modules_root", "package_lock_sha256",
+            "node_modules_inventory",
+        }
+        or not isinstance(openapi_node, dict)
+        or set(openapi_node) != {
             "node_modules_root", "package_lock_sha256",
             "node_modules_inventory",
         }
@@ -3055,6 +2925,7 @@ def _sdk_source_manifest(
     for section, name in (
         (git, "executable"),
         (node, "node_modules_root"),
+        (openapi_node, "node_modules_root"),
         (swiftpm, "cache_root"),
         (gradle, "distribution_archive"),
         (gradle, "gradle_user_home"),
@@ -3066,9 +2937,15 @@ def _sdk_source_manifest(
         _normalized_absolute(candidate, f"SDK dependency {name}")
         if candidate.resolve(strict=True) != candidate:
             raise CacheCopyError(f"SDK dependency {name} is not canonical")
+    openapi_node_root = Path(str(openapi_node["node_modules_root"]))
+    if openapi_node_root.parts[-3:] != ("tools", "openapi", "node_modules"):
+        raise CacheCopyError(
+            "SDK OpenAPI node_modules root is not the exact tools/openapi root"
+        )
     for section, name in (
         (git, "sha256"),
         (node, "package_lock_sha256"),
+        (openapi_node, "package_lock_sha256"),
         (swiftpm, "package_resolved_sha256"),
         (gradle, "distribution_sha256"),
         (gradle, "java_wrapper_properties_sha256"),
@@ -3117,6 +2994,10 @@ def _sdk_source_manifest(
         node["node_modules_inventory"], "Node node_modules source inventory",
     )
     _sdk_source_inventory_contract(
+        openapi_node["node_modules_inventory"],
+        "OpenAPI Node node_modules source inventory",
+    )
+    _sdk_source_inventory_contract(
         swiftpm["cache_inventory"], "SwiftPM cache source inventory",
     )
     _sdk_source_inventory_contract(
@@ -3136,12 +3017,18 @@ def _sdk_sources(
     manifest: dict[str, object], repository_root: Path,
 ) -> dict[str, Path]:
     node = manifest["node"]
+    openapi_node = manifest["openapi_node"]
     swiftpm = manifest["swiftpm"]
     gradle = manifest["gradle"]
-    assert isinstance(node, dict) and isinstance(swiftpm, dict) and isinstance(gradle, dict)
+    assert isinstance(node, dict)
+    assert isinstance(openapi_node, dict)
+    assert isinstance(swiftpm, dict)
+    assert isinstance(gradle, dict)
     return {
         "node/node_modules": Path(str(node["node_modules_root"])),
         "node/package-lock.json": repository_root / "javascript/iroha_js/package-lock.json",
+        "openapi/node_modules": Path(str(openapi_node["node_modules_root"])),
+        "openapi/package-lock.json": repository_root / "tools/openapi/package-lock.json",
         "swiftpm/cache": Path(str(swiftpm["cache_root"])),
         "swiftpm/Package.resolved": repository_root / "IrohaSwift/Package.resolved",
         "gradle/gradle-user-home": Path(str(gradle["gradle_user_home"])),
@@ -3157,9 +3044,11 @@ def _sdk_validate_manifest_source_inventories(
     """Recompute every protected dependency tree against its member manifest."""
 
     node = manifest["node"]
+    openapi_node = manifest["openapi_node"]
     swiftpm = manifest["swiftpm"]
     gradle = manifest["gradle"]
     assert isinstance(node, dict)
+    assert isinstance(openapi_node, dict)
     assert isinstance(swiftpm, dict)
     assert isinstance(gradle, dict)
     specifications = (
@@ -3167,6 +3056,11 @@ def _sdk_validate_manifest_source_inventories(
             sources["node/node_modules"],
             node["node_modules_inventory"],
             "Node node_modules source inventory",
+        ),
+        (
+            sources["openapi/node_modules"],
+            openapi_node["node_modules_inventory"],
+            "OpenAPI Node node_modules source inventory",
         ),
         (
             sources["swiftpm/cache"],
@@ -3395,7 +3289,7 @@ def _sdk_copy_layout(
         root_fd, created = _sdk_new_directory(parent_fd, bundle_root.name, "SDK dependency bundle")
         children: dict[str, int] = {}
         try:
-            for name in ("node", "swiftpm", "gradle"):
+            for name in ("node", "openapi", "swiftpm", "gradle"):
                 child, _ = _sdk_new_directory(root_fd, name, f"SDK dependency {name} bundle")
                 children[name] = child
             records: list[dict[str, object]] = []
@@ -3683,9 +3577,13 @@ def _sdk_bindings(
     bundle_root: Path, manifest: dict[str, object],
 ) -> dict[str, object]:
     node = manifest["node"]
+    openapi_node = manifest["openapi_node"]
     swiftpm = manifest["swiftpm"]
     gradle = manifest["gradle"]
-    assert isinstance(node, dict) and isinstance(swiftpm, dict) and isinstance(gradle, dict)
+    assert isinstance(node, dict)
+    assert isinstance(openapi_node, dict)
+    assert isinstance(swiftpm, dict)
+    assert isinstance(gradle, dict)
     package_lock, package_bytes = _sdk_json(
         bundle_root / "node/package-lock.json", "SDK package-lock.json",
     )
@@ -3707,6 +3605,33 @@ def _sdk_bindings(
         )
     ):
         raise CacheCopyError("installed Node closure is not bound to package-lock.json")
+    openapi_package_lock, openapi_package_bytes = _sdk_json(
+        bundle_root / "openapi/package-lock.json",
+        "SDK OpenAPI package-lock.json",
+    )
+    openapi_hidden_lock, openapi_hidden_bytes = _sdk_json(
+        bundle_root / "openapi/node_modules/.package-lock.json",
+        "installed OpenAPI Node lockfile",
+    )
+    openapi_packages = openapi_package_lock.get("packages")
+    openapi_installed_packages = openapi_hidden_lock.get("packages")
+    if (
+        hashlib.sha256(openapi_package_bytes).hexdigest()
+        != openapi_node["package_lock_sha256"]
+        or openapi_package_lock.get("lockfileVersion") != 3
+        or openapi_hidden_lock.get("lockfileVersion") != 3
+        or (openapi_hidden_lock.get("name"), openapi_hidden_lock.get("version"))
+        != (openapi_package_lock.get("name"), openapi_package_lock.get("version"))
+        or not isinstance(openapi_packages, dict)
+        or not isinstance(openapi_installed_packages, dict)
+        or not openapi_installed_packages
+        or "" not in openapi_packages
+        or openapi_installed_packages
+        != {name: value for name, value in openapi_packages.items() if name}
+    ):
+        raise CacheCopyError(
+            "installed OpenAPI Node closure is not exactly bound to package-lock.json"
+        )
     resolved, resolved_bytes = _sdk_json(
         bundle_root / "swiftpm/Package.resolved", "Swift Package.resolved",
     )
@@ -3769,6 +3694,14 @@ def _sdk_bindings(
             "package_lock_archive_name": "node/package-lock.json",
             "package_lock_sha256": node["package_lock_sha256"],
             "installed_lock_sha256": hashlib.sha256(hidden_bytes).hexdigest(),
+        },
+        "openapi_node": {
+            "node_modules_archive_name": "openapi/node_modules",
+            "package_lock_archive_name": "openapi/package-lock.json",
+            "package_lock_sha256": openapi_node["package_lock_sha256"],
+            "installed_lock_sha256": hashlib.sha256(
+                openapi_hidden_bytes
+            ).hexdigest(),
         },
         "swiftpm": {
             "cache_archive_name": "swiftpm/cache",
@@ -4143,6 +4076,21 @@ def copy_sdk_dependencies(
         archive_binding, archive_publication = _sdk_publish_tar(
             bundle_root, archive_path, records,
         )
+        copied_records_after, copied_file_bytes_after = _sdk_sanitized_snapshot(
+            bundle_root, "SDK dependency bundle after archive publication",
+        )
+        if (
+            copied_records_after != records
+            or copied_file_bytes_after != file_bytes
+        ):
+            raise CacheCopyError(
+                "SDK dependency copied inputs changed during retained publication"
+            )
+        final_source_records, _ = _sdk_source_state(sources)
+        if final_source_records != before_records:
+            raise CacheCopyError(
+                "SDK dependency sources changed during retained publication"
+            )
         document = {
             "format": SDK_BUNDLE_FORMAT, "schema_version": 1,
             "archive_id": SDK_BUNDLE_ARCHIVE_ID, "source_disclosure": "withheld",

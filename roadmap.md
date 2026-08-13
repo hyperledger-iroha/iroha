@@ -95,8 +95,9 @@ to:
   output, and parks only volatile state; finality must retire the still-live
   durable output debt. The Broadcast-plus-next-Sign prerequisite now has one
   affine body/WAL authority, an executable standalone next-Vote candidate, and
-  exact two-child coordinator/registry staging. The WAL-ahead Proposal path now
-  consumes the shared output reservation across one LedgerV1 fsync, installs
+  exact two-child coordinator/registry staging. The source-only WAL-ahead
+  Proposal transaction consumes the shared output reservation across one
+  LedgerV1 fsync, installs
   both children, parks the Broadcast only in volatile state, leaves the next
   Sign Ready, and commits control plus chunks atomically. Recovered Prepare
   votes use the same two-child fsync without Proposal output ownership, leaving
@@ -117,8 +118,9 @@ to:
   output and recovered restart output; the latter remains bound to the exact
   body-store and output-guard owner, is restricted to the WAL-ahead
   `BroadcastAndSign` shape, and returns its opaque authority on capacity/abort.
-  Wire the initial `ProposalPrepareWal` publication before wiring recovered
-  Sign into the runner;
+  This cold Proposal payload/chunk/two-carrier machinery is not yet reachable
+  from production runner settlement or refanout. Wire the initial
+  `ProposalPrepareWal` publication before wiring recovered Sign into the runner;
   do not route either shape through the bounded single-Broadcast cut. The
   runner's freshly opened body store must first enter a
   move-only quarantine that rejects any already promoted, rejected, or retired
@@ -940,6 +942,13 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
+A fresh source-budget run over the clean merged `e1ad95b535` tree inspected
+7,479 paths with 208 exceptions and counted 5,087,144 Rust lines. It reports
+eight findings, including 72,541 lines above the 5,014,603 ratchet; another
+526,608 lines would be required to reach the 4,560,536 objective. The separate
+generic lifecycle-coordinator cutover receives no multilane credit toward
+either reduction. Source-budget closure therefore remains open.
+
 Historical autonomous recovery now uses one bounded canonical namespace
 scanner across startup replay binding, disk accounting, and lane-geometry
 reconstruction. It identity-binds the exact nested directory and its records,
@@ -958,7 +967,7 @@ modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
 SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The separate canonical production module/test TSV has SHA-256
-`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`;
+`e331947691b76e5b15ca2b34ba31ce3803ea91a80147844612fb554d5cdf8403`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
@@ -987,17 +996,31 @@ correspondence plus drain/restart/liveness evidence remain mandatory.
 The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
-its grouped and diagnostics suite-source manifests hash to
-`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
-and
-`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
 `60`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
-remains open under `G-SDK`.
+remains open under `G-SDK`. Both live tracked source-closure resolvers currently
+pass and enumerate 1,353 grouped records and 1,352 diagnostics records. The
+mutable suite-source SHA-256 values are
+`14ad494409a2d93515037200a8e6bf1c8b60ec621ca88b450eca081dff9c148c`
+and `849735aa813d495fa02b6f083d101a94e0b2d8958c8269bea23fc54d142f8cec`.
+The
+diagnostics runner inventories Rust `14`, Python `121`, JavaScript
+source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41` tests. Its
+Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
+consumer is bound directly by the release runner and receipt. The
+receipt-required legacy-version-before-signing regression preserves the exact
+854-production-test and 525-G-UNIT-test counts. Rust's separated client test
+module covers both complete endpoint-payload swaps while retaining its
+14-test count, so the API-separation source gap is closed. This is
+mutable-source inventory consistency, not deterministic regeneration, SDK
+execution, or immutable-candidate evidence. The five checked-in OpenAPI
+artifacts remain dirty and unsigned. Exact-five replay is source- and
+receipt-bound to the protected schema-v3 OpenAPI Node closure, but immutable
+candidate execution remains unclaimed.
 
 The in-flight carrier formal corpus is now bound to the versions that
 production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
@@ -1067,16 +1090,18 @@ The remaining work is evidence-driven and must stay in order:
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 55 negative controls,
   fixture SHA-256
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
-  grouped/diagnostics suite-source manifest SHA-256 values
-  `92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
-  and
-  `c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`,
-  and wire-TSV SHA-256
+  grouped/diagnostics suite-source manifests from the exact immutable
+  candidate, and wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
   Swift `4`, Kotlin `6`, and Java `5` tests. The predecessor fixture's direct
   subset results are not an archived all-surface replay and do not attest this
-  corpus; the aggregate source/distribution harness remains required.
+  corpus; the aggregate source/distribution harness remains required. The
+  separate diagnostics harness inventories Rust `14`, Python `121`, JavaScript
+  `88`, Swift `33`, Kotlin `42`, and Java `41`; these mutable source counts are
+  not receipts. Exact-five replay is source- and receipt-bound to the protected
+  schema-v3 OpenAPI Node closure, but do not promote this gate from the dirty
+  unsigned artifacts without immutable-candidate execution.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating

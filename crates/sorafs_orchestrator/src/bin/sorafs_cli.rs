@@ -1,5 +1,6 @@
 //! Aggregated CLI entry point for SoraFS packaging helpers.
 #![allow(unexpected_cfgs)]
+#[path = "sorafs_cli/pdp.rs"]
 mod pdp;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -909,7 +910,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         discovery_json.insert("warning".into(), Value::from(err.clone()));
     }
     receipt.insert("peer_discovery".into(), Value::Object(discovery_json));
-
     receipt.insert(
         "provider_ingest".into(),
         Value::Object(Map::from_iter([

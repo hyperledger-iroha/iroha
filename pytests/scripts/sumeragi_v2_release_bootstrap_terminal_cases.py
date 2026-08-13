@@ -802,6 +802,11 @@ def test_bootstrap_protected_validation_accepts_real_terminal_receipt(
     )
     assert publication.returncode == 0, publication.stderr
     receipt_before = terminal_output.read_bytes()
+    private_sdk_manifest = (
+        bootstrap_evidence / "sdk-dependency-bundle-manifest.json"
+    )
+    assert private_sdk_manifest.is_file()
+    private_sdk_manifest.unlink()
     for log_name in ("runner-stdout.log", "runner-stderr.log"):
         (bootstrap_evidence / log_name).chmod(0o400)
 

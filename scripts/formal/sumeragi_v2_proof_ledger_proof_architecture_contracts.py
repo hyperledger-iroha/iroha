@@ -1,5 +1,31 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+
+def _promotion_target_invocation(
+    contract: PromotionProofTargetContract, start_line: int, end_line: int
+) -> list[str]:
+    """Return the exact code-owned TLAPM argument vector for one target."""
+
+    # Pinned tlapm_args.ml defines --toolbox START END as an inclusive locus
+    # selection.  Pinned tlapm_lib.ml retains an obligation only when its whole
+    # start/stop locus lies inside that interval; --strict exits 12 when an
+    # explicit selection contains no obligations.
+    return [
+        "--toolbox",
+        str(start_line),
+        str(end_line),
+        "--strict",
+        "--nofp",
+        "--threads",
+        "1",
+        "--cache-dir",
+        _formal_evidence_logical_path(
+            "tlaps-cache", "targets", contract.obligation_id
+        ),
+        f"{contract.provider_module}.tla",
+    ]
+
+
 ASYNC_STRONG_TYPE_INVARIANT_EXACT_BODY = (
     "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
     "/\\ AsyncProducerTypeInvariant "

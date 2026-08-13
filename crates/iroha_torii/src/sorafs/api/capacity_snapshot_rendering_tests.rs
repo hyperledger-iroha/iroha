@@ -51,54 +51,19 @@ fn snapshot_to_json_renders_counts() {
     };
     let json = snapshot_to_json(snapshot, DEFAULT_LIST_LIMIT).expect("serialize snapshot");
     let map = json.as_object().expect("json object");
-    assert_eq!(
-        map.get("declaration_count").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(map.get("ledger_count").and_then(Value::as_u64), Some(1));
-    assert_eq!(
-        map.get("credit_ledger_count").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(map.get("dispute_count").and_then(Value::as_u64), Some(0));
-    assert_eq!(
-        map.get("returned_declaration_count")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        map.get("returned_ledger_count").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        map.get("returned_credit_ledger_count")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        map.get("returned_dispute_count").and_then(Value::as_u64),
-        Some(0)
-    );
-    assert_eq!(
-        map.get("limit").and_then(Value::as_u64),
-        Some(DEFAULT_LIST_LIMIT as u64)
-    );
-    assert_eq!(
-        map.get("truncated_declarations").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        map.get("truncated_fee_ledger").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        map.get("truncated_credit_ledger").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        map.get("truncated_disputes").and_then(Value::as_bool),
-        Some(false)
-    );
+    assert_eq!(map.json_u64(&["declaration_count"]), Some(1));
+    assert_eq!(map.json_u64(&["ledger_count"]), Some(1));
+    assert_eq!(map.json_u64(&["credit_ledger_count"]), Some(1));
+    assert_eq!(map.json_u64(&["dispute_count"]), Some(0));
+    assert_eq!(map.json_u64(&["returned_declaration_count"]), Some(1));
+    assert_eq!(map.json_u64(&["returned_ledger_count"]), Some(1));
+    assert_eq!(map.json_u64(&["returned_credit_ledger_count"]), Some(1));
+    assert_eq!(map.json_u64(&["returned_dispute_count"]), Some(0));
+    assert_eq!(map.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
+    assert_eq!(map.json_bool(&["truncated_declarations"]), Some(false));
+    assert_eq!(map.json_bool(&["truncated_fee_ledger"]), Some(false));
+    assert_eq!(map.json_bool(&["truncated_credit_ledger"]), Some(false));
+    assert_eq!(map.json_bool(&["truncated_disputes"]), Some(false));
     assert!(!map.contains_key("local_usage"));
     assert!(map.get("disputes").is_some());
     assert!(map.get("credit_ledger").is_some());

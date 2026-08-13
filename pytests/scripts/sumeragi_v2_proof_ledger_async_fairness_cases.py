@@ -75,7 +75,7 @@
             "pending-tip recovery must wait only for the lesser of its remaining deadline",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs",
             "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
             "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
             "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",

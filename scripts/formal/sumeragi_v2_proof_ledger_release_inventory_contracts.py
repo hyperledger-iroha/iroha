@@ -232,9 +232,9 @@ def _production_liveness_release_inventory_errors(
     canonical_sdk_diagnostics_suites = (
         ("python", 121),
         ("javascript", 88),
-        ("swift", 17),
-        ("kotlin", 26),
-        ("java", 24),
+        ("swift", 33),
+        ("kotlin", 42),
+        ("java", 41),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -806,7 +806,11 @@ def _production_liveness_release_inventory_errors(
             successor_adapter_path.relative_to(repo_root).as_posix(),
             errors,
             "successor parent-binding regression source",
-            expanded_components=("tests/v2_adapter_activation_context.rs",),
+            expanded_components=(
+                "tests/v2_adapter_activation_context.rs",
+                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs",
+                "v2_adapter_inline_ingress_authentication_tests.rs",
+            ),
         )
         for test_name, expected_sha256 in _SUCCESSOR_PARENT_BINDING_TEST_SHA256.items():
             successor_test = _require_rust_item(
@@ -1593,11 +1597,6 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: Taira receipt tuple must equal the exact "
                     "six-test runner inventory"
                 )
-            if receipt_source.splitlines().count('                    "state::",') != 1:
-                errors.append(
-                    f"{receipt_path}: canonical receipt inventory parser must admit "
-                    "the exact state module namespace"
-                )
             expected_receipt_components = (
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py",
                 "write_sumeragi_v2_release_receipt_corridor_log.py",
@@ -1616,10 +1615,10 @@ def _production_liveness_release_inventory_errors(
                     "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "f5c4e3bf8d8a86890abba38f559058df676e5a311aacead265ce0f999d6395bd"
+                    "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "0cc7e2a43479fb27305974559c331d4494df161cfc7c75fe9c51f324b09e058a"
+                    "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
                     "f75a5f2df901408d028605ab11b09f01a77853ecd27deb10a6cdfbd08dda5bed"
@@ -1738,6 +1737,7 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: formal receipt functions must remain isolated "
                     "in the declared component"
                 )
+            receipt_contract_source_parts = [receipt_source]
             for component_name in expected_receipt_components:
                 component_path = receipt_path.with_name(component_name)
                 if component_path.is_symlink() or not component_path.is_file():
@@ -1747,8 +1747,9 @@ def _production_liveness_release_inventory_errors(
                     )
                     continue
                 try:
+                    component_source = component_path.read_text(encoding="utf-8")
                     component_tree = ast.parse(
-                        component_path.read_text(encoding="utf-8"),
+                        component_source,
                         filename=str(component_path),
                     )
                 except (OSError, UnicodeDecodeError, SyntaxError) as error:
@@ -1757,6 +1758,7 @@ def _production_liveness_release_inventory_errors(
                         f"{error}"
                     )
                     continue
+                receipt_contract_source_parts.append(component_source)
                 component_symbols = tuple(
                     statement.name
                     for statement in component_tree.body
@@ -1773,6 +1775,14 @@ def _production_liveness_release_inventory_errors(
                         f"{component_path}: release receipt component SHA-256 must "
                         f"equal {expected_receipt_component_sha256[component_name]}"
                     )
+            receipt_contract_source = "\n".join(receipt_contract_source_parts)
+            if receipt_contract_source.splitlines().count(
+                '                    "state::",'
+            ) != 1:
+                errors.append(
+                    f"{receipt_path}: canonical receipt inventory parser must admit "
+                    "the exact state module namespace"
+                )
             expected_receipt_route = (
                 "if module in _DATA_MODEL_PRODUCTION_MODULES:\n"
                 "        return (\n"
@@ -1780,7 +1790,7 @@ def _production_liveness_release_inventory_errors(
                 '            f"{module} -- --test-threads=1"\n'
                 "        )"
             )
-            if receipt_source.count(expected_receipt_route) != 1:
+            if receipt_contract_source.count(expected_receipt_route) != 1:
                 errors.append(
                     f"{receipt_path}: production data-model receipt legs must execute "
                     "against the iroha_data_model library"
@@ -1792,7 +1802,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "d652f4c4c24b0d333ed76c1f07ff657d9fdd9c843f3082f18f4e63504d1019e7"
+            "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
         ),
     }
     expected_bootstrap_component_symbols = {

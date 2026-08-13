@@ -1926,6 +1926,7 @@ mod tests {
             genesis_key.public_key(),
             bundle.path(),
             GENESIS_EXPECTED_HASH_PLACEHOLDER,
+            published_private_key_rendering(taira),
         )
         .expect("write every Taira peer config alias");
 
@@ -2064,6 +2065,7 @@ mod tests {
             genesis_key.public_key(),
             bundle.path(),
             GENESIS_EXPECTED_HASH_PLACEHOLDER,
+            published_private_key_rendering(taira),
         )
         .expect("write every Taira peer config alias");
         let _taira_chain = ChainDiscriminantGuard::enter(discriminant);

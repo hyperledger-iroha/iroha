@@ -1,5 +1,38 @@
 // Appeal-finance, privacy-aggregate, and publication endpoint regressions.
 
+fn appeal_finance_settlement_receipt_fixture() -> SoraFsAppealFinanceSettlementReceiptV1 {
+    SoraFsAppealFinanceSettlementReceiptV1 {
+        version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+        receipt_id: [0x52; 16],
+        case_id: "case-42".to_string(),
+        round_id: Some("round-1".to_string()),
+        generated_at_unix_ms: 1_800_000_032_000,
+        finalized_block_height: 42,
+        finalized_block_hash: [0x43; 32],
+        appeal_finance_config_version: "baseline-v1".to_string(),
+        appeal_finance_policy_digest: [0x44; 32],
+        outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
+        escrow_id_hex: "11".repeat(32),
+        payer_account: "payer-account".to_string(),
+        destination_account: "escrow-account".to_string(),
+        release_authority_account: Some("release-authority".to_string()),
+        submitted_step: "drawdown_non_refund".to_string(),
+        required_authority: "release-authority".to_string(),
+        amount_xor: "420".parse().expect("canonical XOR amount"),
+        tx_hash_hex: "22".repeat(32),
+        reconciliation_digest_hex: "33".repeat(32),
+        reconciliation_status: "settled".to_string(),
+        observed_lifecycle_status: "drawn_down".to_string(),
+        observed_remaining_xor: "0".parse().expect("canonical XOR amount"),
+        deposit_xor: "420".parse().expect("canonical XOR amount"),
+        refund_xor: "0".parse().expect("canonical XOR amount"),
+        treasury_xor: "210".parse().expect("canonical XOR amount"),
+        held_xor: "210".parse().expect("canonical XOR amount"),
+        panel_size: 7,
+        configured_signer_count: 1,
+    }
+}
+
 #[test]
 fn appeal_pricing_quote_uses_baseline_config() {
     let policy = baseline_appeal_finance_runtime_policy();
@@ -16,24 +49,15 @@ fn appeal_pricing_quote_uses_baseline_config() {
     let value = appeal_pricing_quote_json(&policy, input, &quote);
     let deposit = quote.deposit_xor.to_string();
 
-    assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
-    assert_eq!(value.get("urgency").and_then(Value::as_str), Some("normal"));
-    assert_eq!(value.get("panel_size").and_then(Value::as_u64), Some(7));
+    assert_eq!(value.json_str(&["class"]), Some("content"));
+    assert_eq!(value.json_str(&["urgency"]), Some("normal"));
+    assert_eq!(value.json_u64(&["panel_size"]), Some(7));
     assert_eq!(
-        value.get("pricing_config_version").and_then(Value::as_str),
+        value.json_str(&["pricing_config_version"]),
         Some(config.version())
     );
-    assert_eq!(
-        value.get("deposit_xor").and_then(Value::as_str),
-        Some(deposit.as_str())
-    );
-    assert!(
-        value
-            .get("breakdown")
-            .and_then(|breakdown| breakdown.get("raw_deposit_xor"))
-            .and_then(Value::as_str)
-            .is_some()
-    );
+    assert_eq!(value.json_str(&["deposit_xor"]), Some(deposit.as_str()));
+    assert!(value.json_str(&["breakdown", "raw_deposit_xor"]).is_some());
 }
 
 #[test]
@@ -63,82 +87,56 @@ fn appeal_pricing_status_marks_deposit_builder_and_publish_flows_enabled() {
         },
     );
 
+    assert_eq!(value.json_str(&["pricing_api"]), Some("enabled"));
+    assert_eq!(value.json_str(&["quote_api"]), Some("enabled"));
     assert_eq!(
-        value.get("pricing_api").and_then(Value::as_str),
-        Some("enabled")
-    );
-    assert_eq!(
-        value.get("quote_api").and_then(Value::as_str),
-        Some("enabled")
-    );
-    assert_eq!(
-        value.get("deposit_api").and_then(Value::as_str),
+        value.json_str(&["deposit_api"]),
         Some("enabled_canonical_auth_durable_finalized_asset_lock_forwarder_status_confirmation")
     );
+    assert_eq!(value.json_str(&["settlement_plan_api"]), Some("enabled"));
     assert_eq!(
-        value.get("settlement_plan_api").and_then(Value::as_str),
-        Some("enabled")
-    );
-    assert_eq!(
-        value
-            .get("settlement_execution_api")
-            .and_then(Value::as_str),
+        value.json_str(&["settlement_execution_api"]),
         Some("enabled_canonical_auth_plan_only_durable_forwarder_handoff")
     );
     assert_eq!(
-        value
-            .get("settlement_reconciliation_api")
-            .and_then(Value::as_str),
+        value.json_str(&["settlement_reconciliation_api"]),
         Some("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest")
     );
     assert_eq!(
-        value
-            .get("settlement_submission_api")
-            .and_then(Value::as_str),
+        value.json_str(&["settlement_submission_api"]),
         Some("enabled_canonical_auth_runtime_signer_durable_finalized_next_step_forwarder")
     );
     assert_eq!(
-        value
-            .get("settlement_receipt_publication")
-            .and_then(Value::as_str),
+        value.json_str(&["settlement_receipt_publication"]),
         Some("enabled_governance_dag_after_finalized_commit")
     );
     assert_eq!(
-        value
-            .get("settlement_receipt_dashboard_api")
-            .and_then(Value::as_str),
+        value.json_str(&["settlement_receipt_dashboard_api"]),
         Some("enabled_local_publish_index")
     );
+    assert_eq!(value.json_str(&["disbursement_plan_api"]), Some("enabled"));
     assert_eq!(
-        value.get("disbursement_plan_api").and_then(Value::as_str),
-        Some("enabled")
-    );
-    assert_eq!(
-        value.get("report_publication").and_then(Value::as_str),
+        value.json_str(&["report_publication"]),
         Some("enabled_local_governance_dag")
     );
     assert_eq!(
-        value
-            .get("weekly_rollup_publication")
-            .and_then(Value::as_str),
+        value.json_str(&["weekly_rollup_publication"]),
         Some("enabled_local_governance_dag")
     );
     assert_eq!(
-        value
-            .get("weekly_rollup_dashboard_api")
-            .and_then(Value::as_str),
+        value.json_str(&["weekly_rollup_dashboard_api"]),
         Some("enabled_local_publish_index")
     );
     assert_eq!(
-        value.get("report_api").and_then(Value::as_str),
+        value.json_str(&["report_api"]),
         Some("enabled_canonical_auth_local_governance_dag")
     );
     assert_eq!(
-        value.get("weekly_rollup_api").and_then(Value::as_str),
+        value.json_str(&["weekly_rollup_api"]),
         Some("enabled_canonical_auth_local_governance_dag")
     );
     assert_eq!(
-        value.get("settlement_processor").and_then(Value::as_str),
+        value.json_str(&["settlement_processor"]),
         Some("enabled_durable_finalized_ledger_reconciliation")
     );
 }
@@ -148,15 +146,9 @@ async fn appeal_pricing_handlers_return_baseline_quote_and_status() {
     let app = mk_app_state_for_tests();
     let config_response = handle_get_sorafs_appeal_pricing_config(State(app.clone())).await;
     assert_eq!(config_response.status(), StatusCode::OK);
-    let config_body = body::to_bytes(config_response.into_body(), usize::MAX)
-        .await
-        .expect("collect pricing config body");
-    let config_value: Value =
-        norito::json::from_slice(&config_body).expect("decode pricing config body");
+    let config_value = api_test_response_json(config_response).await;
     assert_eq!(
-        config_value
-            .get("appeal_finance_policy_source")
-            .and_then(Value::as_str),
+        config_value.json_str(&["appeal_finance_policy_source"]),
         Some(APPEAL_FINANCE_CONFIG_SOURCE_V1)
     );
     assert!(
@@ -176,85 +168,49 @@ async fn appeal_pricing_handlers_return_baseline_quote_and_status() {
     let quote_response =
         handle_post_sorafs_appeal_pricing_quote(State(app.clone()), JsonOnly(quote_request)).await;
     assert_eq!(quote_response.status(), StatusCode::OK);
-    let quote_body = body::to_bytes(quote_response.into_body(), usize::MAX)
-        .await
-        .expect("collect pricing quote body");
-    let quote_value: Value =
-        norito::json::from_slice(&quote_body).expect("decode pricing quote body");
-    assert_eq!(
-        quote_value.get("class").and_then(Value::as_str),
-        Some("fraud")
-    );
-    assert_eq!(
-        quote_value.get("urgency").and_then(Value::as_str),
-        Some("high")
-    );
-    assert_eq!(
-        quote_value.get("panel_size").and_then(Value::as_u64),
-        Some(7)
-    );
-    assert!(
-        quote_value
-            .get("deposit_xor")
-            .and_then(Value::as_str)
-            .is_some()
-    );
+    let quote_value = api_test_response_json(quote_response).await;
+    assert_eq!(quote_value.json_str(&["class"]), Some("fraud"));
+    assert_eq!(quote_value.json_str(&["urgency"]), Some("high"));
+    assert_eq!(quote_value.json_u64(&["panel_size"]), Some(7));
+    assert!(quote_value.json_str(&["deposit_xor"]).is_some());
 
     let status_response = handle_get_sorafs_appeal_pricing_status(State(app)).await;
     assert_eq!(status_response.status(), StatusCode::OK);
-    let status_body = body::to_bytes(status_response.into_body(), usize::MAX)
-        .await
-        .expect("collect pricing status body");
-    let status_value: Value =
-        norito::json::from_slice(&status_body).expect("decode pricing status body");
+    let status_value = api_test_response_json(status_response).await;
     assert_eq!(
-        status_value.get("deposit_api").and_then(Value::as_str),
+        status_value.json_str(&["deposit_api"]),
         Some("enabled_canonical_auth_durable_finalized_asset_lock_forwarder_status_confirmation")
     );
     assert_eq!(
-        status_value
-            .get("settlement_plan_api")
-            .and_then(Value::as_str),
+        status_value.json_str(&["settlement_plan_api"]),
         Some("enabled")
     );
     assert_eq!(
-        status_value
-            .get("settlement_execution_api")
-            .and_then(Value::as_str),
+        status_value.json_str(&["settlement_execution_api"]),
         Some("enabled_canonical_auth_plan_only_durable_forwarder_handoff")
     );
     assert_eq!(
-        status_value
-            .get("settlement_reconciliation_api")
-            .and_then(Value::as_str),
+        status_value.json_str(&["settlement_reconciliation_api"]),
         Some("enabled_canonical_auth_runtime_asset_lock_reconciliation_digest")
     );
     assert_eq!(
-        status_value
-            .get("settlement_submission_api")
-            .and_then(Value::as_str),
+        status_value.json_str(&["settlement_submission_api"]),
         Some("enabled_canonical_auth_runtime_signer_durable_finalized_next_step_forwarder")
     );
     assert_eq!(
-        status_value
-            .get("settlement_receipt_publication")
-            .and_then(Value::as_str),
+        status_value.json_str(&["settlement_receipt_publication"]),
         Some("enabled_governance_dag_after_finalized_commit")
     );
     assert_eq!(
-        status_value
-            .get("settlement_receipt_dashboard_api")
-            .and_then(Value::as_str),
+        status_value.json_str(&["settlement_receipt_dashboard_api"]),
         Some("enabled_local_publish_index")
     );
     assert_eq!(
-        status_value
-            .get("weekly_rollup_publication")
-            .and_then(Value::as_str),
+        status_value.json_str(&["weekly_rollup_publication"]),
         Some("enabled_local_governance_dag")
     );
     assert_eq!(
-        status_value.get("report_api").and_then(Value::as_str),
+        status_value.json_str(&["report_api"]),
         Some("enabled_canonical_auth_local_governance_dag")
     );
 }
@@ -273,14 +229,10 @@ async fn appeal_pricing_quote_handler_rejects_invalid_panel_size() {
             .await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect pricing error body");
-    let value: Value = norito::json::from_slice(&body).expect("decode pricing error body");
+    let value = api_test_response_json(response).await;
     assert!(
         value
-            .get("error")
-            .and_then(Value::as_str)
+            .json_str(&["error"])
             .is_some_and(|error| error.contains("panel"))
     );
 }
@@ -298,20 +250,14 @@ async fn appeal_finance_settle_handler_returns_baseline_plan() {
     .await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect settlement body");
-    let value: Value = norito::json::from_slice(&body).expect("decode settlement body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.settlement.v1")
     );
-    assert_eq!(
-        value.get("outcome").and_then(Value::as_str),
-        Some("overturn")
-    );
-    assert_eq!(value.get("refund_xor").and_then(Value::as_str), Some("400"));
-    assert_eq!(value.get("treasury_xor").and_then(Value::as_str), Some("0"));
+    assert_eq!(value.json_str(&["outcome"]), Some("overturn"));
+    assert_eq!(value.json_str(&["refund_xor"]), Some("400"));
+    assert_eq!(value.json_str(&["treasury_xor"]), Some("0"));
 }
 
 #[tokio::test]
@@ -338,27 +284,15 @@ async fn appeal_finance_disburse_handler_returns_juror_plan() {
     .await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect disbursement body");
-    let value: Value = norito::json::from_slice(&body).expect("decode disbursement body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.disbursement.v1")
     );
+    assert_eq!(value.json_u64(&["rewards", "attending"]), Some(6));
     assert_eq!(
         value
-            .get("rewards")
-            .and_then(|rewards| rewards.get("attending"))
-            .and_then(Value::as_u64),
-        Some(6)
-    );
-    assert_eq!(
-        value
-            .get("rewards")
-            .and_then(|rewards| rewards.get("no_shows"))
-            .and_then(Value::as_array)
-            .and_then(|no_shows| no_shows.first())
+            .json_first(&["rewards", "no_shows"])
             .and_then(Value::as_str),
         Some(no_show.as_str())
     );
@@ -687,10 +621,7 @@ fn appeal_finance_request_dtos_enforce_xor_scale_at_json_boundary() {
             assert_eq!(decoded.deposit_xor.to_string(), "0.000000001");
             let encoded = json::to_vec(&decoded).expect("re-encode canonical XOR request");
             let value: Value = json::from_slice(&encoded).expect("decode re-encoded XOR request");
-            assert_eq!(
-                value.get("deposit_xor").and_then(Value::as_str),
-                Some("0.000000001")
-            );
+            assert_eq!(value.json_str(&["deposit_xor"]), Some("0.000000001"));
             assert!(
                 json::from_slice::<$ty>($invalid.as_bytes()).is_err(),
                 "scale-ten XOR request must fail during JSON decoding"
@@ -747,56 +678,41 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
     let response = post_appeal_finance_deposit(app.clone(), &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect deposit submission body");
-    let value: Value = norito::json::from_slice(&body).expect("decode deposit submission body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.deposit_submission.v1")
     );
+    assert_eq!(value.json_str(&["status"]), Some("durably_enqueued"));
     assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("durably_enqueued")
-    );
-    assert_eq!(
-        value.get("ledger_mutation").and_then(Value::as_str),
+        value.json_str(&["ledger_mutation"]),
         Some("durable_finalized_ledger_forwarder")
     );
     assert_hex_32(
         value
-            .get("operation_id_hex")
-            .and_then(Value::as_str)
+            .json_str(&["operation_id_hex"])
             .expect("durable operation id"),
     );
     assert!(value.get("tx_instructions").is_none());
     let payer_account = auth.provider.account.to_string();
     assert_eq!(
-        value.get("payer_account").and_then(Value::as_str),
+        value.json_str(&["payer_account"]),
         Some(payer_account.as_str())
     );
     assert_eq!(
-        value.get("asset_definition_id").and_then(Value::as_str),
+        value.json_str(&["asset_definition_id"]),
         Some(asset_definition_id.as_str())
     );
     assert_eq!(
-        value.get("destination_account").and_then(Value::as_str),
+        value.json_str(&["destination_account"]),
         Some(destination_account.as_str())
     );
     assert_eq!(
-        value
-            .get("release_authority_account")
-            .and_then(Value::as_str),
+        value.json_str(&["release_authority_account"]),
         Some(release_authority_account.as_str())
     );
-    assert_eq!(
-        value.get("expires_at_ms").and_then(Value::as_u64),
-        expires_at_ms
-    );
-    assert_eq!(
-        value.get("deposit_xor").and_then(Value::as_str),
-        Some("420")
-    );
+    assert_eq!(value.json_u64(&["expires_at_ms"]), expires_at_ms);
+    assert_eq!(value.json_str(&["deposit_xor"]), Some("420"));
     let submitter = app
         .sorafs_appeal_settlement_submitter
         .as_ref()
@@ -829,24 +745,20 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
     assert_eq!(open.evidence_hashes.len(), 1);
     let escrow_id_hex = expected.escrow_id.as_hash().to_string();
     assert_eq!(
-        value.get("escrow_id_hex").and_then(Value::as_str),
+        value.json_str(&["escrow_id_hex"]),
         Some(escrow_id_hex.as_str())
     );
 
     let replay = post_appeal_finance_deposit(app.clone(), &auth.provider, replay_body).await;
     assert_eq!(replay.status(), StatusCode::ACCEPTED);
-    let replay_body = body::to_bytes(replay.into_body(), usize::MAX)
-        .await
-        .expect("collect replay response");
-    let replay_value: Value =
-        norito::json::from_slice(&replay_body).expect("decode replay response");
+    let replay_value = api_test_response_json(replay).await;
     assert_eq!(
-        replay_value.get("status").and_then(Value::as_str),
+        replay_value.json_str(&["status"]),
         Some("already_durably_enqueued")
     );
     assert_eq!(
-        replay_value.get("operation_id_hex").and_then(Value::as_str),
-        value.get("operation_id_hex").and_then(Value::as_str)
+        replay_value.json_str(&["operation_id_hex"]),
+        value.json_str(&["operation_id_hex"])
     );
 }
 
@@ -934,46 +846,34 @@ fn appeal_finance_deposit_status_json_renders_native_asset_lock_record() {
     let value = appeal_finance_deposit_status_json(&record);
 
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.deposit_status.v1")
     );
     let escrow_id_hex = record.id.as_hash().to_string();
     assert_eq!(
-        value.get("escrow_id_hex").and_then(Value::as_str),
+        value.json_str(&["escrow_id_hex"]),
         Some(escrow_id_hex.as_str())
     );
     let seller_account = auth.provider.account.to_string();
     assert_eq!(
-        value.get("seller_account").and_then(Value::as_str),
+        value.json_str(&["seller_account"]),
         Some(seller_account.as_str())
     );
     let buyer_account = auth.buyer.account.to_string();
     assert_eq!(
-        value.get("buyer_account").and_then(Value::as_str),
+        value.json_str(&["buyer_account"]),
         Some(buyer_account.as_str())
     );
-    assert_eq!(
-        value.get("lifecycle_status").and_then(Value::as_str),
-        Some("locked")
-    );
-    assert_eq!(value.get("kind").and_then(Value::as_str), Some("lock"));
+    assert_eq!(value.json_str(&["lifecycle_status"]), Some("locked"));
+    assert_eq!(value.json_str(&["kind"]), Some("lock"));
     let release_authority_account = release_authority.to_string();
     assert_eq!(
-        value.get("release_authority").and_then(Value::as_str),
+        value.json_str(&["release_authority"]),
         Some(release_authority_account.as_str())
     );
-    assert_eq!(
-        value.get("expires_at_ms").and_then(Value::as_u64),
-        Some(1_800_086_400_000)
-    );
-    assert_eq!(value.get("amount").and_then(Value::as_str), Some("420"));
-    assert_eq!(
-        value
-            .get("evidence_hashes_hex")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(1)
-    );
+    assert_eq!(value.json_u64(&["expires_at_ms"]), Some(1_800_086_400_000));
+    assert_eq!(value.json_str(&["amount"]), Some("420"));
+    assert_eq!(value.json_len(&["evidence_hashes_hex"]), Some(1));
 }
 
 #[tokio::test]
@@ -1053,24 +953,15 @@ async fn appeal_finance_deposit_confirm_endpoint_confirms_runtime_asset_lock() {
     let response = post_appeal_finance_deposit_confirm(app, &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect deposit confirmation body");
-    let value: Value = norito::json::from_slice(&body).expect("decode deposit confirmation body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.deposit_confirmation.v1")
     );
-    assert_eq!(value.get("confirmed").and_then(Value::as_bool), Some(true));
+    assert_eq!(value.json_bool(&["confirmed"]), Some(true));
+    assert_eq!(value.json_str(&["status"]), Some("confirmed"));
     assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("confirmed")
-    );
-    assert_eq!(
-        value
-            .get("ledger_record")
-            .and_then(|record| record.get("lifecycle_status"))
-            .and_then(Value::as_str),
+        value.json_str(&["ledger_record", "lifecycle_status"]),
         Some("locked")
     );
 }
@@ -1095,40 +986,21 @@ async fn appeal_finance_deposit_settle_endpoint_returns_plan_without_signing_pay
     let response = post_appeal_finance_deposit_settle(app, &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect deposit settlement execution body");
-    let value: Value =
-        norito::json::from_slice(&body).expect("decode deposit settlement execution body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.deposit_settlement_execution.v1")
     );
+    assert_eq!(value.json_str(&["status"]), Some("plan_only"));
+    assert_eq!(value.json_str(&["ledger_mutation"]), Some("none"));
+    assert_eq!(value.json_str(&["drawdown_xor"]), Some("210"));
+    assert_eq!(value.json_str(&["cancel_refund_xor"]), Some("210"));
     assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("plan_only")
-    );
-    assert_eq!(
-        value.get("ledger_mutation").and_then(Value::as_str),
-        Some("none")
-    );
-    assert_eq!(
-        value.get("drawdown_xor").and_then(Value::as_str),
-        Some("210")
-    );
-    assert_eq!(
-        value.get("cancel_refund_xor").and_then(Value::as_str),
-        Some("210")
-    );
-    assert_eq!(
-        value
-            .get("requires_multiple_authorities")
-            .and_then(Value::as_bool),
+        value.json_bool(&["requires_multiple_authorities"]),
         Some(false)
     );
     let steps = value
-        .get("tx_steps")
-        .and_then(Value::as_array)
+        .json_array(&["tx_steps"])
         .expect("settlement tx steps");
     assert_eq!(steps.len(), 2);
     assert_eq!(
@@ -1166,18 +1038,11 @@ async fn appeal_finance_deposit_settle_endpoint_builds_refund_only_cancel() {
     let response = post_appeal_finance_deposit_settle(app, &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect refund-only settlement body");
-    let value: Value = norito::json::from_slice(&body).expect("decode refund-only settlement body");
-    assert_eq!(value.get("drawdown_xor").and_then(Value::as_str), Some("0"));
-    assert_eq!(
-        value.get("cancel_refund_xor").and_then(Value::as_str),
-        Some("420")
-    );
+    let value = api_test_response_json(response).await;
+    assert_eq!(value.json_str(&["drawdown_xor"]), Some("0"));
+    assert_eq!(value.json_str(&["cancel_refund_xor"]), Some("420"));
     let steps = value
-        .get("tx_steps")
-        .and_then(Value::as_array)
+        .json_array(&["tx_steps"])
         .expect("refund-only settlement tx steps");
     assert_eq!(steps.len(), 1);
     assert_eq!(
@@ -1207,51 +1072,36 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect settlement submission body");
-    let value: Value = norito::json::from_slice(&body).expect("decode settlement submission body");
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("durably_enqueued")
-    );
-    assert_eq!(
-        value.get("configured_signer_count").and_then(Value::as_u64),
-        Some(1)
-    );
+    let value = api_test_response_json(response).await;
+    assert_eq!(value.json_str(&["status"]), Some("durably_enqueued"));
+    assert_eq!(value.json_u64(&["configured_signer_count"]), Some(1));
     let operation_id = value
-        .get("operation_id_hex")
-        .and_then(Value::as_str)
+        .json_str(&["operation_id_hex"])
         .expect("durable operation id");
     assert_hex_32(operation_id);
-    assert_eq!(value.get("tx_hash_hex").and_then(Value::as_str), None);
+    assert_eq!(value.json_str(&["tx_hash_hex"]), None);
     let step = value
-        .get("submitted_step")
-        .and_then(Value::as_object)
+        .json_object(&["submitted_step"])
         .expect("submitted step");
-    assert_eq!(
-        step.get("action").and_then(Value::as_str),
-        Some("drawdown_non_refund")
-    );
+    assert_eq!(step.json_str(&["action"]), Some("drawdown_non_refund"));
     let provider_account = auth.provider.account.to_string();
     assert_eq!(
-        step.get("required_authority").and_then(Value::as_str),
+        step.json_str(&["required_authority"]),
         Some(provider_account.as_str())
     );
     let reconciliation = value
         .get("reconciliation")
         .expect("submission reconciliation");
     assert_eq!(
-        reconciliation.get("status").and_then(Value::as_str),
+        reconciliation.json_str(&["status"]),
         Some("pending_forwarder_submission")
     );
     assert_appeal_finance_reconciliation_digest_hex(reconciliation);
     let receipt = value
-        .get("settlement_receipt")
-        .and_then(Value::as_object)
+        .json_object(&["settlement_receipt"])
         .expect("settlement receipt state");
     assert_eq!(
-        receipt.get("publication_status").and_then(Value::as_str),
+        receipt.json_str(&["publication_status"]),
         Some("awaiting_finalized_commit")
     );
 }
@@ -1344,24 +1194,15 @@ async fn appeal_finance_deposit_submit_settlement_never_publishes_before_finaliz
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect settlement submission body");
-    let value: Value = norito::json::from_slice(&body).expect("decode settlement submission body");
+    let value = api_test_response_json(response).await;
     let receipt_status = value
-        .get("settlement_receipt")
-        .and_then(Value::as_object)
+        .json_object(&["settlement_receipt"])
         .expect("settlement receipt response");
     assert_eq!(
-        receipt_status
-            .get("publication_status")
-            .and_then(Value::as_str),
+        receipt_status.json_str(&["publication_status"]),
         Some("awaiting_finalized_commit")
     );
-    assert_eq!(
-        receipt_status.get("tx_hash_hex").and_then(Value::as_str),
-        None
-    );
+    assert_eq!(receipt_status.json_str(&["tx_hash_hex"]), None);
 
     let governance_dir = temp_dir.path().join("governance");
     let snapshot = authority_reader
@@ -1373,10 +1214,11 @@ async fn appeal_finance_deposit_submit_settlement_never_publishes_before_finaliz
         .expect("decode typed publication authority");
     assert!(
         authority
-            .get("publish_index")
-            .and_then(|index| index.get("by_payload_kind"))
-            .and_then(|value| value.get("appeal_finance_settlement_receipt"))
-            .and_then(Value::as_array)
+            .json_array(&[
+                "publish_index",
+                "by_payload_kind",
+                "appeal_finance_settlement_receipt"
+            ])
             .is_none_or(Vec::is_empty)
     );
     assert!(
@@ -1407,22 +1249,18 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_reports_missing_submi
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect missing submitter body");
-    let value: Value = norito::json::from_slice(&body).expect("decode missing submitter body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("status").and_then(Value::as_str),
+        value.json_str(&["status"]),
         Some("submitter_not_configured")
     );
-    assert_eq!(value.get("tx_hash_hex").and_then(Value::as_str), None);
+    assert_eq!(value.json_str(&["tx_hash_hex"]), None);
     let step = value
-        .get("submitted_step")
-        .and_then(Value::as_object)
+        .json_object(&["submitted_step"])
         .expect("pending submitter step");
     let provider_account = auth.provider.account.to_string();
     assert_eq!(
-        step.get("required_authority").and_then(Value::as_str),
+        step.json_str(&["required_authority"]),
         Some(provider_account.as_str())
     );
 }
@@ -1454,16 +1292,9 @@ async fn appeal_finance_deposit_submit_settlement_fails_closed_without_runtime_p
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect missing runtime provider body");
-    let value: Value =
-        norito::json::from_slice(&body).expect("decode missing runtime provider body");
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("missing_required_signer")
-    );
-    assert_eq!(value.get("operation_id_hex").and_then(Value::as_str), None);
+    let value = api_test_response_json(response).await;
+    assert_eq!(value.json_str(&["status"]), Some("missing_required_signer"));
+    assert_eq!(value.json_str(&["operation_id_hex"]), None);
 }
 
 #[tokio::test]
@@ -1486,41 +1317,25 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_pending_forwarder_sub
     let response = post_appeal_finance_deposit_reconcile(app, &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect pending reconciliation body");
-    let value: Value = norito::json::from_slice(&body).expect("decode pending reconciliation body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.deposit_settlement_reconciliation.v1")
     );
     assert_eq!(
-        value.get("status").and_then(Value::as_str),
+        value.json_str(&["status"]),
         Some("pending_forwarder_submission")
     );
+    assert_eq!(value.json_bool(&["reconciled"]), Some(false));
     assert_eq!(
-        value.get("reconciled").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        value
-            .get("expected_final_lifecycle_status")
-            .and_then(Value::as_str),
+        value.json_str(&["expected_final_lifecycle_status"]),
         Some("cancelled")
     );
     assert_eq!(
-        value
-            .get("observed_lifecycle_status")
-            .and_then(Value::as_str),
+        value.json_str(&["observed_lifecycle_status"]),
         Some("locked")
     );
-    assert_eq!(
-        value
-            .get("mismatches")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(0)
-    );
+    assert_eq!(value.json_len(&["mismatches"]), Some(0));
     assert_appeal_finance_reconciliation_digest_hex(&value);
 }
 
@@ -1555,25 +1370,10 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settl
     .await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect in-progress reconciliation body");
-    let value: Value =
-        norito::json::from_slice(&body).expect("decode in-progress reconciliation body");
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("awaiting_refund_cancel")
-    );
-    assert_eq!(
-        value.get("reconciled").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        value
-            .get("observed_remaining_amount")
-            .and_then(Value::as_str),
-        Some("210")
-    );
+    let value = api_test_response_json(response).await;
+    assert_eq!(value.json_str(&["status"]), Some("awaiting_refund_cancel"));
+    assert_eq!(value.json_bool(&["reconciled"]), Some(false));
+    assert_eq!(value.json_str(&["observed_remaining_amount"]), Some("210"));
     let in_progress_digest = assert_appeal_finance_reconciliation_digest_hex(&value).to_owned();
 
     cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
@@ -1586,24 +1386,14 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settl
     .await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect settled reconciliation body");
-    let value: Value = norito::json::from_slice(&body).expect("decode settled reconciliation body");
-    assert_eq!(value.get("status").and_then(Value::as_str), Some("settled"));
-    assert_eq!(value.get("reconciled").and_then(Value::as_bool), Some(true));
+    let value = api_test_response_json(response).await;
+    assert_eq!(value.json_str(&["status"]), Some("settled"));
+    assert_eq!(value.json_bool(&["reconciled"]), Some(true));
     assert_eq!(
-        value
-            .get("observed_lifecycle_status")
-            .and_then(Value::as_str),
+        value.json_str(&["observed_lifecycle_status"]),
         Some("cancelled")
     );
-    assert_eq!(
-        value
-            .get("observed_remaining_amount")
-            .and_then(Value::as_str),
-        Some("0")
-    );
+    assert_eq!(value.json_str(&["observed_remaining_amount"]), Some("0"));
     let settled_digest = assert_appeal_finance_reconciliation_digest_hex(&value);
     assert_ne!(settled_digest, in_progress_digest);
 }
@@ -1655,21 +1445,15 @@ async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
     let response = post_appeal_finance_report(app.clone(), &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect report publish body");
-    let value: Value = norito::json::from_slice(&body).expect("decode report publish body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.report.publish.v1")
     );
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("accepted")
-    );
+    assert_eq!(value.json_str(&["status"]), Some("accepted"));
     let report_id_hex = hex::encode(report.report_id);
     assert_eq!(
-        value.get("report_id_hex").and_then(Value::as_str),
+        value.json_str(&["report_id_hex"]),
         Some(report_id_hex.as_str())
     );
 
@@ -1737,23 +1521,13 @@ async fn privacy_aggregate_source_event_endpoint_records_event_for_cycle_publica
     let response = post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect privacy aggregate source-event ingest body");
-    let value: Value =
-        norito::json::from_slice(&body).expect("decode privacy aggregate source-event ingest body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.transparency.privacy_aggregate_source_event.ingest.v1")
     );
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("accepted")
-    );
-    assert_eq!(
-        value.get("event_id").and_then(Value::as_str),
-        Some("privacy-event-a")
-    );
+    assert_eq!(value.json_str(&["status"]), Some("recorded"));
+    assert_eq!(value.json_str(&["event_id"]), Some("privacy-event-a"));
     assert!(value.get("retained_source_event_count").is_none());
     assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
 }
@@ -1770,14 +1544,8 @@ async fn privacy_aggregate_source_event_endpoint_replays_exact_duplicate_event()
 
     let duplicate = post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
     assert_eq!(duplicate.status(), StatusCode::OK);
-    let body = body::to_bytes(duplicate.into_body(), usize::MAX)
-        .await
-        .expect("collect repeated source-event body");
-    let value: Value = norito::json::from_slice(&body).expect("decode repeated source-event body");
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("already_recorded")
-    );
+    let value = api_test_response_json(duplicate).await;
+    assert_eq!(value.json_str(&["status"]), Some("already_recorded"));
     assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
 }
 
@@ -1872,49 +1640,25 @@ async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
     .await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect privacy aggregate publish-due body");
-    let value: Value =
-        norito::json::from_slice(&body).expect("decode privacy aggregate publish-due body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.transparency.privacy_aggregate.publish_due.v1")
     );
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("published")
-    );
-    assert_eq!(value.get("published").and_then(Value::as_bool), Some(true));
+    assert_eq!(value.json_str(&["status"]), Some("published"));
+    assert_eq!(value.json_bool(&["published"]), Some(true));
     assert!(value.get("retained_source_event_count").is_none());
-    let window = value
-        .get("window")
-        .and_then(Value::as_object)
-        .expect("window object");
-    assert_eq!(
-        window.get("cycle_start_unix").and_then(Value::as_u64),
-        Some(100)
-    );
-    assert_eq!(
-        window.get("cycle_end_unix").and_then(Value::as_u64),
-        Some(200)
-    );
+    let window = value.json_object(&["window"]).expect("window object");
+    assert_eq!(window.json_u64(&["cycle_start_unix"]), Some(100));
+    assert_eq!(window.json_u64(&["cycle_end_unix"]), Some(200));
     let publication = value
-        .get("publication")
-        .and_then(Value::as_object)
+        .json_object(&["publication"])
         .expect("publication summary");
-    assert_eq!(
-        publication.get("entry_count").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        publication.get("proof_count").and_then(Value::as_u64),
-        Some(1)
-    );
+    assert_eq!(publication.json_u64(&["entry_count"]), Some(1));
+    assert_eq!(publication.json_u64(&["proof_count"]), Some(1));
     assert!(
         publication
-            .get("block_hash_hex")
-            .and_then(Value::as_str)
+            .json_str(&["block_hash_hex"])
             .is_some_and(|hash| hash.len() == 64)
     );
     assert_governance_publish_provenance(
@@ -1931,15 +1675,9 @@ async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
     )
     .await;
     assert_eq!(repeat.status(), StatusCode::OK);
-    let body = body::to_bytes(repeat.into_body(), usize::MAX)
-        .await
-        .expect("collect repeated publish-due body");
-    let value: Value = norito::json::from_slice(&body).expect("decode repeated publish-due body");
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("published")
-    );
-    assert_eq!(value.get("published").and_then(Value::as_bool), Some(true));
+    let value = api_test_response_json(repeat).await;
+    assert_eq!(value.json_str(&["status"]), Some("published"));
+    assert_eq!(value.json_bool(&["published"]), Some(true));
 }
 
 #[tokio::test]
@@ -1954,15 +1692,9 @@ async fn privacy_aggregate_publish_due_endpoint_commits_empty_suppression_window
     .await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect no-source publish-due body");
-    let value: Value = norito::json::from_slice(&body).expect("decode no-source publish-due body");
-    assert_eq!(
-        value.get("status").and_then(Value::as_str),
-        Some("all_buckets_suppressed")
-    );
-    assert_eq!(value.get("published").and_then(Value::as_bool), Some(false));
+    let value = api_test_response_json(response).await;
+    assert_eq!(value.json_str(&["status"]), Some("all_buckets_suppressed"));
+    assert_eq!(value.json_bool(&["published"]), Some(false));
 }
 
 #[tokio::test]
@@ -1974,22 +1706,13 @@ async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
     let response = post_appeal_finance_weekly_rollup(app.clone(), &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect weekly rollup publish body");
-    let value: Value = norito::json::from_slice(&body).expect("decode weekly rollup publish body");
+    let value = api_test_response_json(response).await;
     assert_eq!(
-        value.get("schema").and_then(Value::as_str),
+        value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.weekly_rollup.publish.v1")
     );
-    assert_eq!(value.get("cycle").and_then(Value::as_str), Some("2026-W26"));
-    assert_eq!(
-        value
-            .get("source_report_ids_hex")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(1)
-    );
+    assert_eq!(value.json_str(&["cycle"]), Some("2026-W26"));
+    assert_eq!(value.json_len(&["source_report_ids_hex"]), Some(1));
 
     let sources = publication_source_paths_fixture(&app, APPEAL_FINANCE_WEEKLY_ROLLUP_KIND);
     assert_eq!(sources.len(), 1);

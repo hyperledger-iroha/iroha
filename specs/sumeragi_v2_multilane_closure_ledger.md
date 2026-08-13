@@ -70,23 +70,30 @@ execution or release receipts.
   structural production-trace extraction reports no open action name. This is
   a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
   mutation, or cross-tool certificate is claimed.
-- Mutable source-budget checks do not currently report within their configured
-  bounds, so source-budget closure remains a release blocker. The
-  reviewed Rust include topology contains 41 parents and 238 direct entries;
+- A fresh checker run over the clean merged `e1ad95b535` tree inspected 7,479
+  paths with 208 exceptions and counted 5,087,144 Rust lines. It reports eight
+  findings, including a 72,541-line excess over the 5,014,603 ratchet; the
+  4,560,536 objective remains 526,608 lines away. Source-budget closure is
+  therefore a release blocker. The
+  reviewed Rust include topology contains 41 parents and 259 direct entries;
   its canonical payload SHA-256 is
-  `46aaff06ea487b2db81116883c9f1b616b62c8c33d0f1c98fb7e94a9f6e43cd3`.
+  `6f7b2b690cbb8818acec4e0ce1ff15bef6098437b11542944e40b94c8d3dd309`.
   The SDK closure resolver and complete transitive manifests are mutable
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
   distribution source and Kotlin/Java Native model dependencies, are present in
-  the development tree. A temporary private-index audit that represented the
-  intended `javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts` input as
-  tracked produced the exact 1,351-record grouped and 1,350-record diagnostics
-  closures, and the browser JavaScript source and distribution trees match. The
-  real index still leaves that declaration file untracked, so both live resolver
-  checks correctly fail closed. The five checked-in OpenAPI artifacts and
-  immutable-candidate execution evidence remain Open, so SDK and wire closure is
-  not claimed.
+  the development tree. The SoraFS orderbook JavaScript declaration,
+  implementation, and standalone Python module are tracked. Both live resolver
+  checks pass and enumerate exactly 1,353 grouped records and 1,352 diagnostics
+  records. Diagnostics suite counts are Rust 14, Python 121, JavaScript 88,
+  Swift 33, Kotlin 42, and Java 41. Rust's source-separated client controls
+  reject both complete endpoint-payload swaps without changing its 14-test
+  count; the Swift/Kotlin/Java wire suites are diagnostics-runner/receipt-bound.
+  Those are mutable-source inventory results, not SDK execution. The five
+  checked-in OpenAPI artifacts are dirty and unsigned. Exact-five replay is
+  source- and receipt-bound to the protected schema-v3 OpenAPI Node closure,
+  but immutable-candidate execution evidence remains Open, so SDK and wire
+  closure is not claimed.
 
 Every Evidence field and every `G-*` execution or release gate therefore
 remains Open. These source-consistency documentation updates do not promote the
@@ -1574,8 +1581,11 @@ consensus; the static/unit contract must then fail.
 **Evidence:** Open.
 
 **Production map.** Rust client methods live in
-`crates/iroha/src/client.rs`. Swift status/diagnostics methods and models live
-in `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`. Python surfaces live in
+`crates/iroha/src/client.rs`; its source-separated endpoint-parser controls live
+in `crates/iroha/src/client/sumeragi_api_separation_tests.rs`. Swift
+status/diagnostics methods live in
+`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`, while their models live in
+`IrohaSwift/Sources/IrohaSwift/ToriiSumeragiModels.swift`. Python surfaces live in
 `python/iroha_torii_client/client.py` and
 `python/iroha_python/src/iroha_python/client.py`. JavaScript methods live in
 `javascript/iroha_js/src/toriiClient.js` and
@@ -1610,23 +1620,22 @@ Swift tests, Kotlin core-jvm tests, and mirrored Java tests.
 
 The mutable source inventory contains exact diagnostics-parity counts for the
 Rust client (`14`), both Python client layers (`121`), JavaScript source and
-distribution (`88`), Swift (`17`), Kotlin core-jvm (`26`), and mirrored Java
-(`24`). JavaScript uses the dedicated
+distribution (`88`), Swift (`33`), Kotlin core-jvm (`42`), and mirrored Java
+(`41`). JavaScript uses the dedicated
 `sumeragiDiagnosticsContract.test.js` entrypoint instead of a monolithic
 name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
-and Kotlin/Java Native model dependencies. A temporary private-index audit that
-represented `javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts` as tracked
-produced grouped digest
-`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
-and diagnostics digest
-`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
-The two specialized static Python modules are canonically runner-bound and the
-browser distribution matches its source, but the real index still leaves that
-declaration file untracked, so both live resolver checks fail closed. These are
-private-index consistency observations only; stale OpenAPI manifests and
+and Kotlin/Java Native model dependencies. Both live tracked resolver checks
+pass with the exact 1,353-record grouped and 1,352-record diagnostics closures;
+their suite-source digests are recorded under `ML-API-04`. The two specialized
+static Python modules are canonically runner-bound and the browser distribution
+matches its source. The release corridor and receipt bind the Rust wire
+consumer directly; the Swift, Kotlin, and Java wire suites are included in the
+diagnostics runner and its receipt counts. These are mutable-source consistency
+observations only;
+OpenAPI artifacts still awaiting immutable-candidate regeneration and
 missing immutable-candidate source-seal and execution evidence keep the suite
 digest and `G-SDK` release claim ineligible.
 
@@ -1635,7 +1644,12 @@ digest and `G-SDK` release claim ineligible.
 authoritative status claim. This is not a TLA+ invariant: the source-bound
 OpenAPI and SDK endpoint/parser corpus is the authoritative check. Negative
 control `ML-MUT-API-02` aliases the two parsers or response types; a swapped
-payload must then be accepted and the differential contract must fail.
+payload must then be accepted and the differential contract must fail. Its
+source binding covers the Rust client and all six SDK surfaces, including
+full status-for-diagnostics and diagnostics-for-status payload swaps in Rust,
+Kotlin, and the mirrored Java HTTP client. This closes the known Rust source
+gap without changing the counted 14-test Rust diagnostics suite; it does not
+provide immutable-candidate execution evidence.
 
 **Release gates.** `G-SDK` and `G-FINAL`.
 
@@ -1650,10 +1664,11 @@ payload must then be accepted and the differential contract must fail.
 mirrors are distributed across the Python, JavaScript, Swift, Kotlin, and Java
 paths named in `ML-API-02`.
 The mutable transitive closure inventory includes those production mirrors and
-their Kotlin/Java Native dependencies. Cross-SDK accept-set closure remains
-Open until every reviewed input is tracked, both specialized tests have been
-bound into the runner, generated JavaScript has been rebuilt, and one immutable-
-candidate differential run has agreed with Rust.
+their Kotlin/Java Native dependencies. Every reviewed input and both specialized
+static tests are tracked, runner-bound, and represented in the mutable closure;
+the browser JavaScript distribution matches its source. Cross-SDK accept-set
+closure remains Open until the generated artifacts are reproduced from the
+clean immutable candidate and one complete differential run agrees with Rust.
 
 **Closure condition.** Every SDK enforces a tagged phase object; independent
 global, coordinator, and participant views; distinct source-ID and typed
@@ -1702,24 +1717,27 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The current mutable source closure enumerates
-1,351 grouped and 1,350 diagnostics records. The checked-in grouped fixture has
+1,353 grouped and 1,352 diagnostics records. The checked-in grouped fixture has
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
+`14ad494409a2d93515037200a8e6bf1c8b60ec621ca88b450eca081dff9c148c`
 and
-`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
+`849735aa813d495fa02b6f083d101a94e0b2d8958c8269bea23fc54d142f8cec`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
-The live resolver fails closed on untracked reviewed inputs.
+Both live tracked resolver checks pass with 1,353 grouped and 1,352 diagnostics
+records.
 The source-bound corridor now requires two disjoint Rust fixture generations,
 and both JavaScript SDK harnesses require two byte-identical complete
-distribution builds. The OpenAPI gate already regenerates and compares the
-exact five generated artifacts in two independent mirrors. Approved generator
-execution, parity hashes, and one complete immutable-candidate harness replay
-are still pending. Neither the checked-in bytes nor any mutable-development
-digest is a release receipt.
+distribution builds. Exact-five OpenAPI replay is source- and receipt-bound to
+the protected schema-v3 OpenAPI Node closure; it has not run from an immutable
+candidate. The five checked-in OpenAPI artifacts are dirty, unsigned
+development outputs. Approved generator execution, parity hashes, and one
+complete immutable-candidate harness replay are still pending.
+Neither the checked-in bytes nor any mutable-development digest is a release
+receipt.
 
 **Closure condition.** Generate one canonical grouped fixture and negative
 corpus from Rust and consume the exact files in OpenAPI, Python, JavaScript,
@@ -1764,9 +1782,18 @@ mutable-development artifact containing 44 data rows with SHA-256
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The static release binding directly seals its header and all three row keys,
 the Rust generator output seam, the Rust `include_str!` consumer and its two
-positive/negative test names, and the exact two-test release-runner leg. Fresh
+positive/negative test names, the Swift/Kotlin/Java wire consumer suites, the
+diagnostics runner and source-closure manifest, the release runner, and the
+receipt schema. The Rust two-test wire leg is release-runner/receipt-bound; the
+Swift, Kotlin, and Java wire suites are diagnostics-runner/receipt-bound. Fresh
 immutable-candidate regeneration and byte-parity execution remain Open; this
 current hash is a mutable-development fact, not a release anchor.
+The receipt-required
+`merge_share_transport_rejects_omission_nonleader_body_and_legacy_version`
+regression rejects a legacy merge-share version while leaving the signing guard
+unauthorized. It replaced one required release-corridor selector, preserving the
+854-production-test and 525-G-UNIT-test inventory counts; source binding is not
+an execution receipt.
 `KuraReplicaAdvertV1` is explicit and clean-break. Its nested runtime policy
 configures and validates TTL, refresh cadence, evictable window, replica floor,
 and checked registry geometry. The direct authenticated ingress and the exact
@@ -1981,20 +2008,20 @@ negative or substitute a hand-authored fixture.
 The mutable grouped inventory is OpenAPI `7`, Python `62`, JavaScript `60`,
 Swift `4`, Kotlin `6`, and Java `5`, with exactly 55 grouped Native negative
 controls. The diagnostics inventory is Rust `14`, Python `121`, JavaScript
-source/distribution `88`, Swift `17`, Kotlin `26`, and Java `24`. The recursive
+source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41`. The recursive
 source-closure design covers every transitive production input, including the
 browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
-grouped JSON, and wire TSV; the mutable closure enumerates 1,351 grouped and
-1,350 diagnostics records. The current grouped JSON and wire TSV SHA-256
+grouped JSON, and wire TSV; the mutable closure enumerates 1,353 grouped and
+1,352 diagnostics records. The current grouped JSON and wire TSV SHA-256
 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
+`14ad494409a2d93515037200a8e6bf1c8b60ec621ca88b450eca081dff9c148c`
 and
-`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
+`849735aa813d495fa02b6f083d101a94e0b2d8958c8269bea23fc54d142f8cec`.
 
 Those are development-source inventories, not SDK results. The changed
 JavaScript production roots require fresh deterministic source/distribution

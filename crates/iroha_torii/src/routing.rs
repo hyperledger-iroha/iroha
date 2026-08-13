@@ -45652,7 +45652,6 @@ mod query_endpoint_tests {
     }
 
     // NOTE: end-to-end /query handler test omitted; exercised by integration tests.
-
     #[tokio::test]
     async fn handle_queries_iterable_assets_non_empty() {
         use iroha_data_model::query::{
@@ -45667,7 +45666,6 @@ mod query_endpoint_tests {
         );
         let alice_id: AccountId = AccountId::new(alice_keypair.public_key().clone());
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-
         // Build a small world with a single asset for Alice.
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.clone()).build(&alice_id);
@@ -45682,13 +45680,18 @@ mod query_endpoint_tests {
         .build(&alice_id);
         let asset_id = AssetId::new(asset_def_id, alice_id.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(13_u32));
-        let world = World::with_assets([domain], [account], [asset_def], [asset], []);
+        let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
+        world.account_permissions_mut_for_testing().insert(
+            alice_id.clone(),
+            BTreeSet::from([
+                iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
+            ]),
+        );
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let iter = QueryWithParams {
             query: (),
             query_payload: norito::codec::Encode::encode(&FindAssets),
@@ -45699,7 +45702,6 @@ mod query_endpoint_tests {
         };
         let payload = crate::authorize_query_for_test(QueryRequest::Start(iter), alice_id.clone());
         let signed = payload.sign(&alice_keypair);
-
         // Execute via handler
         let response = handle_queries_with_opts(
             LiveQueryStore::start_test(),
@@ -45718,7 +45720,6 @@ mod query_endpoint_tests {
             .expect("body")
             .to_bytes();
         let resp: QueryResponse = norito::decode_from_bytes(body.as_ref()).expect("decode");
-
         let QueryResponse::Iterable(first) = resp else {
             panic!("expected iterable")
         };
@@ -45732,7 +45733,6 @@ mod query_endpoint_tests {
                 .any(|a| a.id() == &asset_id && *a.value() == Quantity::from(13_u32))
         );
     }
-
     #[tokio::test]
     async fn handle_queries_rejects_fetch_size_above_max() {
         use iroha_data_model::query::{

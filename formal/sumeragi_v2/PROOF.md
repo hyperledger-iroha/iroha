@@ -1624,7 +1624,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`.
+`e331947691b76e5b15ca2b34ba31ce3803ea91a80147844612fb554d5cdf8403`.
 The separate source-sealed G-UNIT inventory contains 525 focused tests,
 including 319 `iroha_core` tests. Its 526-line canonical TSV has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`;
@@ -1734,12 +1734,14 @@ already-WAL-ahead recovered Proposal transaction now retains that batch across
 one exact LedgerV1 publication of Broadcast plus its independent next Sign;
 the assertion-only tail parks Broadcast, leaves Sign Ready, advances the
 adapter, retires the worker completion, and enqueues both fanouts. Cold-open
-authentication now has a frame-exact pair classifier and an affine
-frozen-roster reducer replay which must reproduce both durable children; the
-two-carrier census splice and Proposal chunk reconstruction remain pending.
-These are source-bound
-production-refinement contracts; the existing deductive asynchronous proof
-does not by itself prove their Rust persistence ordering. The executor then retries the
+authentication now has a frame-exact pair classifier, an affine frozen-roster
+reducer replay which must reproduce both durable children, and source machinery
+for the two-carrier census splice and Proposal chunk reconstruction. Production
+runner settlement and refanout do not yet invoke that machinery, so the cold
+Proposal path remains unreachable. These are source-bound production-refinement
+contracts; the existing deductive asynchronous proof does not by itself prove
+their Rust persistence ordering, and no theorem or evidence status is promoted.
+The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership
 atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The

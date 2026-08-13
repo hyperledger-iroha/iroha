@@ -1,0 +1,63 @@
+# __SORACLOUD_SERVICE_NAME__ PII-App Template
+
+This template provides a private workload starter for regulated PII data:
+
+- `frontend/` Vue3 control panel for challenge-signature auth + policy actions.
+- `api/server.mjs` PII API starter under `/pii/api/*` with strict authn/authz.
+- `policy/*.json` governance templates for consent, retention, and deletion workflows.
+- Soracloud manifests in the parent init directory (`container_manifest.json`, `service_manifest.json`).
+
+## Local dev
+
+```bash
+npm install
+npm --prefix frontend install
+export AUTH_MODE=dev
+export SESSION_HMAC_KEY='replace-with-at-least-32-random-characters'
+export AUTH_SESSION_TTL_SECS=900
+export AUTH_CHALLENGE_TTL_SECS=120
+export AUTH_CAPABILITY_MAP_JSON='{"replace-with-ed25519-public-key-hex":["pii.records.read","pii.consent.grant","pii.consent.revoke","pii.records.retention.sweep","pii.records.delete"]}'
+export AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0
+export PUBLIC_BASE_URL='http://127.0.0.1:8788'
+npm run dev:api
+npm run dev:frontend
+```
+
+## Production required config
+
+- `SESSION_HMAC_KEY` (>= 32 characters) is mandatory in strict/production mode.
+- `AUTH_CAPABILITY_MAP_JSON` is mandatory and must map principals to capabilities.
+- Private routes fail closed with deterministic `401`/`403` JSON responses.
+- `AUTH_REQUIRE_EXTERNAL_SHARED_STATE` defaults to enabled in strict/production
+  mode and requires host-provided shared state adapter
+  (`globalThis.__soracloudSharedStateAdapter`). Set
+  `AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0` only for local single-replica
+  development.
+
+## Policy templates
+
+- `policy/consent_policy_template.json`
+- `policy/retention_policy_template.json`
+- `policy/deletion_workflow_template.json`
+
+Populate these templates with jurisdiction-specific values and submit through
+your governance flow before production rollout.
+
+## Deploy API service on Soracloud
+
+```bash
+iroha soracloud service deploy \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --torii-url http://127.0.0.1:8080
+```
+
+## Publish frontend bundle
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./frontend/dist \
+  --manifest-out ../sorafs/pii_frontend_manifest.to \
+  --car-out ../sorafs/pii_frontend_payload.car \
+  --json-out ../sorafs/pii_frontend_pack_report.json
+```

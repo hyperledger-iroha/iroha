@@ -388,7 +388,7 @@ mod static_tests {
     fn combined_recovered_sign_staging_is_two_child_affine_and_inert() {
         let source = include_str!("v2_lifecycle_body_pipeline_transition.rs");
         let adapter_source = include_str!("v2.rs");
-        let registry_source = include_str!("v2_lifecycle_work_registry.rs");
+        let registry_source = reviewed_lifecycle_work_registry_source_for_test();
         let registry_recovery_source =
             include_str!("v2_lifecycle_work_registry_validate_recovery.rs");
         let reducer = source
@@ -975,4 +975,3 @@ mod static_tests {
         );
     }
 }
-

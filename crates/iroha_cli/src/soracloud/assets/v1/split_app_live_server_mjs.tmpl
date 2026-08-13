@@ -1,0 +1,275 @@
+#!/usr/bin/env node
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+
+const SERVICE_NAME = __SORACLOUD_SERVICE_NAME_DEBUG__;
+const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8787", 10);
+const SHARED_CACHE_DIR = process.env.SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR ?? path.join(process.cwd(), "tmp", "shared-cache");
+const SEARCH_SESSIONS_DIR = process.env.SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR ?? path.join(process.cwd(), "tmp", "search-sessions");
+const COLLECTOR_STATE_DIR = process.env.SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR ?? path.join(process.cwd(), "tmp", "collector-state");
+const RUNTIME_CACHE_DIR = process.env.SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_DIR ?? path.join(process.cwd(), "tmp", "runtime-cache");
+
+for (const dir of [SHARED_CACHE_DIR, SEARCH_SESSIONS_DIR, COLLECTOR_STATE_DIR, RUNTIME_CACHE_DIR]) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload, null, 2);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body)
+  });
+  res.end(body);
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > 1024 * 1024) {
+        reject(new Error("request body exceeds 1 MiB"));
+      }
+    });
+    req.on("end", () => {
+      if (raw.trim().length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function writeJsonFile(file, payload) {
+  fs.writeFileSync(file, JSON.stringify(payload, null, 2));
+}
+
+function readJsonFile(file) {
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function writeSession(sessionId, payload) {
+  writeJsonFile(path.join(SEARCH_SESSIONS_DIR, `${sessionId}.json`), payload);
+}
+
+function readSession(sessionId) {
+  return readJsonFile(path.join(SEARCH_SESSIONS_DIR, `${sessionId}.json`));
+}
+
+function cacheSearch(sessionId, payload) {
+  writeJsonFile(path.join(SHARED_CACHE_DIR, `${sessionId}.json`), payload);
+}
+
+function appendCollectorCheckpoint(sessionId, payload) {
+  const file = path.join(COLLECTOR_STATE_DIR, `${sessionId}.log`);
+  fs.appendFileSync(file, `${new Date().toISOString()} ${JSON.stringify(payload)}\n`);
+}
+
+function writeRuntimeSnapshot(sessionId, payload) {
+  writeJsonFile(path.join(RUNTIME_CACHE_DIR, `${sessionId}.json`), payload);
+}
+
+function trustedStringField(field, value) {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return {
+      value: value.trim(),
+      status: "trusted_request",
+      provenance: [{ source: "request", field }]
+    };
+  }
+  return { value: null, status: "unknown", provenance: [] };
+}
+
+function trustedNumberField(field, value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return {
+      value,
+      status: "trusted_request",
+      provenance: [{ source: "request", field }]
+    };
+  }
+  return { value: null, status: "unknown", provenance: [] };
+}
+
+function buildSearchRecord(sessionId, request) {
+  const now = new Date().toISOString();
+  return {
+    id: sessionId,
+    service: SERVICE_NAME,
+    status: "complete",
+    mode: "starter_scaffold",
+    generated_at: now,
+    source: "hosted_http",
+    query: {
+      origin: trustedStringField("origin", request.origin),
+      destination: trustedStringField("destination", request.destination),
+      departure_date: trustedStringField("departure_date", request.departure_date),
+      return_date: trustedStringField("return_date", request.return_date),
+      cabin: trustedStringField("cabin", request.cabin),
+      passengers: trustedNumberField("passengers", request.passengers)
+    },
+    itineraries: [],
+    unresolved_fields: ["aircraft", "luxury_labels", "collector_results"],
+    collector_status: {
+      status: "not_configured",
+      detail: "starter scaffold does not ship production collectors"
+    },
+    provenance: [
+      { source: "request", detail: "caller supplied query fields" },
+      { source: "starter_scaffold", detail: "no trusted upstream search sources configured" }
+    ]
+  };
+}
+
+function buildSearchEvents(sessionId, record) {
+  return [
+    {
+      event: "queued",
+      data: {
+        search_id: sessionId,
+        status: "accepted",
+        source: "starter_scaffold"
+      }
+    },
+    {
+      event: "snapshot",
+      data: record
+    },
+    {
+      event: "done",
+      data: {
+        search_id: sessionId,
+        status: record.status
+      }
+    }
+  ];
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+  const pathname = url.pathname;
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/health") {
+    sendJson(res, 200, {
+      service: SERVICE_NAME,
+      runtime: "Inrou",
+      lease_volumes: {
+        shared_cache: SHARED_CACHE_DIR,
+        search_sessions: SEARCH_SESSIONS_DIR,
+        collector_state: COLLECTOR_STATE_DIR,
+        runtime_cache: RUNTIME_CACHE_DIR
+      }
+    });
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/airports/search") {
+    sendJson(res, 200, {
+      query: url.searchParams.get("q") ?? "",
+      airports: [],
+      status: "not_configured",
+      provenance: []
+    });
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/filters/metadata") {
+    sendJson(res, 200, {
+      filters: {},
+      status: "not_configured",
+      provenance: []
+    });
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/luxury/catalog") {
+    sendJson(res, 200, {
+      items: [],
+      status: "not_configured",
+      provenance: []
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/links/resolve") {
+    try {
+      const body = await readJsonBody(req);
+      sendJson(res, 200, {
+        links: [],
+        input: body,
+        status: "not_configured",
+        provenance: []
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error?.message ?? String(error) });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/search") {
+    try {
+      const body = await readJsonBody(req);
+      const sessionId = randomUUID();
+      const result = buildSearchRecord(sessionId, body);
+      const events = buildSearchEvents(sessionId, result);
+      const session = { request: body, result, events };
+      writeSession(sessionId, session);
+      cacheSearch(sessionId, result);
+      writeRuntimeSnapshot(sessionId, {
+        search_id: sessionId,
+        status: result.status,
+        updated_at: result.generated_at
+      });
+      appendCollectorCheckpoint(sessionId, { stage: "queued", request: body });
+      appendCollectorCheckpoint(sessionId, { stage: "complete", result });
+      sendJson(res, 202, {
+        search_id: sessionId,
+        status: "accepted",
+        result
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error?.message ?? String(error) });
+    }
+    return;
+  }
+
+  const eventMatch = pathname.match(/^\/search\/([^/]+)\/events$/);
+  if ((req.method === "GET" || req.method === "HEAD") && eventMatch) {
+    const session = readSession(eventMatch[1]);
+    if (!session) {
+      sendJson(res, 404, { error: "search session not found" });
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive"
+    });
+    for (const event of session.events ?? []) {
+      res.write(`event: ${event.event}\n`);
+      res.write(`data: ${JSON.stringify(event.data)}\n\n`);
+    }
+    res.end();
+    return;
+  }
+
+  sendJson(res, 404, { error: "not found", path: pathname });
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  const address = server.address();
+  const boundPort = typeof address === "object" && address ? address.port : PORT;
+  console.log(`${SERVICE_NAME} listening on ${boundPort}`);
+});

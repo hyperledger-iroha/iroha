@@ -21821,8 +21821,11 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         "compressed release audit record must differ from canonical v1 bytes"
     );
     let decoded_compressed_record =
-        norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditRecordV1>(&compressed_record_bytes)
-            .expect("compressed release audit record must decode structurally");
+        norito::decode_from_bytes_with_limits::<BfvFullBootstrapReleaseAuditRecordV1>(
+            &compressed_record_bytes,
+            norito::canonical_decode_limits(record_bytes.len()),
+        )
+        .expect("compressed release audit record must decode structurally");
     assert_eq!(
         decoded_compressed_record,
         record,
@@ -27155,10 +27158,12 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         compressed_package_bytes, package_bytes,
         "compressed release audit package must differ from canonical v1 bytes"
     );
-    let decoded_compressed_package = norito::decode_from_bytes::<
-        BfvFullBootstrapReleaseAuditPackageV1,
-    >(&compressed_package_bytes)
-    .expect("compressed release audit package must decode structurally");
+    let decoded_compressed_package =
+        norito::decode_from_bytes_with_limits::<BfvFullBootstrapReleaseAuditPackageV1>(
+            &compressed_package_bytes,
+            norito::canonical_decode_limits(package_bytes.len()),
+        )
+        .expect("compressed release audit package must decode structurally");
     assert_eq!(
         decoded_compressed_package,
         package,
@@ -27220,7 +27225,6 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         {
             diagnostics.assert_error(487 + offset, result);
         }
-
         let mut placeholder_manifest_digest_package = package.clone();
         placeholder_manifest_digest_package.manifest_digest = placeholder_digest;
         for (offset, result) in [
@@ -27700,7 +27704,6 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
             reviewer_key_pair.public_key(),
         ),
     );
-
     let mut wrong_manifest_scope = manifest.clone();
     wrong_manifest_scope.audit_scope = format!(" {BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SCOPE_V1}");
     for (offset, result) in [
@@ -28173,7 +28176,6 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
             diagnostics.dynamic_expected_at(575, &expected),
             diagnostics.dynamic_context_at(575, &context),
         );
-
         let mut aliased_archive_digest = manifest.clone();
         aliased_archive_digest.audit_evidence_archive_digest = *alias_digest;
         let expected = format!("evidence archive digest must be distinct from {label}");
@@ -28218,7 +28220,6 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         579,
         validate_bfv_full_bootstrap_release_audit_package_v1(&stale_manifest_reviewer_key_package),
     );
-
     let mut stale_evidence_for_payload_preflight = evidence.clone();
     stale_evidence_for_payload_preflight.version += 1;
     for (offset, result) in [
@@ -28348,7 +28349,6 @@ fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
             diagnostics.dynamic_expected_at(589, &expected),
             diagnostics.dynamic_context_at(589, &context),
         );
-
         let mut aliased_archive_digest = signoff.clone();
         aliased_archive_digest.payload.audit_evidence_archive_digest = *alias_digest;
         let expected = format!("evidence archive digest must be distinct from {label}");

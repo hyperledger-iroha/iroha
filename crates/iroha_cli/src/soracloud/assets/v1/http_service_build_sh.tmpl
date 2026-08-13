@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="$SCRIPT_DIR/build"
+BUNDLE_PATH="$BUILD_DIR/__SORACLOUD_BUNDLE_NAME__"
+__SORACLOUD_SHELL_PRELUDE__
+
+mkdir -p "$BUILD_DIR"
+"${IROHA_CMD[@]}" soracloud service bundle-pack \
+  --source "$SCRIPT_DIR/app/server.mjs" \
+  --archive-path "app/server.mjs" \
+  --output "$BUNDLE_PATH" \
+  --executable
+
+echo "built $BUNDLE_PATH"

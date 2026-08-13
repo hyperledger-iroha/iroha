@@ -1511,7 +1511,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "e91ac22cf354ee698ce40c2d49b423fedd0bb054728337b14d43940e43802600"
+        "077c4e35cad9015abafc3bf41988b1852ff71a91ae240f772e1052cd859c66ae"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"

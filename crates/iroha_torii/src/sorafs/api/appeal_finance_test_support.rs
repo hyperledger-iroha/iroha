@@ -179,33 +179,6 @@ fn sorafs_app_state_with_appeal_finance_governance_publisher()
 
 fn sorafs_app_state_with_privacy_aggregate_schedule()
 -> (SharedAppState, TempDir, OrderbookAuthFixture) {
-    struct TestPrivacyCyclePrfProvider;
-
-    impl PrivacyCyclePrfProviderV1 for TestPrivacyCyclePrfProvider {
-        fn derive_cycle_output(
-            &self,
-            request: &PrivacyCyclePrfRequestV1,
-        ) -> Result<PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1> {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(b"sorafs.torii.test-privacy-cycle-prf.v1");
-            hasher.update(&request.binding_digest());
-            PrivacyCyclePrfOutputV1::new(*hasher.finalize().as_bytes())
-                .map_err(|_| PrivacyCyclePrfProviderErrorV1::Internal)
-        }
-    }
-
-    impl ProductionTransparencyRuntimeProviderV1 for TestPrivacyCyclePrfProvider {
-        fn handle(&self) -> &str {
-            "threshold-prf:transparency:primary"
-        }
-
-        fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
-            Ok(TransparencyRuntimeProviderQualificationV1::new(
-                1, [0xC7; 32],
-            ))
-        }
-    }
-
     #[derive(Default)]
     struct TestPrivacyReleaseAnchor {
         heads: Mutex<BTreeMap<[u8; 32], PrivacyReleaseAnchorHeadV1>>,
@@ -374,7 +347,11 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
     let mut app =
         mk_app_state_for_tests_with_world(orderbook_world_with_governance_publishers(&auth));
     let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let governance_dir = temp_dir.path().join("governance");
+    let temp_root = temp_dir
+        .path()
+        .canonicalize()
+        .expect("canonicalize privacy aggregate temp dir");
+    let governance_dir = temp_root.join("governance");
     fs::create_dir_all(&governance_dir).expect("create governance dir");
     let node = node_with_test_governance_publisher(
         StorageConfig::builder()
@@ -382,7 +359,7 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
             .provider_id(Some(iroha_data_model::sorafs::capacity::ProviderId::new(
                 [0x91; 32],
             )))
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(temp_root.join("storage"))
             .governance_dir(Some(governance_dir))
             .privacy_aggregate_schedule(Some(sorafs_node::PrivacyAggregateScheduleConfig {
                 first_cycle_start_unix: 100,
@@ -390,14 +367,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
                 publish_delay_seconds: 10,
             }))
             .privacy_aggregate_policy(Some(privacy_aggregate_api_policy_config()))
-            .privacy_cycle_prf_provider_binding(Some(
-                TransparencyRuntimeProviderBindingV1::try_new(
-                    "threshold-prf:transparency:primary",
-                    1,
-                    [0xC7; 32],
-                )
-                .expect("valid test threshold-PRF provider binding"),
-            ))
             .privacy_release_anchor_provider_binding(Some(
                 TransparencyRuntimeProviderBindingV1::try_new(
                     "governance-dag:transparency:primary",
@@ -424,7 +393,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
             )),
         with_test_fenced_privacy_runtime(
             NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider))
                 .with_privacy_release_anchor(Arc::new(TestPrivacyReleaseAnchor::default()))
                 .with_transparency_leader_lease_provider(Arc::new(
                     TestTransparencyLeaderLeaseProvider::default(),
@@ -511,12 +479,11 @@ fn assert_governance_publish_provenance(
 ) {
     let index = read_publication_section_fixture(app, "publish_index");
     let labels = index
-        .get("entries")
-        .and_then(Value::as_array)
+        .json_array(&["entries"])
         .and_then(|entries| {
-            entries.iter().find(|entry| {
-                entry.get("payload_kind").and_then(Value::as_str) == Some(payload_kind)
-            })
+            entries
+                .iter()
+                .find(|entry| entry.json_str(&["payload_kind"]) == Some(payload_kind))
         })
         .and_then(|entry| entry.get("labels"))
         .and_then(Value::as_object)
@@ -525,30 +492,21 @@ fn assert_governance_publish_provenance(
         sorafs_manifest::governance_dag_submission_account_digest_v1(&publisher_account.encode()),
     );
     assert_eq!(
-        labels
-            .get("authenticated_publisher_account_digest_hex")
-            .and_then(Value::as_str),
+        labels.json_str(&["authenticated_publisher_account_digest_hex"]),
         Some(expected_account_digest.as_str())
     );
     assert_eq!(
-        labels
-            .get("authenticated_publisher_origin")
-            .and_then(Value::as_str),
+        labels.json_str(&["authenticated_publisher_origin"]),
         Some(origin)
     );
 }
 
 async fn assert_forbidden_role(response: Response, required_role: &str) {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let response_body = body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect forbidden role response");
-    let value: Value =
-        norito::json::from_slice(&response_body).expect("decode forbidden role response");
+    let value = api_test_response_json(response).await;
     assert!(
         value
-            .get("error")
-            .and_then(Value::as_str)
+            .json_str(&["error"])
             .is_some_and(|message| message.contains(required_role)),
         "forbidden response must name the exact required role"
     );
@@ -732,8 +690,7 @@ fn appeal_finance_deposit_settle_body(
 
 fn assert_appeal_finance_reconciliation_digest_hex(value: &Value) -> &str {
     let digest = value
-        .get("reconciliation_digest_hex")
-        .and_then(Value::as_str)
+        .json_str(&["reconciliation_digest_hex"])
         .expect("reconciliation digest hex");
     assert_eq!(digest.len(), 64);
     assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));

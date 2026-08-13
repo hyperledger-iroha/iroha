@@ -4033,7 +4033,11 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         "crates/iroha_core/src/sumeragi/v2.rs",
         errors,
         "production successor-refinement source",
-        expanded_components=("tests/v2_adapter_activation_context.rs",),
+        expanded_components=(
+            "tests/v2_adapter_activation_context.rs",
+            "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs",
+            "v2_adapter_inline_ingress_authentication_tests.rs",
+        ),
     )
     if adapter_source:
         adapter_test_context = (

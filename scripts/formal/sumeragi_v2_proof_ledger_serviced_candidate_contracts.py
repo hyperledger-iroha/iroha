@@ -540,11 +540,17 @@ def _serviced_candidate_production_source_fidelity_errors(
             "fs::symlink_metadata(self.expected_path.join(name))",
             "non-Unix WAL-leaf revalidation",
         ),
-        "safety_open": select_item(
+        "safety_fixture_open": select_item(
             "safety_wal",
             "open",
             "BoundSafetyWalDirectory::bind(&parent)",
-            "SafetyWal open",
+            "test-path SafetyWal open",
+        ),
+        "safety_open_bound": select_item(
+            "safety_wal",
+            "open_bound",
+            "let identity = WalFileIdentity::new(protocol_version, network_id, key_hash)",
+            "bound SafetyWal open",
         ),
         "adjacent_read": select_item(
             "safety_wal",
@@ -800,14 +806,24 @@ if !opened.is_file()
                 f"{paths['safety_wal']}:{item.line}: non-Unix adjacent "
                 "storage operation cannot fall back to path I/O"
             )
-    safety_open = safety_items["safety_open"]
     require_item_monotone_order(
         "safety_wal",
         safety_items,
-        "safety_open",
+        "safety_fixture_open",
         (
             "fs::create_dir_all(&parent)",
             "BoundSafetyWalDirectory::bind(&parent)",
+            "Self::open_bound(",
+        ),
+        "test-path SafetyWal recovery must bind its directory before delegating to the reviewed bound open",
+    )
+    safety_open_bound = safety_items["safety_open_bound"]
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "safety_open_bound",
+        (
+            "let identity = WalFileIdentity::new(protocol_version, network_id, key_hash)",
             "directory.open_wal_leaf(&wal_name)",
             "directory.verify_leaf(&file, &wal_name)",
             "let read_metadata_before = file.metadata()",
@@ -816,7 +832,7 @@ if !opened.is_file()
             "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
             "recover_wal_file(&bytes, identity, &frame_hash)",
         ),
-        "SafetyWal recovery must bind before opening and bracket exact bytes with revisions",
+        "bound SafetyWal recovery must open through its retained directory and bracket exact bytes with revisions",
     )
     for sequence, description in (
         (
@@ -829,7 +845,7 @@ if !opened.is_file()
         ),
     ):
         _require_rust_token_sequence(
-            paths["safety_wal"], safety_open, sequence, description, errors
+            paths["safety_wal"], safety_open_bound, sequence, description, errors
         )
 
     for struct_name, storage_type in (
@@ -2124,7 +2140,15 @@ def _effect_capacity_fetch_owner_source_fidelity_errors(
             f"{adapter_path}: durable producer tombstone source must be a regular file"
         )
     else:
+        repo_root = effects_path.parents[4]
         adapter_source = adapter_path.read_text(encoding="utf-8")
+        producer_recovery_path, producer_recovery_source = _read_reviewed_rust_source(
+            repo_root,
+            "crates/iroha_core/src/sumeragi/"
+            "v2_adapter_inline_producer_recovery_02_tests.rs",
+            errors,
+            "reviewed stage-7 producer recovery regressions",
+        )
         deferred_exact_owners = _require_rust_item(
             adapter_path,
             adapter_source,
@@ -2357,8 +2381,8 @@ Ok(())
             )
 
         persistent_retirement_helper = _require_rust_item(
-            adapter_path,
-            adapter_source,
+            producer_recovery_path,
+            producer_recovery_source,
             "assert_restored_stage_seven_retirement_does_not_resurrect",
             errors,
         )
@@ -2516,14 +2540,14 @@ restarted_again.producer_continuations.is_empty()
             ),
         ):
             _require_rust_token_sequence(
-                adapter_path,
+                producer_recovery_path,
                 persistent_retirement_helper,
                 sequence,
                 description,
                 errors,
             )
         _require_rust_token_sequence(
-            adapter_path,
+            producer_recovery_path,
             persistent_retirement_helper,
             """
 !runtime
@@ -2545,13 +2569,13 @@ restarted_again.producer_continuations.is_empty()
         )
 
         persistent_retirement_regression = _require_rust_item(
-            adapter_path,
-            adapter_source,
+            producer_recovery_path,
+            producer_recovery_source,
             "restored_body_available_terminal_retirement_is_persistent_before_token_release",
             errors,
         )
         _require_rust_token_sequence(
-            adapter_path,
+            producer_recovery_path,
             persistent_retirement_regression,
             """
 assert_restored_stage_seven_retirement_does_not_resurrect(0xB8, true, false, false);

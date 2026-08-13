@@ -1178,6 +1178,96 @@ def test_receipt_rejects_sumeragi_diagnostics_suite_source_drift(
         "corridor Sumeragi v2 SDK diagnostics python leg is not bound to the "
         "exact suite sources" in result.stderr
     )
+    _assert_receipt_requires_exact_path_free_openapi_two_mirror_binding(tmp_path)
+
+
+def _assert_receipt_requires_exact_path_free_openapi_two_mirror_binding(
+    tmp_path: Path,
+) -> None:
+    mutations = (
+        ("missing", lambda marker: None),
+        ("failed-status", lambda marker: marker.replace("status=success", "status=failed")),
+        (
+            "candidate-oid",
+            lambda marker: re.sub(
+                r"candidate_oid=[0-9a-f]{40,64}",
+                f"candidate_oid={'9' * 40}",
+                marker,
+            ),
+        ),
+        (
+            "candidate-tree",
+            lambda marker: re.sub(
+                r"candidate_tree=[0-9a-f]{40,64}",
+                f"candidate_tree={'8' * 40}",
+                marker,
+            ),
+        ),
+        ("mirror-count", lambda marker: marker.replace("mirrors=2", "mirrors=3")),
+        (
+            "artifact-count",
+            lambda marker: marker.replace("artifacts=5", "artifacts=6"),
+        ),
+        (
+            "unsigned-policy",
+            lambda marker: marker.replace("require_signed=1", "require_signed=0"),
+        ),
+        ("path-bearing", lambda marker: f"{marker} path=/private/forged"),
+        ("duplicate", lambda marker: marker),
+        ("ordering", lambda marker: marker),
+    )
+    for case_name, mutate in mutations:
+        case_root = tmp_path / case_name
+        case_root.mkdir()
+        evidence = make_evidence(case_root)
+        writer = fixture_writer(case_root)
+        summary = evidence["corridor_summary"]
+        completion = evidence["corridor_completion"]
+        assert isinstance(summary, Path)
+        assert isinstance(completion, Path)
+        summary_lines = summary.read_text(encoding="utf-8").splitlines()
+        row_index = next(
+            index
+            for index, line in enumerate(summary_lines[1:], 1)
+            if "\tnative-amx-grouped-openapi\t" in line
+        )
+        row = summary_lines[row_index].split("\t")
+        log = summary.parent / row[8]
+        log_lines = log.read_text(encoding="utf-8").splitlines()
+        marker_index = next(
+            index
+            for index, line in enumerate(log_lines)
+            if line.startswith("openapi-two-mirror-replay ")
+        )
+        marker = log_lines[marker_index]
+        if case_name == "missing":
+            del log_lines[marker_index]
+        elif case_name == "duplicate":
+            log_lines.insert(marker_index, marker)
+        elif case_name == "ordering":
+            del log_lines[marker_index]
+            log_lines.append(marker)
+        else:
+            replacement = mutate(marker)
+            assert isinstance(replacement, str)
+            log_lines[marker_index] = replacement
+        log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+        row[7] = sha256(log)
+        summary_lines[row_index] = "\t".join(row)
+        summary.write_text(
+            "\n".join(summary_lines) + "\n", encoding="utf-8"
+        )
+        completion_fields = read_tsv_fields(completion)
+        completion_fields["summary_sha256"] = sha256(summary)
+        write_tsv(completion, completion_fields)
+
+        result = run_writer(evidence, case_root / "receipt.json", writer)
+
+        assert result.returncode == 1
+        assert (
+            "corridor grouped Native AMX V2 openapi leg lacks the exact "
+            "path-free two-mirror replay binding" in result.stderr
+        )
 
 
 def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(

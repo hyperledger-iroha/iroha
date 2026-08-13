@@ -6969,33 +6969,6 @@ mod tests {
         })
     }
 
-    fn write_summary_with_providers(path: &Path, providers: &[(&str, u64)]) {
-        let summary = summary_with_providers_value(providers);
-        fs::write(path, to_string_pretty(&summary).expect("render summary"))
-            .expect("write summary");
-    }
-
-    fn write_summary_with_telemetry(
-        path: &Path,
-        providers: &[(&str, u64)],
-        telemetry: &str,
-        telemetry_region: Option<&str>,
-    ) {
-        let mut summary = summary_with_providers_value(providers);
-        summary
-            .as_object_mut()
-            .expect("summary object")
-            .insert("telemetry_source".into(), Value::from(telemetry));
-        if let Some(region) = telemetry_region {
-            summary
-                .as_object_mut()
-                .expect("summary object")
-                .insert("telemetry_region".into(), Value::from(region));
-        }
-        fs::write(path, to_string_pretty(&summary).expect("render summary"))
-            .expect("write summary");
-    }
-
     fn write_scoreboard_with_weights(path: &Path, entries: &[(&str, f64)]) {
         let rows: Vec<Value> = entries
             .iter()
@@ -7571,377 +7544,172 @@ mod tests {
         );
     }
 
-    #[test]
-    fn adoption_check_accepts_multi_provider_scoreboard() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("scoreboard.json");
-        let summary_path = temp.path().join("summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "fixture-a",
-                    "normalised_weight": 0.6,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "fixture-b",
-                    "normalised_weight": 0.4,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
+    #[derive(Clone, Copy)]
+    struct AdoptionEntry {
+        provider_id: &'static str,
+        normalised_weight: f64,
+        raw_score: Option<f64>,
+    }
+
+    const fn scored(id: &'static str, weight: f64, raw_score: f64) -> AdoptionEntry {
+        AdoptionEntry {
+            provider_id: id,
+            normalised_weight: weight,
+            raw_score: Some(raw_score),
+        }
+    }
+
+    const fn weighted(id: &'static str, weight: f64) -> AdoptionEntry {
+        AdoptionEntry {
+            provider_id: id,
+            normalised_weight: weight,
+            raw_score: None,
+        }
+    }
+
+    const AB_50_12_11: &[AdoptionEntry] = &[scored("alpha", 0.5, 1.2), scored("beta", 0.5, 1.1)];
+    const AB_50_10_10: &[AdoptionEntry] = &[scored("alpha", 0.5, 1.0), scored("beta", 0.5, 1.0)];
+    const AB_60_40_10_09: &[AdoptionEntry] = &[scored("alpha", 0.6, 1.0), scored("beta", 0.4, 0.9)];
+    const AB_60_40_13_11: &[AdoptionEntry] = &[scored("alpha", 0.6, 1.3), scored("beta", 0.4, 1.1)];
+    const AB_50: &[AdoptionEntry] = &[weighted("alpha", 0.5), weighted("beta", 0.5)];
+    const AB_60_40: &[AdoptionEntry] = &[weighted("alpha", 0.6), weighted("beta", 0.4)];
+    const GATEWAY_50: &[AdoptionEntry] = &[weighted("gateway-a", 0.5), weighted("gateway-b", 0.5)];
+    const GATEWAY_60_40: &[AdoptionEntry] =
+        &[weighted("gateway-a", 0.6), weighted("gateway-b", 0.4)];
+    const AB_22: &[(&str, u64)] = &[("alpha", 2), ("beta", 2)];
+    const AB_11: &[(&str, u64)] = &[("alpha", 1), ("beta", 1)];
+
+    #[derive(Clone, Copy)]
+    enum MetadataBase {
+        Empty,
+        Direct,
+        DirectOnly,
+        Gateway,
+        Mixed,
+    }
+
+    #[derive(Clone, Copy)]
+    enum MetadataField {
+        ProviderCount,
+        GatewayProviderCount,
+        ProviderMix,
+        TransportPolicy,
+        TransportPolicyOverrideLabel,
+        GatewayManifestId,
+        GatewayManifestCid,
+    }
+
+    impl MetadataField {
+        const fn key(self) -> &'static str {
+            match self {
+                Self::ProviderCount => "provider_count",
+                Self::GatewayProviderCount => "gateway_provider_count",
+                Self::ProviderMix => "provider_mix",
+                Self::TransportPolicy => "transport_policy",
+                Self::TransportPolicyOverrideLabel => "transport_policy_override_label",
+                Self::GatewayManifestId => "gateway_manifest_id",
+                Self::GatewayManifestCid => "gateway_manifest_cid",
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum MetadataPatch {
+        UseScoreboard(bool),
+        AllowImplicitMetadata(bool),
+        ProviderCount(u64),
+        GatewayProviderCount(u64),
+        ProviderMix(&'static str),
+        MaxParallel(u64),
+        MaxPeers(u64),
+        TelemetrySource(&'static str),
+        TelemetryRegion(&'static str),
+        GatewayManifestProvided(bool),
+        GatewayManifestId(&'static str),
+        GatewayManifestCid(&'static str),
+        TransportPolicy(&'static str),
+        TransportPolicyOverride(bool),
+        TransportPolicyOverrideLabel(Option<&'static str>),
+        Version(&'static str),
+        Remove(MetadataField),
+    }
+
+    #[derive(Clone, Copy)]
+    enum MetadataFixture {
+        Missing,
+        Null,
+        Object(MetadataBase, &'static [MetadataPatch]),
+    }
+
+    const fn metadata(base: MetadataBase, patches: &'static [MetadataPatch]) -> MetadataFixture {
+        MetadataFixture::Object(base, patches)
+    }
+
+    const DIRECT_METADATA: MetadataFixture = metadata(MetadataBase::Direct, &[]);
+    const DIRECT_ONLY_METADATA: MetadataFixture = metadata(MetadataBase::DirectOnly, &[]);
+    const GATEWAY_METADATA: MetadataFixture = metadata(MetadataBase::Gateway, &[]);
+    const MIXED_METADATA: MetadataFixture = metadata(MetadataBase::Mixed, &[]);
+    const DIRECT_FIXTURE_TELEMETRY: MetadataFixture = metadata(
+        MetadataBase::Direct,
+        &[MetadataPatch::TelemetrySource("file:///tmp/fixture.json")],
+    );
+    const DIRECT_CI_TELEMETRY: MetadataFixture = metadata(
+        MetadataBase::Direct,
+        &[MetadataPatch::TelemetrySource("otel::ci")],
+    );
+    const DIRECT_CI_IAD_TELEMETRY: MetadataFixture = metadata(
+        MetadataBase::Direct,
+        &[
+            MetadataPatch::TelemetrySource("otel::ci"),
+            MetadataPatch::TelemetryRegion("iad-prod"),
+        ],
+    );
+
+    fn fixture_insert(root: &mut Value, key: &str, value: impl Into<Value>) {
+        root.as_object_mut()
+            .expect("fixture object")
+            .insert(key.into(), value.into());
+    }
+
+    fn render_metadata(fixture: MetadataFixture) -> Option<Value> {
+        let (base, patches) = match fixture {
+            MetadataFixture::Missing => return None,
+            MetadataFixture::Null => return Some(Value::Null),
+            MetadataFixture::Object(base, patches) => (base, patches),
+        };
+        let mut value = match base {
+            MetadataBase::Empty => norito::json!({}),
+            MetadataBase::Direct => norito::json!({
                 "use_scoreboard": true,
                 "provider_count": 2u64,
                 "gateway_provider_count": 0u64,
                 "provider_mix": "direct-only",
                 "transport_policy": "soranet-first",
                 "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(
-            &path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("fixture-a", 2), ("fixture-b", 3)]);
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("scoreboard should pass adoption check");
-        assert_eq!(report.total_evaluated, 1);
-        assert_eq!(
-            report
-                .scoreboard_reports
-                .first()
-                .expect("report entry")
-                .eligible_providers,
-            2
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_missing_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("missing_metadata_scoreboard.json");
-        let summary_path = temp.path().join("missing_metadata_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "metadata must be present even when not explicitly required"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_null_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("null_metadata_scoreboard.json");
-        let summary_path = temp.path().join("null_metadata_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [{
-                "provider_id": "solo",
-                "normalised_weight": 1.0,
-                "raw_score": 1.0,
-                "eligibility": "eligible"
-            }],
-            "metadata": null
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("solo", 1)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 1,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "null metadata block should fail the adoption gate"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_missing_provider_totals() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("missing_counts_scoreboard.json");
-        let summary_path = temp.path().join("missing_counts_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
+                "transport_policy_override_label": null,
+            }),
+            MetadataBase::DirectOnly => norito::json!({
                 "use_scoreboard": true,
-                "telemetry_source": "file:///tmp/missing_counts.json",
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 1)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing provider totals should fail adoption check");
-        assert!(
-            err.to_string().contains("provider_count"),
-            "error should mention missing provider_count: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_missing_provider_mix_metadata_without_counts() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("missing_mix_scoreboard.json");
-        let summary_path = temp.path().join("missing_mix_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.7,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.3,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "telemetry_source": "file:///tmp/missing_mix.json",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing provider metadata should fail adoption check");
-        assert!(
-            err.to_string().contains("provider_count"),
-            "error should mention missing provider totals: {err}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_provider_count_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("provider_count_mismatch_scoreboard.json");
-        let summary_path = temp.path().join("provider_count_mismatch_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "telemetry_source": "file:///tmp/fixture.json",
-                "provider_count": 3u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "metadata/provider count mismatch should fail the adoption gate"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_summary_provider_count_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("summary_provider_count_mismatch_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("summary_provider_count_mismatch_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "telemetry_source": "file:///tmp/fixture.json",
                 "provider_count": 2u64,
                 "gateway_provider_count": 0u64,
                 "provider_mix": "direct-only",
+                "transport_policy": "direct-only",
+                "transport_policy_override": true,
+                "transport_policy_override_label": "direct-only",
+            }),
+            MetadataBase::Gateway => norito::json!({
+                "provider_count": 0u64,
+                "gateway_provider_count": 2u64,
+                "gateway_manifest_id": TEST_MANIFEST_ID,
+                "gateway_manifest_cid": TEST_MANIFEST_CID,
+                "gateway_manifest_provided": true,
+                "use_scoreboard": true,
+                "provider_mix": "gateway-only",
                 "transport_policy": "soranet-first",
                 "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let mut summary_value: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for mismatch"))
-                .expect("parse summary");
-        summary_value
-            .as_object_mut()
-            .expect("summary object")
-            .insert("provider_count".into(), Value::from(1u64));
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_value).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.unwrap_err().to_string().contains("provider_count"),
-            "mismatched summary provider_count should fail the adoption gate",
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_summary_gateway_count_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("summary_gateway_count_mismatch_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("summary_gateway_count_mismatch_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "gateway-a",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
+                "transport_policy_override_label": null,
+            }),
+            MetadataBase::Mixed => norito::json!({
                 "use_scoreboard": true,
                 "telemetry_source": "file:///tmp/fixture.json",
                 "provider_count": 1u64,
@@ -7952,2614 +7720,641 @@ mod tests {
                 "transport_policy_override_label": null,
                 "gateway_manifest_id": "feedface",
                 "gateway_manifest_cid": "c0ffee",
-                "gateway_manifest_provided": true
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 1), ("gateway-a", 1)]);
-        let mut summary_value: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for mismatch"))
-                .expect("parse summary");
-        let summary_obj = summary_value
-            .as_object_mut()
-            .expect("summary object for mismatch");
-        summary_obj.insert("gateway_provider_count".into(), Value::from(2u64));
-        summary_obj.insert(
-            "provider_mix".into(),
-            Value::from(provider_mix_label_from_counts(1, 2)),
-        );
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_value).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("gateway_provider_count"),
-            "mismatched summary gateway_provider_count should fail the adoption gate",
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_missing_summary_provider_mix() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("summary_missing_provider_mix_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("summary_missing_provider_mix_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
+                "gateway_manifest_provided": true,
+            }),
+        };
+        for &patch in patches {
+            match patch {
+                MetadataPatch::UseScoreboard(v) => fixture_insert(&mut value, "use_scoreboard", v),
+                MetadataPatch::AllowImplicitMetadata(v) => {
+                    fixture_insert(&mut value, "allow_implicit_metadata", v)
                 }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "telemetry_source": "file:///tmp/fixture.json",
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let mut summary_value: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary"))
-                .expect("parse summary");
-        summary_value
-            .as_object_mut()
-            .expect("summary object")
-            .remove("provider_mix");
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_value).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.unwrap_err().to_string().contains("provider_mix"),
-            "missing summary provider_mix should fail the adoption gate",
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_gateway_runs_without_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("gateway_missing_metadata_scoreboard.json");
-        let summary_path = temp.path().join("gateway_missing_metadata_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "gateway-a",
-                    "normalised_weight": 1.0,
-                    "eligibility": "eligible"
+                MetadataPatch::ProviderCount(v) => fixture_insert(&mut value, "provider_count", v),
+                MetadataPatch::GatewayProviderCount(v) => {
+                    fixture_insert(&mut value, "gateway_provider_count", v)
                 }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("gateway-a", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 1,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("gateway captures without metadata must fail");
-        let err_text = err.to_string();
-        assert!(
-            err_text.contains("metadata"),
-            "error should mention missing metadata for gateway captures: {err_text}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_accepts_matching_provider_counts() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("provider_count_match_scoreboard.json");
-        let summary_path = temp.path().join("provider_count_match_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
+                MetadataPatch::ProviderMix(v) => fixture_insert(&mut value, "provider_mix", v),
+                MetadataPatch::MaxParallel(v) => fixture_insert(&mut value, "max_parallel", v),
+                MetadataPatch::MaxPeers(v) => fixture_insert(&mut value, "max_peers", v),
+                MetadataPatch::TelemetrySource(v) => {
+                    fixture_insert(&mut value, "telemetry_source", v)
                 }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "telemetry_source": "file:///tmp/fixture.json",
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("matching counts should pass the adoption gate");
-        assert_eq!(report.total_evaluated, 1);
-    }
-
-    #[test]
-    fn adoption_check_rejects_missing_provider_mix_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("missing_provider_mix_scoreboard.json");
-        let summary_path = temp.path().join("missing_provider_mix_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
+                MetadataPatch::TelemetryRegion(v) => {
+                    fixture_insert(&mut value, "telemetry_region", v)
                 }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "telemetry_source": "file:///tmp/missing_mix.json",
-                "provider_count": 1u64,
-                "gateway_provider_count": 1u64,
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing provider_mix metadata must fail the adoption gate");
-        assert!(
-            err.to_string().contains("provider_mix"),
-            "error should mention provider_mix requirement"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_metadata_missing_transport_policy() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("missing_transport_policy_scoreboard.json");
-        let summary_path = temp.path().join("missing_transport_policy_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
+                MetadataPatch::GatewayManifestProvided(v) => {
+                    fixture_insert(&mut value, "gateway_manifest_provided", v)
                 }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing transport_policy should fail the adoption gate");
-        assert!(
-            err.to_string().contains("transport_policy"),
-            "error should mention missing transport policy metadata: {err}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_metadata_transport_policy_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("transport_policy_mismatch_scoreboard.json");
-        let summary_path = temp.path().join("transport_policy_mismatch_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
+                MetadataPatch::GatewayManifestId(v) => {
+                    fixture_insert(&mut value, "gateway_manifest_id", v)
                 }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-strict",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("transport policy mismatch must fail");
-        assert!(
-            err.to_string().contains("metadata.transport_policy"),
-            "error should highlight transport policy mismatch: {err}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_metadata_transport_override_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("transport_override_mismatch_scoreboard.json");
-        let summary_path = temp.path().join("transport_override_mismatch_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
+                MetadataPatch::GatewayManifestCid(v) => {
+                    fixture_insert(&mut value, "gateway_manifest_cid", v)
                 }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": true,
-                "transport_policy_override_label": "soranet-strict"
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("unexpected override should fail");
-        assert!(
-            err.to_string().contains("transport_policy_override"),
-            "error should mention override mismatch: {err}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_metadata_missing_override_label() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("transport_override_missing_label_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("transport_override_missing_label_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
+                MetadataPatch::TransportPolicy(v) => {
+                    fixture_insert(&mut value, "transport_policy", v)
                 }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": true
+                MetadataPatch::TransportPolicyOverride(v) => {
+                    fixture_insert(&mut value, "transport_policy_override", v)
+                }
+                MetadataPatch::TransportPolicyOverrideLabel(v) => fixture_insert(
+                    &mut value,
+                    "transport_policy_override_label",
+                    v.map_or(Value::Null, Value::from),
+                ),
+                MetadataPatch::Version(v) => fixture_insert(&mut value, "version", v),
+                MetadataPatch::Remove(field) => {
+                    value
+                        .as_object_mut()
+                        .expect("metadata fixture object")
+                        .remove(field.key());
+                }
             }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        let mut summary = summary_with_providers_value(&[("alpha", 2), ("beta", 2)]);
-        if let Some(obj) = summary.as_object_mut() {
-            obj.insert("transport_policy_override".into(), Value::Bool(true));
-            obj.insert(
-                "transport_policy_override_label".into(),
-                Value::from("direct-only"),
-            );
         }
+        Some(value)
+    }
+
+    #[derive(Clone, Copy)]
+    enum SummaryPatch {
+        ProviderCount(u64),
+        GatewayProviderCount(u64),
+        ProviderMixForCounts(u64, u64),
+        RemoveProviderMix,
+        GatewayManifestProvided(bool),
+        RemoveManifestId,
+        ManifestCid(&'static str),
+        TransportPolicy(&'static str),
+        TransportPolicyOverride(bool),
+        TransportPolicyOverrideLabel(&'static str),
+        TelemetrySource(&'static str),
+        TelemetryRegion(&'static str),
+        ChunkCount(u64),
+        FirstReceiptProvider(&'static str),
+        FirstReportProvider(&'static str),
+    }
+
+    const DIRECT_ONLY_SUMMARY: &[SummaryPatch] = &[
+        SummaryPatch::TransportPolicy("direct-only"),
+        SummaryPatch::TransportPolicyOverride(true),
+        SummaryPatch::TransportPolicyOverrideLabel("direct-only"),
+    ];
+    const CI_SUMMARY: &[SummaryPatch] = &[SummaryPatch::TelemetrySource("otel::ci")];
+    const FILE_SUMMARY: &[SummaryPatch] =
+        &[SummaryPatch::TelemetrySource("file:/tmp/telemetry.json")];
+
+    fn render_summary(providers: &[(&str, u64)], patches: &[SummaryPatch]) -> Value {
+        let mut value = summary_with_providers_value(providers);
+        for &patch in patches {
+            match patch {
+                SummaryPatch::ProviderCount(v) => fixture_insert(&mut value, "provider_count", v),
+                SummaryPatch::GatewayProviderCount(v) => {
+                    fixture_insert(&mut value, "gateway_provider_count", v)
+                }
+                SummaryPatch::ProviderMixForCounts(direct, gateway) => fixture_insert(
+                    &mut value,
+                    "provider_mix",
+                    provider_mix_label_from_counts(direct, gateway),
+                ),
+                SummaryPatch::RemoveProviderMix => {
+                    value
+                        .as_object_mut()
+                        .expect("summary object")
+                        .remove("provider_mix");
+                }
+                SummaryPatch::GatewayManifestProvided(v) => {
+                    fixture_insert(&mut value, "gateway_manifest_provided", v)
+                }
+                SummaryPatch::RemoveManifestId => {
+                    value
+                        .as_object_mut()
+                        .expect("summary object")
+                        .remove("manifest_id");
+                }
+                SummaryPatch::ManifestCid(v) => fixture_insert(&mut value, "manifest_cid", v),
+                SummaryPatch::TransportPolicy(v) => {
+                    fixture_insert(&mut value, "transport_policy", v)
+                }
+                SummaryPatch::TransportPolicyOverride(v) => {
+                    fixture_insert(&mut value, "transport_policy_override", v)
+                }
+                SummaryPatch::TransportPolicyOverrideLabel(v) => {
+                    fixture_insert(&mut value, "transport_policy_override_label", v)
+                }
+                SummaryPatch::TelemetrySource(v) => {
+                    fixture_insert(&mut value, "telemetry_source", v)
+                }
+                SummaryPatch::TelemetryRegion(v) => {
+                    fixture_insert(&mut value, "telemetry_region", v)
+                }
+                SummaryPatch::ChunkCount(v) => fixture_insert(&mut value, "chunk_count", v),
+                SummaryPatch::FirstReceiptProvider(provider) => {
+                    if let Some(object) = value
+                        .get_mut("chunk_receipts")
+                        .and_then(Value::as_array_mut)
+                        .and_then(|receipts| receipts.first_mut())
+                        .and_then(Value::as_object_mut)
+                    {
+                        object.insert("provider".into(), Value::from(provider));
+                    }
+                }
+                SummaryPatch::FirstReportProvider(provider) => {
+                    if let Some(object) = value
+                        .get_mut("provider_reports")
+                        .and_then(Value::as_array_mut)
+                        .and_then(|reports| reports.first_mut())
+                        .and_then(Value::as_object_mut)
+                    {
+                        object.insert("provider".into(), Value::from(provider));
+                    }
+                }
+            }
+        }
+        value
+    }
+
+    #[derive(Clone, Copy)]
+    enum AdoptionGate {
+        StrictOne,
+        StrictTwo,
+        AllowSingleSource,
+        AllowSingleSourceDirectOnly,
+        RequireTelemetryOne,
+        RequireTelemetryTwo,
+        AllowImplicitMetadata,
+        RequireDirectOnly,
+        RequireTelemetryRegion,
+        AllowZeroWeight,
+    }
+
+    #[derive(Clone, Copy)]
+    enum AdoptionExpected {
+        Success,
+        TotalOne,
+        MultiProvider,
+        Gateway,
+        SingleSourceOverride,
+        ImplicitMetadataOverride,
+        Error,
+        ErrorContains(&'static str),
+    }
+
+    struct AdoptionCase {
+        entries: &'static [AdoptionEntry],
+        metadata: MetadataFixture,
+        providers: &'static [(&'static str, u64)],
+        summary_patches: &'static [SummaryPatch],
+        gate: AdoptionGate,
+        expected: AdoptionExpected,
+    }
+
+    const fn adoption_case(
+        entries: &'static [AdoptionEntry],
+        metadata: MetadataFixture,
+        providers: &'static [(&'static str, u64)],
+        summary_patches: &'static [SummaryPatch],
+        gate: AdoptionGate,
+        expected: AdoptionExpected,
+    ) -> AdoptionCase {
+        AdoptionCase {
+            entries,
+            metadata,
+            providers,
+            summary_patches,
+            gate,
+            expected,
+        }
+    }
+
+    fn run_adoption_case(name: &str, case: &AdoptionCase) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scoreboard_path = temp.path().join(format!("{name}.scoreboard.json"));
+        let summary_path = temp.path().join(format!("{name}.summary.json"));
+        let entries: Vec<Value> = case
+            .entries
+            .iter()
+            .map(|entry| {
+                let provider_id = entry.provider_id;
+                let normalised_weight = entry.normalised_weight;
+                let mut value = norito::json!({
+                    "provider_id": provider_id,
+                    "normalised_weight": normalised_weight,
+                    "eligibility": "eligible",
+                });
+                if let Some(raw_score) = entry.raw_score {
+                    fixture_insert(&mut value, "raw_score", raw_score);
+                }
+                value
+            })
+            .collect();
+        let mut scoreboard = norito::json!({ "entries": entries });
+        if let Some(metadata) = render_metadata(case.metadata) {
+            fixture_insert(&mut scoreboard, "metadata", metadata);
+        }
+        fs::write(
+            &scoreboard_path,
+            to_string_pretty(&scoreboard).expect("render scoreboard"),
+        )
+        .expect("write scoreboard");
+        let summary = render_summary(case.providers, case.summary_patches);
         fs::write(
             &summary_path,
             to_string_pretty(&summary).expect("render summary"),
         )
         .expect("write summary");
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing override label must fail");
-        assert!(
-            err.to_string().contains("transport_policy_override_label"),
-            "error should mention missing override label: {err}"
-        );
-    }
 
-    #[test]
-    fn adoption_check_rejects_provider_mix_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("provider_mix_mismatch_scoreboard.json");
-        let summary_path = temp.path().join("provider_mix_mismatch_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
+        let (minimum, positive_weight, single_source, telemetry, implicit, direct_only, region) =
+            match case.gate {
+                AdoptionGate::StrictOne => (1, true, false, false, false, false, false),
+                AdoptionGate::StrictTwo => (2, true, false, false, false, false, false),
+                AdoptionGate::AllowSingleSource => (2, true, true, false, false, false, false),
+                AdoptionGate::AllowSingleSourceDirectOnly => {
+                    (2, true, true, false, false, true, false)
                 }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "telemetry_source": "file:///tmp/mix_mismatch.json",
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "mixed",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("provider_mix mismatch must fail the adoption gate");
-        assert!(
-            err.to_string().contains("metadata.provider_mix"),
-            "error should flag the provider_mix mismatch"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_gateway_runs_without_manifest_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("gateway_missing_manifest_scoreboard.json");
-        let summary_path = temp.path().join("gateway_missing_manifest_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "gateway-a",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "gateway-b",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "provider_count": 0u64,
-                "gateway_provider_count": 2u64,
-                "gateway_manifest_provided": false,
-                "use_scoreboard": true,
-                "provider_mix": "gateway-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(
-            &path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("gateway-a", 2), ("gateway-b", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing gateway manifest metadata should fail adoption check");
-        let err_msg = err.to_string();
-        assert!(
-            err_msg.contains("gateway provider(s)"),
-            "expected error mentioning gateway manifest requirement, got: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_gateway_manifest_metadata_without_gateways() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("gateway_manifest_without_gateways_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("gateway_manifest_without_gateways_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "direct-a",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "direct-b",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "gateway_manifest_provided": true,
-                "gateway_manifest_id": TEST_MANIFEST_ID,
-                "gateway_manifest_cid": TEST_MANIFEST_CID,
-                "use_scoreboard": true,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(
-            &path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("direct-a", 2), ("direct-b", 3)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("direct-only runs should not carry gateway manifest metadata");
-        assert!(
-            err.to_string().contains("no gateway providers"),
-            "error should mention gateway manifest metadata mismatch"
-        );
-    }
-
-    #[test]
-    fn adoption_check_accepts_gateway_runs_with_manifest_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("gateway_manifest_scoreboard.json");
-        let summary_path = temp.path().join("gateway_manifest_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "gateway-a",
-                    "normalised_weight": 0.55,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "gateway-b",
-                    "normalised_weight": 0.45,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "provider_count": 0u64,
-                "gateway_provider_count": 2u64,
-                "gateway_manifest_id": TEST_MANIFEST_ID,
-                "gateway_manifest_cid": TEST_MANIFEST_CID,
-                "gateway_manifest_provided": true,
-                "use_scoreboard": true,
-                "provider_mix": "gateway-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(
-            &path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("gateway-a", 3), ("gateway-b", 2)]);
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("gateway scoreboard with manifest metadata should pass");
-        assert_eq!(report.total_evaluated, 1);
-        assert!(!report.single_source_override_used);
-    }
-
-    #[test]
-    fn adoption_check_rejects_gateway_runs_without_manifest_identifiers() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("gateway_missing_manifest_identifiers_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("gateway_missing_manifest_identifiers_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "gateway-a",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "gateway-b",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "provider_count": 0u64,
-                "gateway_provider_count": 2u64,
-                "gateway_manifest_provided": true,
-                "use_scoreboard": true,
-                "provider_mix": "gateway-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("gateway-a", 1), ("gateway-b", 1)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing manifest identifiers must fail adoption check");
-        let err_msg = err.to_string();
-        assert!(
-            err_msg.contains("gateway_manifest_id"),
-            "error should mention missing manifest id: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_summary_manifest_flag_without_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("gateway_manifest_summary_flag_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("gateway_manifest_summary_flag_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "direct-a",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "direct-b",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "gateway_manifest_provided": false,
-                "use_scoreboard": true,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("direct-a", 2), ("direct-b", 1)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for manifest flag"))
-                .expect("parse summary json");
-        summary_json
-            .as_object_mut()
-            .expect("summary object")
-            .insert("gateway_manifest_provided".into(), Value::Bool(true));
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render mutated summary"),
-        )
-        .expect("rewrite summary");
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("summary manifest flag without gateway metadata must fail");
-        let err_msg = err.to_string();
-        assert!(
-            err_msg.contains("gateway_manifest_provided"),
-            "error should mention stray summary manifest flag: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_gateway_runs_with_summary_manifest_gap() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("gateway_summary_manifest_gap_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("gateway_summary_manifest_gap_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "gateway-a",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "gateway-b",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "provider_count": 0u64,
-                "gateway_provider_count": 2u64,
-                "gateway_manifest_id": TEST_MANIFEST_ID,
-                "gateway_manifest_cid": TEST_MANIFEST_CID,
-                "gateway_manifest_provided": true,
-                "use_scoreboard": true,
-                "provider_mix": "gateway-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("gateway-a", 2), ("gateway-b", 1)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for manifest gap"))
-                .expect("parse summary json");
-        summary_json
-            .as_object_mut()
-            .expect("summary object")
-            .remove("manifest_id");
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render mutated summary"),
-        )
-        .expect("rewrite summary");
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing summary manifest should fail adoption check");
-        let err_msg = err.to_string();
-        assert!(
-            err_msg.contains("manifest_id"),
-            "error should mention missing summary manifest field: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_gateway_runs_with_manifest_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("gateway_manifest_mismatch_scoreboard.json");
-        let summary_path = temp.path().join("gateway_manifest_mismatch_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "gateway-a",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "gateway-b",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "provider_count": 0u64,
-                "gateway_provider_count": 2u64,
-                "gateway_manifest_id": TEST_MANIFEST_ID,
-                "gateway_manifest_cid": TEST_MANIFEST_CID,
-                "gateway_manifest_provided": true,
-                "use_scoreboard": true,
-                "provider_mix": "gateway-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("gateway-a", 2), ("gateway-b", 2)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for mismatch"))
-                .expect("parse summary json");
-        summary_json
-            .as_object_mut()
-            .expect("summary object")
-            .insert("manifest_cid".into(), Value::from("different-cid"));
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render mutated summary"),
-        )
-        .expect("rewrite summary");
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("manifest mismatch should fail adoption check");
-        let err_msg = err.to_string();
-        assert!(
-            err_msg.contains("manifest_cid"),
-            "error should mention manifest mismatch: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_single_provider_scoreboard() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("single_scoreboard.json");
-        let summary_path = temp.path().join("single_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "solo",
-                    "normalised_weight": 1.0,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 1u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("solo", 5), ("backup", 1)]);
+                AdoptionGate::RequireTelemetryOne => (1, true, false, true, false, false, false),
+                AdoptionGate::RequireTelemetryTwo => (2, true, false, true, false, false, false),
+                AdoptionGate::AllowImplicitMetadata => (2, true, false, false, true, false, false),
+                AdoptionGate::RequireDirectOnly => (2, true, false, false, false, true, false),
+                AdoptionGate::RequireTelemetryRegion => (2, true, false, false, false, false, true),
+                AdoptionGate::AllowZeroWeight => (2, false, false, false, false, false, false),
+            };
         let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
+            scoreboard_paths: vec![scoreboard_path],
             summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
+            min_eligible_providers: minimum,
+            require_positive_weight: positive_weight,
+            allow_single_source_fallback: single_source,
+            require_telemetry_source: telemetry,
+            allow_implicit_metadata: implicit,
+            require_direct_only: direct_only,
+            require_telemetry_region: region,
         });
-        assert!(result.is_err(), "single-provider scoreboard should fail");
-    }
-
-    #[test]
-    fn adoption_check_rejects_metadata_single_source_max_parallel() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("metadata_single_source.json");
-        let summary_path = temp.path().join("metadata_single_source_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "max_parallel": 1,
-                "use_scoreboard": true,
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "max_parallel": 1,
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
+        match case.expected {
+            AdoptionExpected::Success => {
+                result.unwrap_or_else(|error| panic!("{name} should pass: {error}"));
             }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "metadata with max_parallel=1 should be rejected without override"
-        );
-    }
-
-    #[test]
-    fn adoption_check_allows_metadata_single_source_with_override() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("metadata_single_source_override.json");
-        let summary_path = temp
-            .path()
-            .join("metadata_single_source_override_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "max_parallel": 1,
-                "transport_policy": "direct-only",
-                "transport_policy_override": true,
-                "transport_policy_override_label": "direct-only"
+            AdoptionExpected::TotalOne => {
+                let report = result.unwrap_or_else(|error| panic!("{name} should pass: {error}"));
+                assert_eq!(report.total_evaluated, 1);
             }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for policy edit"))
-                .expect("parse summary json");
-        if let Some(obj) = summary_json.as_object_mut() {
-            obj.insert("transport_policy".into(), Value::from("direct-only"));
-            obj.insert("transport_policy_override".into(), Value::from(true));
-            obj.insert(
-                "transport_policy_override_label".into(),
-                Value::from("direct-only"),
-            );
+            AdoptionExpected::MultiProvider => {
+                let report = result.unwrap_or_else(|error| panic!("{name} should pass: {error}"));
+                assert_eq!(report.total_evaluated, 1);
+                assert_eq!(
+                    report
+                        .scoreboard_reports
+                        .first()
+                        .expect("report entry")
+                        .eligible_providers,
+                    2,
+                );
+            }
+            AdoptionExpected::Gateway => {
+                let report = result.unwrap_or_else(|error| panic!("{name} should pass: {error}"));
+                assert_eq!(report.total_evaluated, 1);
+                assert!(!report.single_source_override_used);
+            }
+            AdoptionExpected::SingleSourceOverride => {
+                let report = result.unwrap_or_else(|error| panic!("{name} should pass: {error}"));
+                assert!(report.single_source_override_used);
+            }
+            AdoptionExpected::ImplicitMetadataOverride => {
+                let report = result.unwrap_or_else(|error| panic!("{name} should pass: {error}"));
+                assert!(report.implicit_metadata_override_used);
+            }
+            AdoptionExpected::Error => assert!(result.is_err(), "{name} should fail"),
+            AdoptionExpected::ErrorContains(needle) => {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains(needle),
+                    "{name} error should contain {needle:?}: {error}",
+                );
+            }
         }
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: true,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("override should allow single-source metadata");
-        assert!(
-            report.single_source_override_used,
-            "override flag should be recorded when metadata trips single-source hint"
-        );
     }
 
-    #[test]
-    fn adoption_check_rejects_direct_only_transport_policy_without_override() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("direct_only_policy.json");
-        let summary_path = temp.path().join("direct_only_policy_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "transport_policy": "direct-only",
-                "transport_policy_override": true,
-                "transport_policy_override_label": "direct-only",
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "raw_score": 0.9,
-                    "eligibility": "eligible"
+    use AdoptionExpected as Expected;
+    use AdoptionGate as Gate;
+    use MetadataBase as Base;
+    use MetadataField as MetaField;
+    use MetadataPatch as Meta;
+    use SummaryPatch as Summary;
+
+    macro_rules! adoption_cases {
+        ($($name:ident => $case:expr),+ $(,)?) => {
+            const ADOPTION_CASES: &[(&str, AdoptionCase)] = &[
+                $((stringify!($name), $case),)+
+            ];
+            const _: [(); 55] = [(); ADOPTION_CASES.len()];
+
+            $(
+                #[test]
+                fn $name() {
+                    let mut matches = ADOPTION_CASES
+                        .iter()
+                        .filter(|(candidate, _)| *candidate == stringify!($name));
+                    let item = matches.next().expect("adoption fixture must exist");
+                    assert!(matches.next().is_none(), "adoption fixture names must be unique");
+                    run_adoption_case(item.0, &item.1);
                 }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "direct-only transport policy should be rejected without override"
-        );
+            )+
+        };
     }
 
-    #[test]
-    fn adoption_check_reports_override_for_direct_only_transport_policy() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("direct_only_policy_override.json");
-        let summary_path = temp.path().join("direct_only_policy_override_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "transport_policy": "direct-only",
-                "transport_policy_override": true,
-                "transport_policy_override_label": "direct-only",
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "raw_score": 0.9,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for override edit"))
-                .expect("parse summary json");
-        if let Some(obj) = summary_json.as_object_mut() {
-            obj.insert("transport_policy".into(), Value::from("direct-only"));
-            obj.insert("transport_policy_override".into(), Value::from(true));
-            obj.insert(
-                "transport_policy_override_label".into(),
-                Value::from("direct-only"),
-            );
-        }
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: true,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("override should allow direct-only metadata");
-        assert!(
-            report.single_source_override_used,
-            "direct-only override should be recorded"
-        );
-    }
-
-    #[test]
-    fn adoption_check_requires_direct_only_when_flag_is_set() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("require_direct_only_scoreboard.json");
-        let summary_path = temp.path().join("require_direct_only_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: true,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "runs that set --require-direct-only must fail when the summary advertises the SoraNet-first posture"
-        );
-    }
-
-    #[test]
-    fn adoption_check_accepts_direct_only_when_required_flag_is_set() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("require_direct_only_success_scoreboard.json");
-        let summary_path = temp.path().join("require_direct_only_success_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "transport_policy": "direct-only",
-                "transport_policy_override": true,
-                "transport_policy_override_label": "direct-only",
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.55,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.45,
-                    "raw_score": 0.9,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("summary")).expect("parse summary");
-        if let Some(obj) = summary_json.as_object_mut() {
-            obj.insert("transport_policy".into(), Value::from("direct-only"));
-            obj.insert("transport_policy_override".into(), Value::from(true));
-            obj.insert(
-                "transport_policy_override_label".into(),
-                Value::from("direct-only"),
-            );
-        }
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: true,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: true,
-            require_telemetry_region: false,
-        })
-        .expect("direct-only runs must pass when the flag is supplied");
-        assert!(
-            report.single_source_override_used,
-            "direct-only override should still be recorded in the adoption report"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_direct_only_summary_transport_without_override() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("direct_only_summary_scoreboard.json");
-        let summary_path = temp.path().join("direct_only_summary_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for transport edit"))
-                .expect("parse summary json");
-        if let Some(obj) = summary_json.as_object_mut() {
-            obj.insert("transport_policy".into(), Value::from("direct-only"));
-            obj.insert("transport_policy_override".into(), Value::from(true));
-            obj.insert(
-                "transport_policy_override_label".into(),
-                Value::from("direct-only"),
-            );
-        }
-        summary_json
-            .as_object_mut()
-            .expect("summary object")
-            .insert("transport_policy_override".into(), Value::from(true));
-        summary_json
-            .as_object_mut()
-            .expect("summary object")
-            .insert(
-                "transport_policy_override_label".into(),
-                Value::from("direct-only"),
-            );
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "summary transport policy downgrades should be rejected without an override"
-        );
-    }
-
-    #[test]
-    fn adoption_check_reports_override_for_direct_only_summary_transport() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp
-            .path()
-            .join("direct_only_summary_override_scoreboard.json");
-        let summary_path = temp
-            .path()
-            .join("direct_only_summary_override_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "direct-only",
-                "transport_policy_override": true,
-                "transport_policy_override_label": "direct-only"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary for override edit"))
-                .expect("parse summary json");
-        summary_json
-            .as_object_mut()
-            .expect("summary object")
-            .insert("transport_policy".into(), Value::from("direct-only"));
-        summary_json
-            .as_object_mut()
-            .expect("summary object")
-            .insert("transport_policy_override".into(), Value::from(true));
-        summary_json
-            .as_object_mut()
-            .expect("summary object")
-            .insert(
-                "transport_policy_override_label".into(),
-                Value::from("direct-only"),
-            );
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: true,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("override should permit direct-only summary captures");
-        assert!(
-            report.single_source_override_used,
-            "direct-only override should be recorded when surfaced via summary"
-        );
-    }
-
-    #[test]
-    fn adoption_check_allows_single_provider_with_override() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("single_scoreboard_override.json");
-        let summary_path = temp.path().join("single_summary_override.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "solo",
-                    "normalised_weight": 1.0,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
+    adoption_cases! {
+        adoption_check_accepts_multi_provider_scoreboard => adoption_case(
+            &[scored("fixture-a", 0.6, 1.2), scored("fixture-b", 0.4, 1.0)],
+            DIRECT_METADATA, &[("fixture-a", 2), ("fixture-b", 3)], &[],
+            Gate::StrictTwo, Expected::MultiProvider),
+        adoption_check_rejects_missing_metadata => adoption_case(
+            AB_50_12_11, MetadataFixture::Missing, AB_22, &[],
+            Gate::StrictTwo, Expected::Error),
+        adoption_check_rejects_null_metadata => adoption_case(
+            &[scored("solo", 1.0, 1.0)], MetadataFixture::Null, &[("solo", 1)], &[],
+            Gate::StrictOne, Expected::Error),
+        adoption_check_rejects_missing_provider_totals => adoption_case(
+            &[scored("alpha", 0.6, 1.2), scored("beta", 0.4, 1.1)],
+            metadata(Base::Direct, &[
+                Meta::Remove(MetaField::ProviderCount),
+                Meta::Remove(MetaField::GatewayProviderCount),
+                Meta::TelemetrySource("file:///tmp/missing_counts.json"),
+            ]),
+            &[("alpha", 2), ("beta", 1)], &[], Gate::StrictTwo,
+            Expected::ErrorContains("provider_count")),
+        adoption_check_rejects_missing_provider_mix_metadata_without_counts => adoption_case(
+            &[scored("alpha", 0.7, 1.2), scored("beta", 0.3, 1.1)],
+            metadata(Base::Direct, &[
+                Meta::Remove(MetaField::ProviderCount),
+                Meta::Remove(MetaField::GatewayProviderCount),
+                Meta::Remove(MetaField::ProviderMix),
+                Meta::TelemetrySource("file:///tmp/missing_mix.json"),
+            ]),
+            AB_22, &[], Gate::StrictTwo, Expected::ErrorContains("provider_count")),
+        adoption_check_rejects_provider_count_mismatch => adoption_case(
+            AB_50_12_11,
+            metadata(Base::Direct, &[
+                Meta::TelemetrySource("file:///tmp/fixture.json"),
+                Meta::ProviderCount(3),
+            ]),
+            AB_22, &[], Gate::StrictTwo, Expected::Error),
+        adoption_check_rejects_summary_provider_count_mismatch => adoption_case(
+            AB_50_12_11, DIRECT_FIXTURE_TELEMETRY, AB_22,
+            &[Summary::ProviderCount(1)], Gate::StrictTwo,
+            Expected::ErrorContains("provider_count")),
+        adoption_check_rejects_summary_gateway_count_mismatch => adoption_case(
+            &[scored("alpha", 0.5, 1.2), scored("gateway-a", 0.5, 1.1)],
+            MIXED_METADATA, &[("alpha", 1), ("gateway-a", 1)],
+            &[Summary::GatewayProviderCount(2), Summary::ProviderMixForCounts(1, 2)],
+            Gate::StrictTwo, Expected::ErrorContains("gateway_provider_count")),
+        adoption_check_rejects_missing_summary_provider_mix => adoption_case(
+            AB_50, DIRECT_FIXTURE_TELEMETRY, AB_22, &[Summary::RemoveProviderMix],
+            Gate::StrictTwo, Expected::ErrorContains("provider_mix")),
+        adoption_check_rejects_gateway_runs_without_metadata => adoption_case(
+            &[weighted("gateway-a", 1.0)], MetadataFixture::Missing, &[("gateway-a", 2)], &[],
+            Gate::StrictOne, Expected::ErrorContains("metadata")),
+        adoption_check_accepts_matching_provider_counts => adoption_case(
+            AB_50, DIRECT_FIXTURE_TELEMETRY, AB_22, &[],
+            Gate::StrictTwo, Expected::TotalOne),
+        adoption_check_rejects_missing_provider_mix_metadata => adoption_case(
+            AB_50,
+            metadata(Base::Direct, &[
+                Meta::TelemetrySource("file:///tmp/missing_mix.json"),
+                Meta::ProviderCount(1),
+                Meta::GatewayProviderCount(1),
+                Meta::Remove(MetaField::ProviderMix),
+            ]),
+            AB_22, &[], Gate::StrictTwo, Expected::ErrorContains("provider_mix")),
+        adoption_check_rejects_metadata_missing_transport_policy => adoption_case(
+            AB_60_40, metadata(Base::Direct, &[Meta::Remove(MetaField::TransportPolicy)]),
+            AB_22, &[], Gate::StrictTwo, Expected::ErrorContains("transport_policy")),
+        adoption_check_rejects_metadata_transport_policy_mismatch => adoption_case(
+            AB_50, metadata(Base::Direct, &[Meta::TransportPolicy("soranet-strict")]),
+            AB_22, &[], Gate::StrictTwo, Expected::ErrorContains("metadata.transport_policy")),
+        adoption_check_rejects_metadata_transport_override_mismatch => adoption_case(
+            AB_60_40,
+            metadata(Base::Direct, &[
+                Meta::TransportPolicyOverride(true),
+                Meta::TransportPolicyOverrideLabel(Some("soranet-strict")),
+            ]),
+            AB_22, &[], Gate::StrictTwo, Expected::ErrorContains("transport_policy_override")),
+        adoption_check_rejects_metadata_missing_override_label => adoption_case(
+            AB_60_40,
+            metadata(Base::Direct, &[
+                Meta::TransportPolicyOverride(true),
+                Meta::Remove(MetaField::TransportPolicyOverrideLabel),
+            ]),
+            AB_22,
+            &[
+                Summary::TransportPolicyOverride(true),
+                Summary::TransportPolicyOverrideLabel("direct-only"),
             ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 1u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("solo", 4)]);
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: true,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("explicit override should allow single-provider fallback");
-        assert!(report.single_source_override_used);
-    }
-
-    #[test]
-    fn adoption_check_rejects_scoreboard_metadata_opt_out() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("metadata_scoreboard.json");
-        let summary_path = temp.path().join("metadata_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "fixture-provider",
-                    "normalised_weight": 1.0,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
+            Gate::StrictTwo, Expected::ErrorContains("transport_policy_override_label")),
+        adoption_check_rejects_provider_mix_mismatch => adoption_case(
+            AB_50,
+            metadata(Base::Direct, &[
+                Meta::TelemetrySource("file:///tmp/mix_mismatch.json"),
+                Meta::ProviderMix("mixed"),
+            ]),
+            AB_22, &[], Gate::StrictTwo, Expected::ErrorContains("metadata.provider_mix")),
+        adoption_check_rejects_gateway_runs_without_manifest_metadata => adoption_case(
+            GATEWAY_50,
+            metadata(Base::Gateway, &[
+                Meta::GatewayManifestProvided(false),
+                Meta::Remove(MetaField::GatewayManifestId),
+                Meta::Remove(MetaField::GatewayManifestCid),
+            ]),
+            &[("gateway-a", 2), ("gateway-b", 2)], &[],
+            Gate::StrictTwo, Expected::ErrorContains("gateway provider(s)")),
+        adoption_check_rejects_gateway_manifest_metadata_without_gateways => adoption_case(
+            &[weighted("direct-a", 0.6), weighted("direct-b", 0.4)],
+            metadata(Base::Direct, &[
+                Meta::GatewayManifestProvided(true),
+                Meta::GatewayManifestId(TEST_MANIFEST_ID),
+                Meta::GatewayManifestCid(TEST_MANIFEST_CID),
+            ]),
+            &[("direct-a", 2), ("direct-b", 3)], &[],
+            Gate::StrictTwo, Expected::ErrorContains("no gateway providers")),
+        adoption_check_accepts_gateway_runs_with_manifest_metadata => adoption_case(
+            &[weighted("gateway-a", 0.55), weighted("gateway-b", 0.45)],
+            GATEWAY_METADATA, &[("gateway-a", 3), ("gateway-b", 2)], &[],
+            Gate::StrictTwo, Expected::Gateway),
+        adoption_check_rejects_gateway_runs_without_manifest_identifiers => adoption_case(
+            GATEWAY_50,
+            metadata(Base::Gateway, &[
+                Meta::Remove(MetaField::GatewayManifestId),
+                Meta::Remove(MetaField::GatewayManifestCid),
+            ]),
+            &[("gateway-a", 1), ("gateway-b", 1)], &[],
+            Gate::StrictTwo, Expected::ErrorContains("gateway_manifest_id")),
+        adoption_check_rejects_summary_manifest_flag_without_metadata => adoption_case(
+            &[weighted("direct-a", 0.6), weighted("direct-b", 0.4)],
+            metadata(Base::Direct, &[Meta::GatewayManifestProvided(false)]),
+            &[("direct-a", 2), ("direct-b", 1)],
+            &[Summary::GatewayManifestProvided(true)],
+            Gate::StrictTwo, Expected::ErrorContains("gateway_manifest_provided")),
+        adoption_check_rejects_gateway_runs_with_summary_manifest_gap => adoption_case(
+            GATEWAY_60_40, GATEWAY_METADATA, &[("gateway-a", 2), ("gateway-b", 1)],
+            &[Summary::RemoveManifestId], Gate::StrictTwo,
+            Expected::ErrorContains("manifest_id")),
+        adoption_check_rejects_gateway_runs_with_manifest_mismatch => adoption_case(
+            GATEWAY_60_40, GATEWAY_METADATA, &[("gateway-a", 2), ("gateway-b", 2)],
+            &[Summary::ManifestCid("different-cid")], Gate::StrictTwo,
+            Expected::ErrorContains("manifest_cid")),
+        adoption_check_rejects_single_provider_scoreboard => adoption_case(
+            &[scored("solo", 1.0, 1.1)],
+            metadata(Base::Direct, &[Meta::ProviderCount(1)]),
+            &[("solo", 5), ("backup", 1)], &[], Gate::StrictTwo, Expected::Error),
+        adoption_check_rejects_metadata_single_source_max_parallel => adoption_case(
+            AB_50_10_10, metadata(Base::Direct, &[Meta::MaxParallel(1)]), AB_22, &[],
+            Gate::StrictTwo, Expected::Error),
+        adoption_check_allows_metadata_single_source_with_override => adoption_case(
+            AB_50_10_10, metadata(Base::DirectOnly, &[Meta::MaxParallel(1)]), AB_22,
+            DIRECT_ONLY_SUMMARY, Gate::AllowSingleSource, Expected::SingleSourceOverride),
+        adoption_check_rejects_direct_only_transport_policy_without_override => adoption_case(
+            AB_60_40_10_09, DIRECT_ONLY_METADATA, AB_22, &[],
+            Gate::StrictTwo, Expected::Error),
+        adoption_check_reports_override_for_direct_only_transport_policy => adoption_case(
+            AB_60_40_10_09, DIRECT_ONLY_METADATA, AB_22, DIRECT_ONLY_SUMMARY,
+            Gate::AllowSingleSource, Expected::SingleSourceOverride),
+        adoption_check_requires_direct_only_when_flag_is_set => adoption_case(
+            AB_50_10_10, DIRECT_METADATA, AB_22, &[],
+            Gate::RequireDirectOnly, Expected::Error),
+        adoption_check_accepts_direct_only_when_required_flag_is_set => adoption_case(
+            &[scored("alpha", 0.55, 1.0), scored("beta", 0.45, 0.9)],
+            DIRECT_ONLY_METADATA, AB_22, DIRECT_ONLY_SUMMARY,
+            Gate::AllowSingleSourceDirectOnly, Expected::SingleSourceOverride),
+        adoption_check_rejects_direct_only_summary_transport_without_override => adoption_case(
+            AB_50_10_10,
+            metadata(Base::Empty, &[
+                Meta::UseScoreboard(true),
+                Meta::TransportPolicy("soranet-first"),
+                Meta::TransportPolicyOverride(false),
+                Meta::TransportPolicyOverrideLabel(None),
+            ]),
+            AB_22,
+            &[
+                Summary::TransportPolicy("direct-only"),
+                Summary::TransportPolicyOverride(true),
+                Summary::TransportPolicyOverrideLabel("direct-only"),
+                Summary::TransportPolicyOverride(true),
+                Summary::TransportPolicyOverrideLabel("direct-only"),
             ],
-            "metadata": {
-                "version": "test",
-                "use_scoreboard": false,
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("fixture-provider", 2)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 1,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "metadata that disables scoreboard mode should fail the adoption gate"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_single_source_metadata_without_override() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("metadata_single_source_scoreboard.json");
-        let summary_path = temp.path().join("metadata_single_source_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
+            Gate::StrictTwo, Expected::Error),
+        adoption_check_reports_override_for_direct_only_summary_transport => adoption_case(
+            AB_50_10_10, DIRECT_ONLY_METADATA, AB_22, DIRECT_ONLY_SUMMARY,
+            Gate::AllowSingleSource, Expected::SingleSourceOverride),
+        adoption_check_allows_single_provider_with_override => adoption_case(
+            &[scored("solo", 1.0, 1.1)],
+            metadata(Base::Direct, &[Meta::ProviderCount(1)]),
+            &[("solo", 4)], &[], Gate::AllowSingleSource, Expected::SingleSourceOverride),
+        adoption_check_rejects_scoreboard_metadata_opt_out => adoption_case(
+            &[scored("fixture-provider", 1.0, 1.0)],
+            metadata(Base::Empty, &[
+                Meta::Version("test"),
+                Meta::UseScoreboard(false),
+                Meta::TransportPolicy("soranet-first"),
+                Meta::TransportPolicyOverride(false),
+                Meta::TransportPolicyOverrideLabel(None),
+            ]),
+            &[("fixture-provider", 2)], &[], Gate::StrictOne, Expected::Error),
+        adoption_check_rejects_single_source_metadata_without_override => adoption_case(
+            AB_50_10_10,
+            metadata(Base::Empty, &[
+                Meta::MaxPeers(1),
+                Meta::GatewayProviderCount(2),
+                Meta::TransportPolicy("soranet-first"),
+                Meta::TransportPolicyOverride(false),
+                Meta::TransportPolicyOverrideLabel(None),
+            ]),
+            &[("alpha", 2), ("beta", 3)], &[], Gate::StrictTwo, Expected::Error),
+        adoption_check_reports_override_for_single_source_metadata => adoption_case(
+            AB_50_10_10, metadata(Base::DirectOnly, &[Meta::MaxParallel(1)]), AB_22,
+            DIRECT_ONLY_SUMMARY, Gate::AllowSingleSource, Expected::SingleSourceOverride),
+        adoption_check_rejects_implicit_metadata_without_override => adoption_case(
+            AB_50_10_10, metadata(Base::Direct, &[Meta::AllowImplicitMetadata(true)]),
+            AB_11, &[], Gate::StrictTwo, Expected::Error),
+        adoption_check_reports_override_for_implicit_metadata => adoption_case(
+            AB_50_10_10, metadata(Base::Direct, &[Meta::AllowImplicitMetadata(true)]),
+            AB_11, &[], Gate::AllowImplicitMetadata, Expected::ImplicitMetadataOverride),
+        adoption_check_requires_telemetry_source_when_requested => adoption_case(
+            AB_60_40_13_11,
+            metadata(Base::Empty, &[
+                Meta::MaxParallel(4),
+                Meta::UseScoreboard(true),
+                Meta::TransportPolicy("soranet-first"),
+                Meta::TransportPolicyOverride(false),
+                Meta::TransportPolicyOverrideLabel(None),
+            ]),
+            &[("alpha", 3), ("beta", 2)], FILE_SUMMARY,
+            Gate::RequireTelemetryTwo, Expected::Error),
+        adoption_check_accepts_present_telemetry_source => adoption_case(
+            AB_60_40_13_11,
+            metadata(Base::Direct, &[
+                Meta::MaxParallel(4),
+                Meta::TelemetrySource("file:/tmp/telemetry.json"),
+            ]),
+            &[("alpha", 3), ("beta", 2)], FILE_SUMMARY,
+            Gate::RequireTelemetryTwo, Expected::Success),
+        adoption_check_requires_summary_telemetry_label => adoption_case(
+            AB_60_40, DIRECT_CI_TELEMETRY, AB_22, &[],
+            Gate::RequireTelemetryOne, Expected::ErrorContains("missing `telemetry_source`")),
+        adoption_check_rejects_mismatched_summary_telemetry => adoption_case(
+            AB_60_40,
+            metadata(Base::Direct, &[Meta::TelemetrySource("otel::primary")]),
+            AB_22, &[Summary::TelemetrySource("otel::other")],
+            Gate::StrictTwo, Expected::ErrorContains("telemetry_source=`otel::other`")),
+        adoption_check_requires_summary_telemetry_region_when_metadata_present => adoption_case(
+            AB_60_40, DIRECT_CI_IAD_TELEMETRY, AB_22, CI_SUMMARY,
+            Gate::StrictTwo, Expected::ErrorContains("telemetry_region")),
+        adoption_check_rejects_mismatched_telemetry_region => adoption_case(
+            AB_60_40, DIRECT_CI_IAD_TELEMETRY, &[("alpha", 3), ("beta", 1)],
+            &[
+                Summary::TelemetrySource("otel::ci"),
+                Summary::TelemetryRegion("sea-primary"),
             ],
-            "metadata": {
-                "max_peers": 1,
-                "gateway_provider_count": 2,
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 3)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "single-source metadata must fail when overrides are not allowed"
-        );
-    }
-
-    #[test]
-    fn adoption_check_reports_override_for_single_source_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("metadata_override_scoreboard.json");
-        let summary_path = temp.path().join("metadata_override_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
+            Gate::StrictTwo, Expected::ErrorContains("telemetry_region=`sea-primary`")),
+        adoption_check_accepts_matching_telemetry_region => adoption_case(
+            AB_60_40, DIRECT_CI_IAD_TELEMETRY, AB_22,
+            &[
+                Summary::TelemetrySource("otel::ci"),
+                Summary::TelemetryRegion("iad-prod"),
             ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "max_parallel": 1,
-                "transport_policy": "direct-only",
-                "transport_policy_override": true,
-                "transport_policy_override_label": "direct-only"
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let mut summary_json: Value =
-            json::from_slice(&fs::read(&summary_path).expect("summary json"))
-                .expect("parse summary");
-        if let Some(obj) = summary_json.as_object_mut() {
-            obj.insert("transport_policy".into(), Value::from("direct-only"));
-            obj.insert("transport_policy_override".into(), Value::from(true));
-            obj.insert(
-                "transport_policy_override_label".into(),
-                Value::from("direct-only"),
-            );
-        }
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary_json).expect("render updated summary"),
-        )
-        .expect("rewrite summary");
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: true,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("override should allow single-source metadata hints");
-        assert!(
-            report.single_source_override_used,
-            "override flag should be surfaced in the adoption report"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_implicit_metadata_without_override() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("implicit_scoreboard.json");
-        let summary_path = temp.path().join("implicit_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "allow_implicit_metadata": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 1), ("beta", 1)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "implicit metadata should fail without an explicit override"
-        );
-    }
-
-    #[test]
-    fn adoption_check_reports_override_for_implicit_metadata() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("implicit_override_scoreboard.json");
-        let summary_path = temp.path().join("implicit_override_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "allow_implicit_metadata": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 1), ("beta", 1)]);
-        let report = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: true,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("override should permit implicit metadata fixtures");
-        assert!(
-            report.implicit_metadata_override_used,
-            "implicit metadata override usage should be tracked"
-        );
-    }
-
-    #[test]
-    fn adoption_check_requires_telemetry_source_when_requested() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("metadata_missing_telemetry.json");
-        let summary_path = temp.path().join("metadata_missing_telemetry_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "max_parallel": 4,
-                "use_scoreboard": true,
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "raw_score": 1.3,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_telemetry(
-            &summary_path,
-            &[("alpha", 3), ("beta", 2)],
-            "file:/tmp/telemetry.json",
-            None,
-        );
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: true,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "requiring telemetry should fail when metadata.telemetry_source is missing"
-        );
-    }
-
-    #[test]
-    fn adoption_check_accepts_present_telemetry_source() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("metadata_with_telemetry.json");
-        let summary_path = temp.path().join("metadata_with_telemetry_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "max_parallel": 4,
-                "use_scoreboard": true,
-                "telemetry_source": "file:/tmp/telemetry.json",
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "raw_score": 1.3,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write scoreboard");
-        write_summary_with_telemetry(
-            &summary_path,
-            &[("alpha", 3), ("beta", 2)],
-            "file:/tmp/telemetry.json",
-            None,
-        );
-        run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: true,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("telemetry metadata should satisfy the new requirement");
-    }
-
-    #[test]
-    fn adoption_check_requires_summary_telemetry_label() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("scoreboard.json");
-        let summary_path = temp.path().join("summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null,
-                "telemetry_source": "otel::ci"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 1,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: true,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing summary telemetry label should fail the adoption gate");
-        assert!(
-            err.to_string().contains("missing `telemetry_source`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_mismatched_summary_telemetry() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("scoreboard.json");
-        let summary_path = temp.path().join("summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null,
-                "telemetry_source": "otel::primary"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_telemetry(
-            &summary_path,
-            &[("alpha", 2), ("beta", 2)],
-            "otel::other",
-            None,
-        );
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("telemetry mismatch should fail the adoption gate");
-        assert!(
-            err.to_string().contains("telemetry_source=`otel::other`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_requires_summary_telemetry_region_when_metadata_present() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("scoreboard.json");
-        let summary_path = temp.path().join("summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "telemetry_source": "otel::ci",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null,
-                "telemetry_region": "iad-prod"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        // Summary lacks telemetry_region.
-        write_summary_with_telemetry(
-            &summary_path,
-            &[("alpha", 2), ("beta", 2)],
-            "otel::ci",
-            None,
-        );
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("missing summary telemetry_region should fail when metadata is present");
-        assert!(
-            err.to_string().contains("telemetry_region"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_mismatched_telemetry_region() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("scoreboard.json");
-        let summary_path = temp.path().join("summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "telemetry_source": "otel::ci",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null,
-                "telemetry_region": "iad-prod"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_telemetry(
-            &summary_path,
-            &[("alpha", 3), ("beta", 1)],
-            "otel::ci",
-            Some("sea-primary"),
-        );
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect_err("telemetry_region mismatch should fail adoption gate");
-        assert!(
-            err.to_string().contains("telemetry_region=`sea-primary`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn adoption_check_accepts_matching_telemetry_region() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("scoreboard.json");
-        let summary_path = temp.path().join("summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "telemetry_source": "otel::ci",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null,
-                "telemetry_region": "iad-prod"
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_telemetry(
-            &summary_path,
-            &[("alpha", 2), ("beta", 2)],
-            "otel::ci",
-            Some("iad-prod"),
-        );
-        run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            require_telemetry_region: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-        })
-        .expect("matching telemetry_region labels should pass");
-    }
-
-    #[test]
-    fn adoption_check_allows_missing_telemetry_region_without_flag() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("no_region_scoreboard.json");
-        let summary_path = temp.path().join("no_region_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "telemetry_source": "otel::ci",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_telemetry(
-            &summary_path,
-            &[("alpha", 2), ("beta", 2)],
-            "otel::ci",
-            None,
-        );
-        run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            require_telemetry_region: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-        })
-        .expect("missing telemetry_region should be allowed without the flag");
-    }
-
-    #[test]
-    fn adoption_check_requires_telemetry_region_when_requested() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("require_region_scoreboard.json");
-        let summary_path = temp.path().join("require_region_summary.json");
-        let scoreboard = norito::json!({
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "telemetry_source": "otel::ci",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            },
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_telemetry(
-            &summary_path,
-            &[("alpha", 2), ("beta", 2)],
-            "otel::ci",
-            None,
-        );
-        let err = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            require_telemetry_region: true,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-        })
-        .expect_err("requiring telemetry_region should fail when metadata is missing");
-        assert!(
-            err.to_string().contains("telemetry_region"),
-            "missing telemetry_region error should mention telemetry_region"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_zero_weight_provider_when_required() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("zero_weight_scoreboard.json");
-        let summary_path = temp.path().join("zero_weight_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "zero-weight",
-                    "normalised_weight": 0.0,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "healthy",
-                    "normalised_weight": 1.0,
-                    "raw_score": 1.4,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("zero-weight", 1), ("healthy", 3)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "zero-weight provider should fail strict check"
-        );
-    }
-
-    #[test]
-    fn adoption_check_allows_zero_weight_when_override_enabled() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("zero_weight_allowed.json");
-        let summary_path = temp.path().join("zero_weight_allowed_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "zero-weight",
-                    "normalised_weight": 0.0,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "backup",
-                    "normalised_weight": 1.0,
-                    "raw_score": 1.3,
-                    "eligibility": "eligible"
-                }
+            Gate::StrictTwo, Expected::Success),
+        adoption_check_allows_missing_telemetry_region_without_flag => adoption_case(
+            AB_50, DIRECT_CI_TELEMETRY, AB_22, CI_SUMMARY,
+            Gate::StrictTwo, Expected::Success),
+        adoption_check_requires_telemetry_region_when_requested => adoption_case(
+            AB_50, DIRECT_CI_TELEMETRY, AB_22, CI_SUMMARY,
+            Gate::RequireTelemetryRegion, Expected::ErrorContains("telemetry_region")),
+        adoption_check_rejects_zero_weight_provider_when_required => adoption_case(
+            &[scored("zero-weight", 0.0, 1.0), scored("healthy", 1.0, 1.4)],
+            MetadataFixture::Missing, &[("zero-weight", 1), ("healthy", 3)], &[],
+            Gate::StrictTwo, Expected::Error),
+        adoption_check_allows_zero_weight_when_override_enabled => adoption_case(
+            &[scored("zero-weight", 0.0, 1.0), scored("backup", 1.0, 1.3)],
+            DIRECT_METADATA, &[("zero-weight", 1), ("backup", 2)], &[],
+            Gate::AllowZeroWeight, Expected::Success),
+        adoption_check_rejects_weight_sum_mismatch => adoption_case(
+            &[scored("alpha", 0.4, 1.0), scored("beta", 0.4, 0.9)],
+            MetadataFixture::Missing, AB_22, &[], Gate::StrictTwo, Expected::Error),
+        adoption_check_rejects_single_active_provider_in_summary => adoption_case(
+            AB_50_12_11, MetadataFixture::Missing, &[("alpha", 5), ("beta", 0)], &[],
+            Gate::StrictTwo, Expected::Error),
+        adoption_check_allows_single_active_provider_in_summary_with_override => adoption_case(
+            &[scored("alpha", 0.6, 1.3), scored("beta", 0.4, 1.0)],
+            DIRECT_METADATA, &[("alpha", 4), ("beta", 0)], &[],
+            Gate::AllowSingleSource, Expected::Success),
+        adoption_check_rejects_chunk_count_mismatch => adoption_case(
+            &[scored("alpha", 0.5, 1.1), scored("beta", 0.5, 1.0)],
+            MetadataFixture::Missing, AB_11, &[Summary::ChunkCount(999)],
+            Gate::StrictTwo, Expected::Error),
+        adoption_check_rejects_unknown_provider_in_summary => adoption_case(
+            &[scored("alpha", 0.6, 1.25), scored("beta", 0.4, 0.95)],
+            MetadataFixture::Missing, AB_11,
+            &[
+                Summary::FirstReceiptProvider("intruder"),
+                Summary::FirstReportProvider("intruder"),
             ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("zero-weight", 1), ("backup", 2)]);
-        run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: false,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("override should allow zero-weight entries");
-    }
-
-    #[test]
-    fn adoption_check_rejects_weight_sum_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("weight_sum_bad.json");
-        let summary_path = temp.path().join("weight_sum_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.4,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "raw_score": 0.9,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("alpha", 2), ("beta", 2)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "weights that do not sum to unity should fail adoption check"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_single_active_provider_in_summary() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("summary_single_provider_scoreboard.json");
-        let summary_path = temp.path().join("summary_single_provider.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 5), ("beta", 0)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "single active provider in summary should fail adoption check"
-        );
-    }
-
-    #[test]
-    fn adoption_check_allows_single_active_provider_in_summary_with_override() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp
-            .path()
-            .join("summary_single_provider_override_scoreboard.json");
-        let summary_path = temp.path().join("summary_single_provider_override.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "raw_score": 1.3,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ],
-            "metadata": {
-                "use_scoreboard": true,
-                "provider_count": 2u64,
-                "gateway_provider_count": 0u64,
-                "provider_mix": "direct-only",
-                "transport_policy": "soranet-first",
-                "transport_policy_override": false,
-                "transport_policy_override_label": null
-            }
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 4), ("beta", 0)]);
-        run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: true,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        })
-        .expect("override should allow single active provider when downgrade is intentional");
-    }
-
-    #[test]
-    fn adoption_check_rejects_chunk_count_mismatch() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("mismatch_scoreboard.json");
-        let summary_path = temp.path().join("mismatch_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.1,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.5,
-                    "raw_score": 1.0,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 1), ("beta", 1)]);
-        let mut summary: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary")).expect("parse");
-        if let Some(map) = summary.as_object_mut() {
-            map.insert("chunk_count".into(), norito::json!(999u64));
-        }
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary).expect("render summary"),
-        )
-        .expect("write summary");
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "chunk_count mismatch should fail adoption check"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_unknown_provider_in_summary() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let scoreboard_path = temp.path().join("unknown_scoreboard.json");
-        let summary_path = temp.path().join("unknown_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 0.6,
-                    "raw_score": 1.25,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.4,
-                    "raw_score": 0.95,
-                    "eligibility": "eligible"
-                }
-            ]
-        });
-        fs::write(
-            &scoreboard_path,
-            to_string_pretty(&scoreboard).expect("render scoreboard"),
-        )
-        .expect("write scoreboard");
-        write_summary_with_providers(&summary_path, &[("alpha", 1), ("beta", 1)]);
-        let mut summary: Value =
-            json::from_slice(&fs::read(&summary_path).expect("read summary")).expect("parse");
-        if let Some(obj) = summary
-            .get_mut("chunk_receipts")
-            .and_then(Value::as_array_mut)
-            .and_then(|receipts| receipts.first_mut())
-            .and_then(Value::as_object_mut)
-        {
-            obj.insert("provider".into(), norito::json!("intruder"));
-        }
-        if let Some(obj) = summary
-            .get_mut("provider_reports")
-            .and_then(Value::as_array_mut)
-            .and_then(|reports| reports.first_mut())
-            .and_then(Value::as_object_mut)
-        {
-            obj.insert("provider".into(), norito::json!("intruder"));
-        }
-        fs::write(
-            &summary_path,
-            to_string_pretty(&summary).expect("render summary"),
-        )
-        .expect("write modified summary");
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![scoreboard_path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 2,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "summary referencing providers outside scoreboard should fail"
-        );
+            Gate::StrictTwo, Expected::Error),
     }
 
     #[test]

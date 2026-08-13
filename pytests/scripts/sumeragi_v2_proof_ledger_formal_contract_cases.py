@@ -44,6 +44,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_config/src/parameters/user.rs"): (
         Path("user/kura.rs"),
+        Path("user/sorafs_moderation_query_bound_tests.rs"),
         Path("user/governance_dag_head_mode_tests.rs"),
         Path("user/kura_and_snapshot_tests.rs"),
         Path("user/runtime_tail_tests.rs"),
@@ -228,18 +229,25 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("status/test_guards.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2.rs"): (
+        Path("v2_adapter_inline_context_and_genesis_tests.rs"),
         Path("tests/v2_adapter_activation_context.rs"),
+        Path("v2_adapter_inline_auth_and_producer_recovery_01_tests.rs"),
+        Path("v2_adapter_inline_producer_recovery_02_tests.rs"),
+        Path("v2_adapter_inline_recovered_signing_tests.rs"),
         Path("tests/v2_adapter_04_wal_recovery.rs"),
         Path("tests/v2_adapter_04b_lifecycle_startup.rs"),
         Path("tests/v2_adapter_05_direct_lifecycle.rs"),
+        Path("v2_adapter_inline_wal_and_lock_progress_tests.rs"),
         Path("tests/v2_adapter_01_replay_and_registry.rs"),
         Path("tests/v2_adapter_02_view_and_lock_progress.rs"),
         Path("tests/v2_adapter_03_tc_and_terminal_ingress.rs"),
+        Path("v2_adapter_inline_ingress_authentication_tests.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"): (
         Path("tests/v2_lifecycle_coordinator_explorer_cases.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"): (
+        Path("v2_lifecycle_ledger_operations.rs"),
         Path("v2_lifecycle_ledger_store.rs"),
         Path("v2_lifecycle_ledger_tests.rs"),
     ),
@@ -252,6 +260,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_lifecycle_projection_cases.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"): (
+        Path("v2_lifecycle_replay_authority_certified_serve.rs"),
         Path("v2_lifecycle_replay_authority_certified_body.rs"),
         Path("v2_lifecycle_replay_authority_payload_projection.rs"),
         Path("tests/v2_lifecycle_replay_authority_fixtures.rs"),
@@ -260,11 +269,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs"
     ): (
+        Path("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"),
         Path("v2_lifecycle_work_registry_validate_recovery_parent.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
         Path("v2_lifecycle_work_registry_recovered_wal.rs"),
         Path("v2_lifecycle_work_registry_validate_recovery.rs"),
+        Path("v2_lifecycle_work_registry_validate_execution.rs"),
         Path("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs"),
@@ -274,6 +285,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (
         Path("tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs"),
+        Path("v2_runtime_body_pipeline_ownership_cases_tests.rs"),
         Path("tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
@@ -283,9 +295,14 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_worker_equivocation_and_selected_serve_fixture.rs"),
         Path("tests/v2_worker_reply_route_cases.rs"),
         Path("tests/v2_worker_backpressure_cases.rs"),
+        Path("v2_worker_output_and_handoff_cases_tests.rs"),
         Path("v2_worker/applied_height_handoff_tests.rs"),
         Path("v2_worker/upstream_reply_route_test.rs"),
+        Path("v2_worker_locked_candidate_and_routing_cases_tests.rs"),
+        Path("v2_worker_cold_refanout_and_recovery_cases_tests.rs"),
         Path("tests/v2_worker_nonzero_view_restart.rs"),
+        Path("v2_worker_io_and_selected_serve_cases_01_tests.rs"),
+        Path("v2_worker_selected_serve_cases_02_tests.rs"),
         Path("tests/v2_worker_serve_unsealed_cases.rs"),
         Path("tests/v2_worker_serve_decision_restart_cases.rs"),
         Path("tests/v2_worker_certified_serve_budget_cases.rs"),
@@ -293,6 +310,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path("crates/iroha_core/src/sumeragi/v2_runner.rs"): (
         Path("v2_runner/height_ingress_bindings.rs"),
         Path("v2_runner/lifecycle_terminal_recovery.rs"),
+        Path("v2_runner/outer_ingress_cursor.rs"),
         Path("v2_runner/finalized_output_rollover.rs"),
         Path("v2_runner/canonical_recovery_ingress.rs"),
         Path("v2_runner/reply_route_retention.rs"),
@@ -318,6 +336,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("reducer/counterfeit_boundary_capability_test.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"): (
+        Path("refinement/first_release_witness.rs"),
         Path("refinement_constructor_test_helpers.rs"),
         Path("refinement/transition_gate_tail.rs"),
     ),
@@ -333,6 +352,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2_effects.rs"): (
         Path("tests/v2_effects_03_locked_body_and_sidecar.rs"),
+        Path("v2_effects_certified_response_and_apply_cases_tests.rs"),
         Path("tests/v2_effects_kura_tip_replay.rs"),
         Path("tests/v2_effects_01_view_churn_and_runtime_steps.rs"),
         Path("tests/v2_effects_02_admission_handoffs.rs"),
@@ -347,6 +367,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_lane_work_native_body_recovery.rs"),
         Path("tests/v2_lane_work_effect_queue.rs"),
         Path("v2_lane_work/historical_recovery_and_carrier_tests.rs"),
+        Path("v2_lane_work_autonomous_ready_durability_tests.rs"),
     ),
     Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
         Path("sumeragi_v2_runner/restart_timing_test.rs"),

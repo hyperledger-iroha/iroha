@@ -700,16 +700,15 @@ fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) ->
         "outer-ingress cursor must freeze its height context and start at Completion with a positive finite cycle bound",
         errors,
     )
-    next_context = (("impl", "Iterator", "for", "OuterIngressTurns"),)
     next_items = tuple(
         item
-        for item in rust_items(runner_source, "next")
-        if item.brace_context == next_context
+        for item in rust_items(runner_source, "next_current")
+        if item.brace_context == new_context
     )
     if len(next_items) != 1:
         errors.append(
-            f"{runner_path}: require exactly one outer-ingress cursor "
-            f"Iterator::next implementation; found {len(next_items)}"
+            f"{runner_path}: require exactly one borrow-bound outer-ingress "
+            f"next_current implementation; found {len(next_items)}"
         )
         next_item = None
     else:
@@ -717,19 +716,56 @@ fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) ->
         _require_rust_item_context(
             runner_path,
             next_item,
-            next_context,
-            "finite outer-ingress cursor alternation",
+            new_context,
+            "borrow-bound finite outer-ingress cursor observation",
             errors,
         )
     _require_exact_rust_tokens(
         runner_path,
         next_item,
         """
-fn next(&mut self) -> Option<Self::Item> {
+fn next_current(&mut self) -> Option<LifecycleCurrentRunnerTurn<'_>> {
     if self.cycles_remaining == 0 {
         return None;
     }
-    let turn = self.next_turn;
+    Some(LifecycleCurrentRunnerTurn {
+        turn: self.next_turn,
+        cursor: self,
+    })
+}
+""",
+        "ordinary ingress must borrow the current finite turn without advancing it early",
+        errors,
+    )
+    advance_items = tuple(
+        item
+        for item in rust_items(runner_source, "advance_current")
+        if item.brace_context == new_context
+    )
+    if len(advance_items) != 1:
+        errors.append(
+            f"{runner_path}: require exactly one borrow-bound outer-ingress "
+            f"advance_current implementation; found {len(advance_items)}"
+        )
+        advance_item = None
+    else:
+        advance_item = advance_items[0]
+        _require_rust_item_context(
+            runner_path,
+            advance_item,
+            new_context,
+            "finite outer-ingress cursor alternation",
+            errors,
+        )
+    _require_exact_rust_tokens(
+        runner_path,
+        advance_item,
+        """
+fn advance_current(&mut self, turn: OuterIngressTurn) {
+    assert_eq!(
+        self.next_turn, turn,
+        "borrow-bound outer runner turn must remain current until drop"
+    );
     self.next_turn = match turn {
         OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
         OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,
@@ -738,10 +774,43 @@ fn next(&mut self) -> Option<Self::Item> {
             OuterIngressTurn::Completion
         }
     };
-    Some(turn)
 }
 """,
         "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",
+        errors,
+    )
+    drop_context = (
+        ("impl", "Drop", "for", "LifecycleCurrentRunnerTurn", "<", "'", "_", ">"),
+    )
+    drop_items = tuple(
+        item
+        for item in rust_items(runner_source, "drop")
+        if item.brace_context == drop_context
+    )
+    if len(drop_items) != 1:
+        errors.append(
+            f"{runner_path}: require exactly one borrowed outer-ingress turn "
+            f"Drop implementation; found {len(drop_items)}"
+        )
+        drop_item = None
+    else:
+        drop_item = drop_items[0]
+        _require_rust_item_context(
+            runner_path,
+            drop_item,
+            drop_context,
+            "borrow-bound outer-ingress cursor release",
+            errors,
+        )
+    _require_exact_rust_tokens(
+        runner_path,
+        drop_item,
+        """
+fn drop(&mut self) {
+    self.cursor.advance_current(self.turn);
+}
+""",
+        "every borrowed outer-ingress turn must advance exactly once on release",
         errors,
     )
     rank_item = _require_rust_item(
@@ -1414,10 +1483,14 @@ struct V2IoCompletionOwnership {
     service_debt: u64,
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
+    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
+    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
 }
 """,
-        "completion ownership must retain time/debt, runtime-capacity class, and "
-        "the exact optional shared lifecycle ordinal in one copy-only carrier",
+        "completion ownership must retain time/debt, runtime-capacity class, "
+        "the shared lifecycle ordinal, and all three exact recovered dispatch "
+        "keys in one copy-only carrier",
         errors,
     )
     _require_rust_token_sequence(
@@ -1442,6 +1515,23 @@ struct V2IoCertifiedServeIngressReservation {
         errors,
     )
     queue_state = struct_items.get("V2IoCommandQueueState")
+    _require_rust_token_sequence(
+        worker_path,
+        queue_state,
+        """
+work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
+recovered_decision_applies:
+    BTreeMap<RecoveredDecisionApplyDispatchKeyV1, V2IoTrackedRecoveredDecisionApplyV1>,
+recovered_lifecycle_signs:
+    BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredLifecycleSignV1>,
+recovered_decision_fetch_bodies:
+    BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,
+serves: BTreeMap<CertifiedServeLifecycleId, V2IoTrackedServe>,
+""",
+        "the command queue must retain separate exact owner maps for recovered "
+        "Apply, Sign, and Fetch work between generic work and Serve ownership",
+        errors,
+    )
     _require_rust_token_sequence(
         worker_path,
         queue_state,
@@ -1929,14 +2019,99 @@ const fn runtime_lifecycle_ordinal(&self) -> Option<u128> {
         Self::Store(task) => Some(task.lifecycle_ordinal()),
         Self::Validate(task) => Some(task.lifecycle_ordinal()),
         Self::Apply(task) => Some(task.lifecycle_ordinal()),
-        Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
-            None
+        Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+        Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+        Self::PersistRecoveredDecisionFetchBody(task) => {
+            Some(task.dispatch_key().lifecycle_ordinal())
         }
+        #[cfg(test)]
+        Self::RecoveredDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
+        Self::PersistCertifiedFetchBody(_)
+        | Self::Serve { .. }
+        | Self::LoadCandidate { .. }
+        | Self::Retire(_)
+        | Self::Shutdown => None,
     }
 }
 """,
             "every completion-producing I/O command must project its immutable "
-            "runtime lifecycle ordinal while non-runtime commands project none",
+            "runtime lifecycle ordinal, including recovered Apply, Sign, and "
+            "Fetch work, while non-runtime commands project none",
+        ),
+        (
+            "V2IoCommand::recovered_decision_apply_key",
+            """
+const fn recovered_decision_apply_key(&self) -> Option<RecoveredDecisionApplyDispatchKeyV1> {
+    match self {
+        Self::RecoveredDecisionApply(task) => Some(task.dispatch_key()),
+        #[cfg(test)]
+        Self::RecoveredDecisionApplyFixture(key) => Some(*key),
+        Self::Sign { .. }
+        | Self::Store(_)
+        | Self::PersistCertifiedFetchBody(_)
+        | Self::PersistRecoveredDecisionFetchBody(_)
+        | Self::Validate(_)
+        | Self::Apply(_)
+        | Self::RecoveredLifecycleSign(_)
+        | Self::Serve { .. }
+        | Self::LoadCandidate { .. }
+        | Self::Retire(_)
+        | Self::Shutdown => None,
+    }
+}
+""",
+            "recovered Apply commands must project only their complete exact "
+            "dispatch key before worker execution",
+        ),
+        (
+            "V2IoCommand::recovered_lifecycle_sign_key",
+            """
+const fn recovered_lifecycle_sign_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
+    match self {
+        Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key()),
+        Self::Sign { .. }
+        | Self::Store(_)
+        | Self::PersistCertifiedFetchBody(_)
+        | Self::PersistRecoveredDecisionFetchBody(_)
+        | Self::Validate(_)
+        | Self::Apply(_)
+        | Self::RecoveredDecisionApply(_)
+        | Self::Serve { .. }
+        | Self::LoadCandidate { .. }
+        | Self::Retire(_)
+        | Self::Shutdown => None,
+        #[cfg(test)]
+        Self::RecoveredDecisionApplyFixture(_) => None,
+    }
+}
+""",
+            "recovered Sign commands must project only their complete exact "
+            "dispatch key before worker execution",
+        ),
+        (
+            "V2IoCommand::recovered_decision_fetch_key",
+            """
+const fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
+    match self {
+        Self::PersistRecoveredDecisionFetchBody(task) => Some(task.dispatch_key()),
+        Self::Sign { .. }
+        | Self::Store(_)
+        | Self::PersistCertifiedFetchBody(_)
+        | Self::Validate(_)
+        | Self::Apply(_)
+        | Self::RecoveredDecisionApply(_)
+        | Self::RecoveredLifecycleSign(_)
+        | Self::Serve { .. }
+        | Self::LoadCandidate { .. }
+        | Self::Retire(_)
+        | Self::Shutdown => None,
+        #[cfg(test)]
+        Self::RecoveredDecisionApplyFixture(_) => None,
+    }
+}
+""",
+            "recovered Fetch persistence commands must project only their "
+            "complete exact dispatch key before worker execution",
         ),
         (
             "V2IoAdmission::retain_completion",
@@ -1946,6 +2121,9 @@ fn retain_completion(
     retained_at: Instant,
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
+    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
+    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
 ) {
     let mut state = self
         .completion_state
@@ -1960,11 +2138,15 @@ fn retain_completion(
         service_debt: 0,
         requires_runtime_capacity,
         runtime_lifecycle_ordinal,
+        recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     });
 }
 """,
             "completion publication must atomically retain the exact capacity "
-            "class and lifecycle ordinal at the bounded ownership tail",
+            "class, lifecycle ordinal, and three mutually typed recovered "
+            "dispatch keys at the bounded ownership tail",
         ),
         (
             "V2IoAdmission::abandon_latest_completion",
@@ -2018,6 +2200,47 @@ const fn runtime_lifecycle_ordinal(&self) -> u128 {
             "of its original runtime task",
         ),
         (
+            "V2IoCompletion::recovered_decision_apply_key",
+            """
+fn recovered_decision_apply_key(&self) -> Option<RecoveredDecisionApplyDispatchKeyV1> {
+    match self {
+        Self::RecoveredDecisionApply(guarded) => Some(guarded.result().dispatch_key()),
+        _ => None,
+    }
+}
+""",
+            "only a recovered Apply completion may project its guarded exact "
+            "dispatch key for ownership retention",
+        ),
+        (
+            "V2IoCompletion::recovered_lifecycle_sign_key",
+            """
+fn recovered_lifecycle_sign_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
+    match self {
+        Self::RecoveredLifecycleSign(guarded) => Some(guarded.result().dispatch_key()),
+        _ => None,
+    }
+}
+""",
+            "only a recovered Sign completion may project its guarded exact "
+            "dispatch key for ownership retention",
+        ),
+        (
+            "V2IoCompletion::recovered_decision_fetch_key",
+            """
+fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
+    match self {
+        Self::RecoveredDecisionFetchBodyPersisted(guarded) => {
+            Some(guarded.completion().dispatch_key())
+        }
+        _ => None,
+    }
+}
+""",
+            "only a recovered Fetch persistence completion may project its "
+            "guarded exact dispatch key for ownership retention",
+        ),
+        (
             "send_completion_with_lifecycle_ordinal",
             """
 fn send_completion_with_lifecycle_ordinal(
@@ -2047,17 +2270,24 @@ fn send_tracked_completion_with_lifecycle_ordinal(
     completion: V2IoCompletion,
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
+    let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
+    let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
+        recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     );
     sender.send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
     })
 }
 """,
-            "blocking completion publication must retain exact ownership before send and abandon it on failure",
+            "blocking completion publication must derive every recovered key "
+            "before retaining exact ownership, then send and abandon on failure",
         ),
         (
             "try_send_tracked_completion_with_lifecycle_ordinal",
@@ -2068,17 +2298,24 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
     completion: V2IoCompletion,
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
+    let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
+    let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
+        recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     );
     sender.try_send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
     })
 }
 """,
-            "nonblocking completion publication must retain exact ownership before send and abandon it on failure",
+            "nonblocking completion publication must derive every recovered key "
+            "before retaining exact ownership, then send and abandon on failure",
         ),
     ):
         _require_exact_rust_tokens(
@@ -2095,12 +2332,16 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
         completion_spawn,
         """
 let work_id = command.work_id();
+let recovered_decision_apply_key = command.recovered_decision_apply_key();
+let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();
+let recovered_decision_fetch_key = command.recovered_decision_fetch_key();
 let serve_lifecycle_id = command.serve_lifecycle_id();
 let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
 match command {
 """,
-        "the I/O worker must capture exact completion provenance before moving "
-        "the command into execution",
+        "the I/O worker must capture the generic owner, all three recovered "
+        "dispatch keys, Serve owner, and runtime ordinal in the reviewed order "
+        "before moving the command into execution",
         errors,
     )
     _require_rust_token_sequence(
@@ -2120,12 +2361,18 @@ send_completion_with_lifecycle_ordinal(
     )
     if completion_spawn is not None:
         spawn_tokens = rust_code_tokens(completion_spawn.source)
-        capture_positions = _token_sequence_positions(
-            spawn_tokens,
-            rust_code_tokens(
-                "let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();"
-            ),
+        capture_sequences = (
+            "let work_id = command.work_id();",
+            "let recovered_decision_apply_key = command.recovered_decision_apply_key();",
+            "let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();",
+            "let recovered_decision_fetch_key = command.recovered_decision_fetch_key();",
+            "let serve_lifecycle_id = command.serve_lifecycle_id();",
+            "let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();",
         )
+        capture_positions = [
+            _token_sequence_positions(spawn_tokens, rust_code_tokens(sequence))
+            for sequence in capture_sequences
+        ]
         forward_positions = _token_sequence_positions(
             spawn_tokens,
             rust_code_tokens(
@@ -2140,15 +2387,39 @@ send_completion_with_lifecycle_ordinal(
             ),
         )
         if (
-            len(capture_positions) != 1
+            any(len(positions) != 1 for positions in capture_positions)
             or len(forward_positions) != 1
-            or capture_positions[0] >= forward_positions[0]
+            or any(
+                left[0] >= right[0]
+                for left, right in zip(capture_positions, capture_positions[1:])
+                if left and right
+            )
+            or (
+                capture_positions[-1]
+                and capture_positions[-1][0] >= forward_positions[0]
+            )
         ):
             errors.append(
                 f"{worker_path}:{completion_spawn.line}: the I/O worker must "
-                "capture exactly one command lifecycle ordinal before execution "
-                "and forward it exactly once after successful completion"
+                "capture exactly one ordered generic/recovered/Serve/lifecycle "
+                "provenance tuple before execution and forward the lifecycle "
+                "ordinal exactly once after successful completion"
             )
+
+    _require_rust_token_sequence(
+        worker_path,
+        channel_builder,
+        """
+work: BTreeMap::new(),
+recovered_decision_applies: BTreeMap::new(),
+recovered_lifecycle_signs: BTreeMap::new(),
+recovered_decision_fetch_bodies: BTreeMap::new(),
+serves,
+""",
+        "the command channel must initialize all three recovered owner maps "
+        "empty and in the same reviewed ownership order as the queue carrier",
+        errors,
+    )
 
     _require_rust_token_sequence(
         worker_path,
@@ -2173,6 +2444,27 @@ self.rollback_serve_barrier(&mut state)
 """,
         "receiver teardown must clear producer-episode due before active and "
         "Serve rollback",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        close_receiver,
+        """
+state
+    .work
+    .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+state
+    .recovered_decision_applies
+    .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+state
+    .recovered_lifecycle_signs
+    .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+state
+    .recovered_decision_fetch_bodies
+    .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+""",
+        "receiver teardown must preserve every already-published recovered "
+        "completion owner in its dedicated exact-key map",
         errors,
     )
 
@@ -2456,6 +2748,28 @@ if barrier.request_hash != lifecycle_id.request_hash || barrier.lifecycle_id != 
         worker_path,
         enqueue,
         """
+if let Some(key) = command.recovered_decision_apply_key() {
+    return Err(V2IoTrySendError::UnreservedRecoveredDecisionApply { key, command });
+}
+assert!(
+    command.recovered_lifecycle_sign_key().is_none(),
+    "recovered Sign commands require their locked lifecycle reservation"
+);
+assert!(
+    command.recovered_decision_fetch_key().is_none(),
+    "recovered Decision Fetch persistence requires its locked lifecycle reservation"
+);
+let descriptor = command.work_descriptor();
+""",
+        "generic I/O admission must reject recovered Apply, Sign, and Fetch "
+        "commands before descriptor or capacity publication so only their "
+        "dedicated exact-owner corridors may dispatch them",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        enqueue,
+        """
 if command_ordinal >= reservation.id.0 {
     return None;
 }
@@ -2699,6 +3013,24 @@ self.drain_completions_inner(
         "each exact-Serve predecessor turn may admit at most one completed owner",
         errors,
     )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_drain,
+        """
+let outcome = self.drain_completions_inner(
+    executor,
+    1,
+    CompletionDrainPolicy::ExactServePredecessor {
+        serve_lifecycle_ordinal,
+    },
+)?;
+self.require_no_unowned_lifecycle_completion(executor, outcome)
+""",
+        "the exact-Serve drain must reject a typed lifecycle completion whose "
+        "dedicated coordinator did not consume it instead of counting it as a "
+        "generic predecessor",
+        errors,
+    )
     completion_inner = worker_items.get(
         "ProductionV2Services::drain_completions_inner"
     )
@@ -2756,6 +3088,38 @@ if disposition == CompletionDisposition::Accepted {
         "only an accepted application completion may refresh the exact durable Kura tip and refresh failures must fail closed",
         errors,
     )
+    for completion_variant, diagnostic in (
+        (
+            "V2IoCompletion::RecoveredDecisionApply(_)",
+            "recovered Decision Apply completion crossed the generic executor drain",
+        ),
+        (
+            "V2IoCompletion::RecoveredLifecycleSign(_)",
+            "recovered Sign completion crossed the generic executor drain",
+        ),
+        (
+            "V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)",
+            "recovered Decision Fetch body crossed the generic executor drain",
+        ),
+    ):
+        _require_rust_token_sequence(
+            worker_path,
+            completion_inner,
+            f"""
+PendingServiceCompletion::Io {{
+    completion: {completion_variant},
+    ..
+}} => {{
+    return Err(executor.external_service_failed(
+        \"{diagnostic}\",
+        self,
+    ));
+}}
+""",
+            "the generic exact-Serve completion drain must fail closed when a "
+            f"dedicated {completion_variant} owner escapes its typed corridor",
+            errors,
+        )
 
     runner_item = _require_rust_item(
         runner_path,

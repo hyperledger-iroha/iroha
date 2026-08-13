@@ -18587,7 +18587,7 @@ mod tests {
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(norito::json::to_vec(&norito::json!({
-                    "anchor": {"checkpoint_fingerprint": checkpoint.to_ascii_uppercase()},
+                    "anchor": {"checkpoint_fingerprint": (checkpoint.to_ascii_uppercase())},
                 }))?)
                 .expect("billing statement page response"))
         })
@@ -18618,7 +18618,7 @@ mod tests {
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(norito::json::to_vec(&norito::json!({
-                    "anchor": {"checkpoint_fingerprint": checkpoint.to_ascii_uppercase()},
+                    "anchor": {"checkpoint_fingerprint": (checkpoint.to_ascii_uppercase())},
                     "automatic_execution_enabled": false,
                 }))?)
                 .expect("hedging projection response"))

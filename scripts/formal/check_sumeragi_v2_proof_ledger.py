@@ -181,6 +181,7 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_exact_property_contracts.py",
     "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py",
     "sumeragi_v2_proof_ledger_proof_token_contracts.py",
+    "sumeragi_v2_proof_ledger_reviewed_rust_source_loader_contracts.py",
     "sumeragi_v2_proof_ledger_source_seal_contracts.py",
     "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
     "sumeragi_v2_proof_ledger_production_trace_contracts.py",
@@ -1962,7 +1963,6 @@ MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_COUNTS = {
 
 _execute_checker_component("sumeragi_v2_proof_ledger_serve_contracts.py")
 
-
 _execute_checker_component("sumeragi_v2_proof_ledger_historical_contracts.py")
 
 
@@ -2323,9 +2323,9 @@ _TLA_TOKEN_RE = re.compile(
     r"<=>|=>|~>|/\\|\\/|<<|>>|\[\]|==|/=|<=|>=|\.\.|[^\s]"
 )
 
+_execute_checker_component("sumeragi_v2_proof_ledger_reviewed_rust_source_loader_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_source_seal_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py")
-
 
 @lru_cache(maxsize=512)
 def rust_code_tokens(source: str) -> tuple[str, ...]:
@@ -3406,31 +3406,6 @@ def _tlapm_obligation_count(
     return int(completion.group(1))
 
 
-def _promotion_target_invocation(
-    contract: PromotionProofTargetContract, start_line: int, end_line: int
-) -> list[str]:
-    """Return the exact code-owned TLAPM argument vector for one target."""
-
-    # Pinned tlapm_args.ml defines --toolbox START END as an inclusive locus
-    # selection.  Pinned tlapm_lib.ml retains an obligation only when its whole
-    # start/stop locus lies inside that interval; --strict exits 12 when an
-    # explicit selection contains no obligations.
-    return [
-        "--toolbox",
-        str(start_line),
-        str(end_line),
-        "--strict",
-        "--nofp",
-        "--threads",
-        "1",
-        "--cache-dir",
-        _formal_evidence_logical_path(
-            "tlaps-cache", "targets", contract.obligation_id
-        ),
-        f"{contract.provider_module}.tla",
-    ]
-
-
 def _resolve_promotion_target(
     contract: PromotionProofTargetContract,
     *,
@@ -3880,8 +3855,6 @@ def _rust_clause_is_obviously_tautological(tokens: Sequence[str]) -> bool:
                 right = clause[index + 1 :]
             return bool(left) and left == right
     return False
-
-
 
 
 def _cross_tool_total_gate_promotion_contract_errors(
@@ -9777,11 +9750,6 @@ def _top_level_operator_body(
 
 
 
-
-
-
-
-
 def _top_level_declaration_span(
     source: str,
     symbol: str,
@@ -15320,6 +15288,13 @@ def _serve_ingress_gate_production_source_fidelity_errors(
 
     module_source = module_path.read_text(encoding="utf-8")
     worker_source = worker_path.read_text(encoding="utf-8")
+    reviewed_worker_path, reviewed_worker_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/"
+        "v2_worker_selected_serve_cases_02_tests.rs",
+        errors,
+        "reviewed selected-Serve integration regressions",
+    )
     decision_restart_path = (
         repo_root
         / "crates"
@@ -15503,12 +15478,27 @@ if !bound.ptr_eq(gate) {
     for name, expected_sha256 in (
         _SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256.items()
     ):
-        test_path, test_source, test_context = (
-            (decision_restart_path, decision_restart_source, ())
-            if name
-            == "fair_ingress_rollover_retires_ticket_before_old_service_teardown"
-            else (worker_path, worker_source, worker_test_context)
-        )
+        if name == "fair_ingress_rollover_retires_ticket_before_old_service_teardown":
+            test_path, test_source, test_context = (
+                decision_restart_path,
+                decision_restart_source,
+                (),
+            )
+        elif name in {
+            "fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers",
+            "selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle",
+        }:
+            test_path, test_source, test_context = (
+                reviewed_worker_path,
+                reviewed_worker_source,
+                (),
+            )
+        else:
+            test_path, test_source, test_context = (
+                worker_path,
+                worker_source,
+                worker_test_context,
+            )
         item = _require_rust_item(test_path, test_source, name, errors)
         _require_rust_item_context(
             test_path,
@@ -36490,7 +36480,6 @@ match ref_peer.handle.post_recover_with_flush_ack(frame) {
     return errors
 
 
-
 _execute_checker_component("sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py")
 
 
@@ -43143,8 +43132,6 @@ def _replenishment_regression_mutation_source_fidelity_errors(
     return errors
 
 
-
-
 def _effect_capacity_mutation_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
     repo_root: Path = ROOT_DIR,
@@ -43971,34 +43958,29 @@ def _decision_recovery_lifecycle_mutation_source_fidelity_errors(
     return errors
 
 
-
-
 def _retained_response_escape_latch_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
     """Pin the one-shot retained-response certificate escape in Rust."""
 
     errors: list[str] = []
-    effects_path = repo_root / "crates/iroha_core/src/sumeragi/v2_effects.rs"
-    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-    runner_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    sources: dict[Path, str] = {}
-    for path in (effects_path, runtime_path, runner_path):
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: retained-response escape-latch source must be a regular file"
-            )
-            continue
-        try:
-            sources[path] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(f"{path}: cannot read escape-latch source: {error}")
-    if len(sources) != 3:
+    reviewed_sources = [
+        _read_reviewed_rust_source(
+            repo_root, relative, errors, "retained-response escape-latch source"
+        )
+        for relative in (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        )
+    ]
+    if any(not source for _, source in reviewed_sources):
         return errors
 
-    effects_source = sources[effects_path]
-    runtime_source = sources[runtime_path]
-    runner_source = sources[runner_path]
+    (effects_path, effects_source), (runtime_path, runtime_source), (
+        runner_path,
+        runner_source,
+    ) = reviewed_sources
     executor_context = (
         (
             "impl",
@@ -60878,7 +60860,7 @@ struct FinalityCompletion {
     tag: EventTag,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
-    ownership: RuntimeEffectOwnership,
+    ownership: FinalityCompletionOwner,
 }
 """,
         "durable Apply tombstone must retain the exact reducer incarnation tag and typed Kura finality",
@@ -60947,7 +60929,7 @@ self.finality_completion = Some(FinalityCompletion {
     tag,
     receipt: completion.receipt,
     artifact: completion.artifact,
-    ownership,
+    ownership: FinalityCompletionOwner::Runtime(ownership),
 });
 """,
         "durable Apply completion must retain the exact tag in its non-resurrecting tombstone",
@@ -60957,9 +60939,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its ten reviewed uses and no additional mutation surface",
+        "the durable Apply completion tombstone field must have exactly its thirteen reviewed runtime/recovery uses and no additional mutation surface",
         errors,
-        count=10,
+        count=13,
     )
     for expected, description in (
         (
@@ -60984,7 +60966,7 @@ let finality = self
         ),
         (
             "|| self.finality_completion.is_some()",
-            "application completion must reject a second terminal installation",
+            "both runtime and recovered application completion must reject a second terminal installation",
         ),
         (
             """
@@ -61000,14 +60982,14 @@ self.finality_completion
             effects_source,
             expected,
             description,
-            errors,
+            errors, count=2 if expected == "|| self.finality_completion.is_some()" else 1,
         )
     _require_rust_source_token_sequence(
         effects_path,
         effects_source,
         "self.finality_completion =",
-        "the durable Apply completion tombstone must be installed exactly once and never cleared or replaced",
-        errors,
+        "the durable Apply completion tombstone must have exactly the runtime and recovered authenticated installation paths and must never be cleared or replaced",
+        errors, count=2,
     )
     _require_rust_token_sequence(
         effects_path,
@@ -61032,7 +61014,7 @@ if let Some(finality) = self.finality_completion.as_ref() {
 if let Some(existing) = self.pending_applications.values().next() {
     let same_decision = existing.task.tag == tag
         && existing.task.subject == subject
-        && existing.task.ownership() == &ownership
+        && existing.ownership == ownership
         && existing
             .task
             .certificate
@@ -68430,7 +68412,7 @@ fn certified_sidecar_prefix_covers_occurrence(
             f"exact-output reservation {qualified_name} production item",
             errors,
             expected_attributes=("#[allow(clippy::too_many_arguments)]",)
-            if qualified_name == "ProductionV2Services::start"
+            if qualified_name == "ProductionV2Services::start_inner"
             else (),
         )
         if item is not None:
@@ -69340,7 +69322,7 @@ if let (Some(fifo_id), Some(source)) = (released_source_owner, admitted_source) 
     )
     _require_rust_token_sequence(
         worker_path,
-        reservation_items.get("ProductionV2Services::start"),
+        reservation_items.get("ProductionV2Services::start_inner"),
         """
 let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
 let max_peers_per_fanout = context.roster.len().max(reply_route_source_capacity).max(1);
@@ -69516,7 +69498,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                 )
     for path, item, expected, description in (
         (worker_path, exact_output_claim_items.get("accepts_superseded_reply_delivery"), "const fn accepts_superseded_reply_delivery ( & self ) -> bool { matches ! ( self , Self :: DurableCommitCertificateResponse { .. } | Self :: DurableCertifiedBodyResponse { .. } ) }", "superseded reply history must be limited to durable global response claims"),
-        (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && self . ownership == * ownership && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind tag, ownership, finality decision, and Kura receipt"),
+        (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && matches ! ( & self . ownership , FinalityCompletionOwner :: Runtime ( retained ) if retained == ownership ) && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind the runtime incarnation, tag, finality decision, and Kura receipt"),
         (lane_path, lane_items.get("durable_historical_lane_output_source_hash"), "pub ( crate ) fn durable_historical_lane_output_source_hash ( kura : & Kura , message : & BlockMessage , ) -> Result < Option < Hash > , String > { let Some ( ( _ , proposal_hash ) ) = lane_output_identity ( message ) else { return Ok ( None ) ; } ; let ( lane_id , lane_block_height ) = match message { BlockMessage :: LaneBlockProposal ( proposal ) => ( proposal . descriptor . lane_id , proposal . descriptor . lane_block_height , ) , BlockMessage :: LaneBlockVote ( vote ) => ( vote . body . lane_id , vote . body . lane_block_height ) , BlockMessage :: LaneBlockQc ( qc ) => ( qc . body . lane_id , qc . body . lane_block_height ) , BlockMessage :: LaneBlockCertificate ( certificate ) => ( certificate . proposal . descriptor . lane_id , certificate . proposal . descriptor . lane_block_height , ) , _ => return Ok ( None ) , } ; let Some ( durable ) = kura . read_certified_lane_block_artifact ( lane_id , lane_block_height ) else { return Ok ( None ) ; } ; if durable . proposal . proposal_hash != proposal_hash { return Ok ( None ) ; } if let Err ( retained_error ) = validate_winning_lane_output ( message , & durable . proposal , & durable . signer_pops ) { let signer_pops = durable_historical_lane_verification_pops ( kura , & durable ) ? ; if signer_pops == durable . signer_pops { return Err ( retained_error ) ; } validate_winning_lane_output ( message , & durable . proposal , & signer_pops ) ? ; } let durable_hash = HashOf :: new ( & durable ) ; Ok ( Some ( Hash :: new_from_chunks ( & [ , durable_hash . as_ref ( ) , HashOf :: new ( message ) . as_ref ( ) , ] ) ) ) }", "historical lane retirement must authenticate the exact durable proposal and bind its output hash"),
         (lane_path, lane_items.get("durable_historical_lane_verification_pops"), "fn durable_historical_lane_verification_pops ( kura : & Kura , durable : & CertifiedLaneBlockArtifact , ) -> Result < BTreeMap < PublicKey , Vec < u8 > > , String > { let mut pops = durable . signer_pops . clone ( ) ; if let Some ( validator_pops ) = validated_autonomous_validator_pops ( & durable . prepare_qc , & durable . proposal . descriptor . validator_set , ) ? { if durable . commit_qc . validator_set != durable . proposal . descriptor . validator_set { return Err ( . to_owned ( ) ) ; } pops . extend ( validator_pops ) ; return Ok ( pops ) ; } let proposal_height = durable . proposal . descriptor . proposal_height ; let Some ( finality ) = kura . v2_finality_artifact ( proposal_height ) . map_err ( | error | format ! ( ) ) ? else { return Ok ( pops ) ; } ; let hint = durable . proposal . payload_block_hint . ok_or_else ( || . to_owned ( ) ) ? ; if finality . height != proposal_height || finality . height_context . height != proposal_height || hint . proposal_height != proposal_height || hint . proposal_block_hash != finality . block_hash { return Err ( . to_owned ( ) , ) ; } wire :: finality :: verify_validator_roster_pops ( & finality . height_context , & finality . validator_set_pops , ) . map_err ( | error | format ! ( ) ) ? ; for ( entry , pop ) in finality . height_context . roster . iter ( ) . zip ( & finality . validator_set_pops ) { if durable . proposal . descriptor . validator_set . contains ( & entry . validator ) { pops . insert ( entry . validator . public_key ( ) . clone ( ) , pop . clone ( ) ) ; } } Ok ( pops ) }", "historical lane verification must source alternate signer PoPs from the frozen finality roster"),
     ):
@@ -72188,10 +72170,11 @@ def _local_runner_service_contract_source_fidelity_errors(
             errors.append(
                 f"{path}: local-runner service production source must be a regular file"
             )
-    runner_source = (
-        runner_path.read_text(encoding="utf-8")
-        if runner_path.is_file() and not runner_path.is_symlink()
-        else ""
+    runner_path, runner_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        errors,
+        "local-runner service runner and reviewed components",
     )
     _loaded_worker_path, worker_source = _read_reviewed_rust_source(
         repo_root,
@@ -72260,15 +72243,21 @@ def _local_runner_service_contract_source_fidelity_errors(
         errors,
         "bounded local-runner completion service production item",
     )
+    lifecycle_completion_item = _require_qualified_rust_item(
+        worker_path, worker_source, "ProductionV2Services",
+        "drain_completions_with_lifecycle", errors,
+        "bounded local-runner lifecycle completion service production item",
+    )
     sealed_items = {
         **runner_items,
         "ProductionV2Services::drain_completions": completion_item,
+        "ProductionV2Services::drain_completions_with_lifecycle": lifecycle_completion_item,
     }
     for item_name, expected_sha256 in (
         _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256.items()
     ):
         _require_rust_item_token_sha256(
-            runner_path if item_name != "ProductionV2Services::drain_completions" else worker_path,
+            worker_path if item_name.startswith("ProductionV2Services::") else runner_path,
             sealed_items.get(item_name),
             expected_sha256,
             f"local-runner trusted-contract structural seam {item_name}",
@@ -73987,8 +73976,15 @@ else {
         errors,
     )
     _require_rust_token_sequence(
-        worker_path,
-        completion_item,
+        worker_path, completion_item,
+        """
+let outcome = self.drain_completions_with_lifecycle(executor)?;
+self.require_no_unowned_lifecycle_completion(executor, outcome)
+""",
+        "ordinary completion service must preserve lifecycle ownership before returning its bounded count", errors,
+    )
+    _require_rust_token_sequence(
+        worker_path, lifecycle_completion_item,
         """
 self.drain_completions_inner(
     executor,
@@ -73996,7 +73992,7 @@ self.drain_completions_inner(
     CompletionDrainPolicy::Fair,
 )
 """,
-        "ordinary completion service must delegate to the fixed finite fair-policy scan",
+        "ordinary lifecycle completion service must delegate to the fixed finite fair-policy scan",
         errors,
     )
     return errors

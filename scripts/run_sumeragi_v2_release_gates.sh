@@ -2239,7 +2239,7 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_preserves_exact_hard_boundary
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_rejects_above_hard_bound_without_clipping
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_limits_reject_oversized_record_and_anchor_bytes
-  sumeragi::v2_lane_work::tests::native_amx_adapter_opens_with_bounded_production_like_limits
+  sumeragi::v2_lane_work::tests::merge_share_transport_rejects_omission_nonleader_body_and_legacy_version
   sumeragi::v2_lane_work::tests::native_amx_request_rejects_inactive_reply_route_before_signing
   sumeragi::v2_lane_work::tests::persisted_lane_session_uses_only_selected_qc_signer_pops
   sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants
@@ -4092,9 +4092,9 @@ if [[ "$profile" == "--release" ]]; then
   sumeragi_v2_sdk_diagnostics_test_counts=(
     121
     88
-    17
-    26
-    24
+    33
+    42
+    41
   )
   for sumeragi_v2_sdk_diagnostics_index in \
     "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do
@@ -4968,4 +4968,4 @@ release_gate_boundary "child-result:after-publication" || {
   exit $?
 }
 verify_release_identity "after protected child-result publication"
-echo "Sumeragi v2 production build corridor passed; protected outer receipt validation is pending" >&2
+echo "Sumeragi v2 production build corridor passed, including exact 525/525 G-UNIT, with protected outer receipt validation pending" >&2

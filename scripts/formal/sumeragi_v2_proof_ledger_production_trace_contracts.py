@@ -3478,14 +3478,17 @@ def _production_trace_extraction_source_snapshot(
                     path=core_relative, kind="fn", symbol=symbol, item=item
                 )
             )
-    try:
-        core_source = _bounded_regular_file_bytes(
-            root_dir / core_relative,
-            label="production first-release refinement kernel",
-            maximum_bytes=PRODUCTION_TRACE_EXTRACTION_COMPONENT_MAX_BYTES,
-        ).decode("utf-8")
-    except (UnicodeDecodeError, ValueError) as error:
-        errors.append(str(error))
+    _core_path, core_source = _read_reviewed_rust_source(
+        root_dir,
+        core_relative,
+        errors,
+        "production first-release refinement kernel",
+    )
+    if len(core_source.encode("utf-8")) > PRODUCTION_TRACE_EXTRACTION_COMPONENT_MAX_BYTES:
+        errors.append(
+            "production first-release refinement kernel exceeds the bounded "
+            "trace-extraction component limit"
+        )
         core_source = ""
     transition_macros = rust_macro_items(
         core_source, "production_in_flight_first_release_transition_body"
@@ -3806,7 +3809,7 @@ def _production_trace_extraction_source_snapshot(
             "action: projection.action",
             "actor: projection.actor",
             "target: projection.target",
-            "before_state_digest: production_in_flight_first_release_state_digest_v1(projection.before,)",
+            "before_state_digest: production_in_flight_first_release_state_digest_v1(projection.before)",
             "after_state_digest: production_in_flight_first_release_state_digest_v1(projection.after)",
             "source_identity: PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256",
         ),

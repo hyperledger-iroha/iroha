@@ -1,0 +1,98 @@
+#!/usr/bin/env node
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+
+const SERVICE_NAME = __SORACLOUD_SERVICE_NAME_DEBUG__;
+const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8787", 10);
+const APP_DATA_DIR = process.env.SORACLOUD_LEASE_VOLUME_APP_DATA_DIR ?? path.join(process.cwd(), "tmp", "app-data");
+
+fs.mkdirSync(APP_DATA_DIR, { recursive: true });
+
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload, null, 2);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body)
+  });
+  res.end(body);
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > 1024 * 1024) {
+        reject(new Error("request body exceeds 1 MiB"));
+      }
+    });
+    req.on("end", () => {
+      if (raw.trim().length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function writeJsonFile(file, payload) {
+  fs.writeFileSync(file, JSON.stringify(payload, null, 2));
+}
+
+function readJsonFile(file) {
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function writeLastEcho(payload) {
+  writeJsonFile(path.join(APP_DATA_DIR, "last-echo.json"), payload);
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+  const pathname = url.pathname;
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/health") {
+    sendJson(res, 200, {
+      service: SERVICE_NAME,
+      runtime: "Inrou",
+      routes: ["/health", "/echo"],
+      lease_volumes: {
+        app_data: APP_DATA_DIR
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/echo") {
+    try {
+      const body = await readJsonBody(req);
+      const payload = {
+        service: SERVICE_NAME,
+        received_at: new Date().toISOString(),
+        body
+      };
+      writeLastEcho(payload);
+      sendJson(res, 200, payload);
+    } catch (error) {
+      sendJson(res, 400, { error: error?.message ?? String(error) });
+    }
+    return;
+  }
+
+  sendJson(res, 404, { error: "not found", path: pathname });
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`${SERVICE_NAME} listening on ${PORT}`);
+});

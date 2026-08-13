@@ -692,7 +692,7 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn start(",
+            "fn start_inner(",
             ".map(|entry| entry.validator.clone())",
             ".filter(|_| false).map(|entry| entry.validator.clone())",
             "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
@@ -1972,7 +1972,7 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn start(",
+            "fn start_inner(",
             "validate_shared_ownership_geometry(\n"
             "            shared_pending_ownership_unit_capacity,\n"
             "            reply_route_source_capacity,\n"
@@ -2273,7 +2273,7 @@
             "fn begin_fetch<S: V2EffectServices>(",
             "        if round.context_id != self.context.id()\n",
             "        self.finality_completion = None;\n        if round.context_id != self.context.id()\n",
-            "the durable Apply completion tombstone must be installed exactly once and never cleared or replaced",
+            "the durable Apply completion tombstone must have exactly the runtime and recovered authenticated installation paths",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -2469,15 +2469,16 @@ def _apply_exact_output_non_runtime_extended_mutations(
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "struct FinalityCompletion {",
-            "ownership: RuntimeEffectOwnership,",
-            "ownership: Option<RuntimeEffectOwnership>,",
+            "ownership: FinalityCompletionOwner,",
+            "ownership: Option<FinalityCompletionOwner>,",
             "durable Apply tombstone must retain the exact reducer incarnation tag",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "pub(crate) fn complete_application<S: V2EffectServices>(",
-            "            ownership,\n        });",
-            "            ownership: ownership.clone(),\n        });",
+            "            ownership: FinalityCompletionOwner::Runtime(ownership),\n        });",
+            "            ownership: FinalityCompletionOwner::RecoveredDecisionApply(\n"
+            "                RecoveredDecisionApplyDispatchKeyV1::new_for_test(),\n            ),\n        });",
             "durable Apply completion must retain the exact tag",
         ),
         (
@@ -2580,9 +2581,9 @@ def _apply_exact_output_non_runtime_extended_mutations(
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "fn matches_apply(",
-            "self.ownership == *ownership",
+            "matches!(&self.ownership, FinalityCompletionOwner::Runtime(retained) if retained == ownership)",
             "true",
-            "durable Apply tombstone equality must bind tag, ownership, finality decision, and Kura receipt",
+            "durable Apply tombstone equality must bind the runtime incarnation, tag, finality decision, and Kura receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
