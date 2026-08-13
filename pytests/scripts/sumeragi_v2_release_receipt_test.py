@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -13,6 +14,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 from types import ModuleType
 import pytest
 from pytests.scripts.sumeragi_v2_release_receipt_components import (
@@ -41,11 +43,45 @@ from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
 )
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
+IDENTITY_ARCHIVE_IDS = {
+    "cargo_lock": "release-identity.cargo-lock.v1",
+    "git": "release-identity.git.v1",
+    "raw_commit": "release-identity.raw-commit.v1",
+    "ssh_allowed_signers": "release-identity.ssh-allowed-signers.v1",
+    "ssh_keygen": "release-identity.ssh-keygen.v1",
+    "ssh_revocation": "release-identity.ssh-revocation.v1",
+    "verify_transcript": "release-identity.verify-transcript.v1",
+}
+
+
+def sanitized_identity_artifact(
+    path: Path, mode: int, label: str
+) -> dict[str, str | int]:
+    return {
+        "archive_id": IDENTITY_ARCHIVE_IDS[label],
+        "mode": f"{mode:04o}",
+        "sha256": sha256(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def sanitized_operation(
+    operation_id: str, status: int, stdout: bytes, stderr: bytes
+) -> dict[str, str | int]:
+    return {
+        "operation_id": operation_id,
+        "exit_status": status,
+        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+        "stdout_size_bytes": len(stdout),
+        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+        "stderr_size_bytes": len(stderr),
+    }
 RELEASE_RECEIPT_TEST_COMPONENT_FILES = (
     "sumeragi_v2_release_receipt_bootstrap_archive_cases.py",
     "sumeragi_v2_release_receipt_sdk_source_closure_cases.py",
     "sumeragi_v2_release_receipt_supervision_cases.py",
     "sumeragi_v2_release_receipt_terminal_publication_cases.py",
+    "sumeragi_v2_release_approval_contract_cases.py",
 )
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
@@ -164,6 +200,7 @@ def make_bootstrap_evidence(
     scaling_configuration_sha256: str,
     scaling_irohad_sha256: str,
     scaling_iroha_cli_sha256: str,
+    sdk_source_manifest_data: bytes,
 ) -> dict[str, Path | str]:
     candidate_root = tmp_path / "bootstrap-candidate"
     (candidate_root / "scripts").mkdir(parents=True)
@@ -175,7 +212,7 @@ def make_bootstrap_evidence(
     evidence_dir = tmp_path / "bootstrap-evidence"
     evidence_dir.mkdir(mode=0o700)
     evidence_dir.chmod(0o700)
-    for child in ("home", "tmp", "runner-bin"):
+    for child in ("home", "tmp", "runner-bin", "runner-tools"):
         (evidence_dir / child).mkdir(mode=0o700)
         (evidence_dir / child).chmod(0o700)
     for log_name in ("runner-stdout.log", "runner-stderr.log"):
@@ -186,7 +223,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "a7690b9ff5910c1d32b7b6a0671d85f5392f787a2c2bb328f5bb279963d4dda3"
+        "d6f00da22fd0a17d07615d8892a2680124d267f5c3174c9a538792c5f9f1cd32"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -196,6 +233,11 @@ def make_bootstrap_evidence(
         ("identity_verifier", b"# fixture identity verifier\n", 0o400),
         ("receipt_validator", b"# fixture receipt validator\n", 0o400),
         ("runtime_helper", b"# fixture protected runtime helper\n", 0o400),
+        (
+            "sdk_dependency_bundle_manifest",
+            sdk_source_manifest_data,
+            0o400,
+        ),
     ):
         path = trust_dir / label
         path.write_bytes(data)
@@ -248,8 +290,11 @@ def make_bootstrap_evidence(
     synthetic_sources["runner_tool_manifest"] = runner_tool_manifest
     runner_tool_aliases: dict[str, Path] = {}
     for name, source in runner_tool_sources.items():
+        archive = evidence_dir / "runner-tools" / name
+        archive.write_bytes(source.read_bytes())
+        archive.chmod(0o500)
         alias = evidence_dir / "runner-bin" / name
-        alias.symlink_to(source.resolve())
+        alias.symlink_to(Path("..") / "runner-tools" / name)
         runner_tool_aliases[name] = alias
     trusted_sources = {
         "allowed_signers": signature_allowed_signers,
@@ -264,6 +309,9 @@ def make_bootstrap_evidence(
             "receipt_validator_support"
         ],
         "runtime_helper": synthetic_sources["runtime_helper"],
+        "sdk_dependency_bundle_manifest": synthetic_sources[
+            "sdk_dependency_bundle_manifest"
+        ],
         "revocation": signature_revocation,
         "runner_tool_manifest": synthetic_sources["runner_tool_manifest"],
         "ssh_keygen": signature_ssh_keygen,
@@ -282,6 +330,10 @@ def make_bootstrap_evidence(
             0o400,
         ),
         "runtime_helper": ("copy-release-runtime.py", 0o400),
+        "sdk_dependency_bundle_manifest": (
+            "sdk-dependency-bundle-manifest.json",
+            0o400,
+        ),
         "revocation": ("bootstrap-revocation", 0o400),
         "runner_tool_manifest": ("runner-tool-manifest.json", 0o400),
         "ssh_keygen": ("ssh-keygen", 0o500),
@@ -295,13 +347,11 @@ def make_bootstrap_evidence(
         archive.chmod(archive_mode)
         trusted_archives[label] = archive
         trusted_records[label] = {
+            "archive_id": f"release-bootstrap.{label.replace('_', '-')}.v1",
             "archive_name": archive_name,
-            "archive_mode": f"{archive_mode:04o}",
-            "observed_sha256": sha256(source),
-            "protected_sha256": sha256(source),
+            "mode": f"{archive_mode:04o}",
+            "sha256": sha256(source),
             "size_bytes": source.stat().st_size,
-            "source_mode": f"{source.stat().st_mode & 0o7777:04o}",
-            "source_path": str(source.resolve()),
         }
 
     bootstrap_identity = evidence_dir / "candidate-identity.json"
@@ -424,23 +474,11 @@ def make_bootstrap_evidence(
     head = identity["head_commit"]
     assert isinstance(head, str)
     bootstrap_transcript_value = {
-        "schema_version": 2,
-        "archive_names": identity_archive_names,
+        "format": "iroha-sumeragi-v2-release-identity-transcript",
+        "schema_version": 3,
+        "archive_ids": IDENTITY_ARCHIVE_IDS,
         "candidate_commit_oid": head,
-        "environment": identity_environment,
-        "policy_overrides": historical_config,
-        "policies": bootstrap_policies,
-        "replay": {
-            "candidate_root": "${CANDIDATE_ROOT}",
-            "evidence_directory": placeholder,
-            "environment": {
-                key: value.replace(str(evidence_dir), placeholder)
-                for key, value in identity_environment.items()
-            },
-            "policy_overrides": replay_config,
-        },
-        "tools": bootstrap_tools,
-        "commands": {
+        "operations": {
             "show_signature_metadata": command_record(
                 [
                     str(stages["git"]),
@@ -461,7 +499,7 @@ def make_bootstrap_evidence(
                 0,
                 show_output,
                 b"",
-            ),
+            ) | {"operation_id": "git.show-signature-metadata.ssh.v1"},
             "verify_commit": command_record(
                 [
                     str(stages["git"]),
@@ -480,40 +518,44 @@ def make_bootstrap_evidence(
                 0,
                 b"",
                 b"Good fixture SSH signature\n",
-            ),
-        },
-        "tool_probes": {
+            ) | {"operation_id": "git.verify-commit.ssh.v1"},
             "ssh_keygen_usage": command_record(
                 [str(stages["ssh_keygen"]), "-?"],
                 [f"{placeholder}/identity-ssh-keygen", "-?"],
                 1,
                 b"",
                 b"fixture ssh-keygen usage\n",
-            )
+            ) | {"operation_id": "ssh-keygen.usage-probe.v1"},
         },
     }
+    for operation in bootstrap_transcript_value["operations"].values():
+        operation.pop("argv")
+        operation.pop("replay_argv")
+        operation.pop("stdout_base64")
+        operation.pop("stderr_base64")
     identity_paths["identity_transcript"].write_bytes(
         canonical_json(bootstrap_transcript_value)
     )
     identity_paths["identity_transcript"].chmod(0o400)
     bootstrap_attestation_value = {
-        "schema_version": 2,
-        "release_identity": identity,
-        "release_identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
-        "tools": bootstrap_tools,
-        "policies": bootstrap_policies,
-        "verification": {
-            "status": "G",
-            "signer_fingerprint": signer_fingerprint,
-            "primary_key_fingerprint": "",
-            "allowed_signers_principal": signer_principal,
+        "format": "iroha-sumeragi-v2-release-identity-attestation",
+        "schema_version": 3,
+        "candidate": {
+            "commit_oid": identity["head_commit"],
+            "tree_oid": identity["head_tree"],
+            "source_manifest_sha256": identity[
+                "workspace_source_manifest_sha256"
+            ],
+            "cargo_lock_sha256": identity["cargo_lock_sha256"],
+            "release_identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
         },
-        "evidence": {
-            label: artifact_metadata(
+        "archives": {
+            label: sanitized_identity_artifact(
                 identity_paths["identity_transcript"]
                 if label == "verify_transcript"
                 else identity_paths[label],
                 0o500 if label in {"git", "ssh_keygen"} else 0o400,
+                label,
             )
             for label in identity_archive_names
         },
@@ -533,6 +575,12 @@ def make_bootstrap_evidence(
     )
     closed_path_entries = [str(evidence_dir), str(evidence_dir / "runner-bin")]
     policy_environment = {
+        "SUMERAGI_V2_RELEASE_RUNTIME_HELPER": str(
+            trusted_archives["runtime_helper"]
+        ),
+        "SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": sha256(
+            trusted_archives["runtime_helper"]
+        ),
         "SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN": str(trusted_archives["ssh_keygen"]),
         "SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256": sha256(trusted_archives["git"]),
         "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256": sha256(
@@ -568,6 +616,20 @@ def make_bootstrap_evidence(
         for key, value in policy_environment.items()
         if key.startswith("SUMERAGI_V2_RELEASE_BOOTSTRAP_")
     }
+    alias_environment.update({
+        "IROHA_RELEASE_RUNTIME_HELPER": str(
+            trusted_archives["runtime_helper"]
+        ),
+        "IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": sha256(
+            trusted_archives["runtime_helper"]
+        ),
+        "IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST": str(
+            trusted_archives["sdk_dependency_bundle_manifest"]
+        ),
+        "IROHA_RELEASE_EXPECTED_SDK_DEPENDENCY_BUNDLE_MANIFEST_SHA256": sha256(
+            trusted_archives["sdk_dependency_bundle_manifest"]
+        ),
+    })
     runner_environment = {
         "HOME": str(evidence_dir / "home"),
         "LANG": "C",
@@ -598,48 +660,56 @@ def make_bootstrap_evidence(
         **alias_environment,
     }
     marker_value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "trust_boundary": {
             "bootstrap_authentication": "external prerequisite",
             "release_image_and_dynamic_loader": "external prerequisite",
             "same_uid_and_trusted_ancestor_owners": True,
         },
-        "candidate_root": str(candidate_root),
         "candidate_identity": identity,
         "candidate_identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
         "trusted_inputs": trusted_records,
         "identity_verification": identity_verification,
         "runner": {
-            "argv": [str(trusted_archives["bash"]), str(runner), "--release"],
-            "closed_path_resolution": {
-                "bash": str(trusted_archives["bash"]),
-                "git": str(trusted_archives["git"]),
-                "python3": str(trusted_archives["python"]),
+            "archive_id": "release-candidate.runner.v1",
+            "invocation": {
+                "profile": "release",
+                "operation_id": "sumeragi-v2.release.v1",
+                "arguments": ["--release"],
+                "bash_archive_id": "release-bootstrap.bash.v1",
             },
-            "environment_without_self_digest": runner_environment,
+            "closed_path_resolution": {
+                "bash": "release-bootstrap.bash.v1",
+                "git": "release-bootstrap.git.v1",
+                "python3": "release-bootstrap.python.v1",
+            },
+            "environment_sha256": hashlib.sha256(
+                canonical_json(runner_environment)
+            ).hexdigest(),
             "mode": f"{runner.stat().st_mode & 0o7777:04o}",
             "output": {
-                "stderr_path": str(evidence_dir / "runner-stderr.log"),
-                "stdout_path": str(evidence_dir / "runner-stdout.log"),
+                "stderr_archive_id": "release-bootstrap.runner-stderr.v1",
+                "stderr_name": "runner-stderr.log",
+                "stdout_archive_id": "release-bootstrap.runner-stdout.v1",
+                "stdout_name": "runner-stdout.log",
                 "active_mode": "0600",
                 "sealed_mode": "0400",
             },
-            "path": str(runner),
             "self_digest_environment_variables": [
                 "IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
                 "SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
             ],
             "sha256": sha256(runner),
             "size_bytes": runner.stat().st_size,
-            "tool_directory": str(evidence_dir / "runner-bin"),
+            "tool_directory": "runner-bin",
             "tools": {
                 name: {
+                    "archive_id": f"release-runner-tool.{name}.v1",
                     "alias_name": name,
-                    "alias_path": str(runner_tool_aliases[name]),
-                    "sha256": sha256(source),
-                    "size_bytes": source.stat().st_size,
-                    "source_mode": "0500",
-                    "source_path": str(source.resolve()),
+                    "archive_name": f"runner-tools/{name}",
+                    "mode": "0500",
+                    "sha256": sha256(evidence_dir / "runner-tools" / name),
+                    "size_bytes": (evidence_dir / "runner-tools" / name).stat().st_size,
                 }
                 for name, source in runner_tool_sources.items()
             },
@@ -655,9 +725,16 @@ def make_bootstrap_evidence(
                     "-I",
                     "-S",
                     "-c",
-                    "raise SystemExit(0)",
+                    "import sys;sys.stdout.write(sys.executable+'\\n')",
                 ],
+                "expected_executable": "python3",
                 "exit_status": 0,
+                "stdout_sha256": hashlib.sha256(
+                    f"{trusted_archives['python']}\n".encode()
+                ).hexdigest(),
+                "stdout_size_bytes": len(
+                    f"{trusted_archives['python']}\n".encode()
+                ),
             },
         },
     }
@@ -667,6 +744,7 @@ def make_bootstrap_evidence(
     return {
         "bootstrap_completion": completion,
         "bootstrap_evidence_dir": evidence_dir,
+        "bootstrap_runner_environment": runner_environment,
         "bootstrap_identity": bootstrap_identity,
         "bootstrap_attestation": identity_paths["identity_attestation"],
         "bootstrap_transcript": identity_paths["identity_transcript"],
@@ -681,8 +759,8 @@ def make_bootstrap_evidence(
         ],
         "bootstrap_identity_ssh_keygen": identity_paths["ssh_keygen"],
         "bootstrap_identity_revocation": identity_paths["ssh_revocation"],
-        "bootstrap_runner_cargo": runner_tool_sources["cargo"],
-        "bootstrap_runner_rustc": runner_tool_sources["rustc"],
+        "bootstrap_runner_cargo": evidence_dir / "runner-tools" / "cargo",
+        "bootstrap_runner_rustc": evidence_dir / "runner-tools" / "rustc",
     }
 
 def make_scaling_evidence(
@@ -1215,6 +1293,408 @@ def make_g12_evidence(
     }
 
 
+def _sdk_dependency_material() -> tuple[
+    bytes,
+    bytes,
+    bytes,
+    bytes,
+    dict[str, bytes],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    package_lock = canonical_json(
+        {
+            "name": "sdk-fixture",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "packages": {
+                "": {"name": "sdk-fixture", "version": "1.0.0"},
+                "node_modules/fixture": {"version": "1.0.0"},
+            },
+        }
+    )
+    installed_lock = canonical_json(
+        {
+            "name": "sdk-fixture",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "packages": {"node_modules/fixture": {"version": "1.0.0"}},
+        }
+    )
+    resolved_revision = "a" * 40
+    package_resolved = canonical_json(
+        {
+            "pins": [
+                {
+                    "identity": "fixture",
+                    "kind": "remoteSourceControl",
+                    "location": "https://example.invalid/fixture.git",
+                    "state": {"revision": resolved_revision, "version": "1.0.0"},
+                }
+            ],
+            "version": 2,
+        }
+    )
+    wrapper = (
+        b"distributionBase=GRADLE_USER_HOME\n"
+        b"distributionPath=wrapper/dists\n"
+        b"distributionUrl=https\\://services.gradle.org/distributions/gradle-9.3.0-bin.zip\n"
+        b"zipStoreBase=GRADLE_USER_HOME\n"
+        b"zipStorePath=wrapper/dists\n"
+    )
+    files = {
+        "gradle/gradle-9.3.0-bin.zip": b"fixture Gradle 9.3.0 distribution\n",
+        (
+            "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
+            "79n14ral3mx1ozqr3csh2u872/gradle-9.3.0/bin/gradle"
+        ): b"#!/bin/sh\n",
+        (
+            "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
+            "79n14ral3mx1ozqr3csh2u872/gradle-9.3.0-bin.zip.ok"
+        ): b"",
+        "gradle/java-gradle-wrapper.properties": wrapper,
+        "gradle/kotlin-gradle-wrapper.properties": wrapper,
+        "node/node_modules/.package-lock.json": installed_lock,
+        "node/node_modules/fixture/index.js": b"export const fixture = true;\n",
+        "node/package-lock.json": package_lock,
+        "swiftpm/cache/checkouts/fixture/.git/HEAD": (
+            resolved_revision + "\n"
+        ).encode("ascii"),
+        "swiftpm/cache/checkouts/fixture/Sources/Fixture.swift": (
+            b"public let fixture = true\n"
+        ),
+        "swiftpm/Package.resolved": package_resolved,
+    }
+    directories = (
+        "gradle",
+        "gradle/gradle-user-home",
+        "gradle/gradle-user-home/caches",
+        "gradle/gradle-user-home/caches/9.3.0",
+        "gradle/gradle-user-home/caches/modules-2",
+        "gradle/gradle-user-home/wrapper",
+        "gradle/gradle-user-home/wrapper/dists",
+        "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin",
+        (
+            "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
+            "79n14ral3mx1ozqr3csh2u872"
+        ),
+        (
+            "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
+            "79n14ral3mx1ozqr3csh2u872/gradle-9.3.0"
+        ),
+        (
+            "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
+            "79n14ral3mx1ozqr3csh2u872/gradle-9.3.0/bin"
+        ),
+        "node",
+        "node/node_modules",
+        "node/node_modules/fixture",
+        "swiftpm",
+        "swiftpm/cache",
+        "swiftpm/cache/checkouts",
+        "swiftpm/cache/checkouts/fixture",
+        "swiftpm/cache/checkouts/fixture/.git",
+        "swiftpm/cache/checkouts/fixture/Sources",
+        "swiftpm/cache/repositories",
+    )
+    records: list[dict[str, object]] = [
+        {"path": ".", "kind": "directory", "mode": "0500"}
+    ]
+    records.extend(
+        {"path": path, "kind": "directory", "mode": "0500"}
+        for path in directories
+    )
+    records.extend(
+        {
+            "path": path,
+            "kind": "file",
+            "mode": (
+                "0500" if path.endswith("/bin/gradle") else "0400"
+            ),
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+        for path, data in files.items()
+    )
+    records = [records[0], *sorted(records[1:], key=lambda item: str(item["path"]))]
+    work_records = [
+        {"path": ".", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/caches", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/caches/9.3.0", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/caches/modules-2", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/wrapper", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/wrapper/dists", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/wrapper/dists/gradle-9.3.0-bin", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/wrapper/dists/gradle-9.3.0-bin/79n14ral3mx1ozqr3csh2u872", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/wrapper/dists/gradle-9.3.0-bin/79n14ral3mx1ozqr3csh2u872/gradle-9.3.0", "kind": "directory", "mode": "0700"},
+        {"path": "gradle-home/wrapper/dists/gradle-9.3.0-bin/79n14ral3mx1ozqr3csh2u872/gradle-9.3.0/bin", "kind": "directory", "mode": "0700"},
+        {
+            "path": "gradle-home/wrapper/dists/gradle-9.3.0-bin/79n14ral3mx1ozqr3csh2u872/gradle-9.3.0/bin/gradle",
+            "kind": "file", "mode": "0700", "size": len(b"#!/bin/sh\n"),
+            "sha256": hashlib.sha256(b"#!/bin/sh\n").hexdigest(),
+        },
+        {
+            "path": "gradle-home/wrapper/dists/gradle-9.3.0-bin/79n14ral3mx1ozqr3csh2u872/gradle-9.3.0-bin.zip.ok",
+            "kind": "file", "mode": "0600", "size": 0,
+            "sha256": hashlib.sha256(b"").hexdigest(),
+        },
+        {"path": "swiftpm", "kind": "directory", "mode": "0700"},
+        {"path": "swiftpm/checkouts", "kind": "directory", "mode": "0700"},
+        {"path": "swiftpm/checkouts/fixture", "kind": "directory", "mode": "0700"},
+        {"path": "swiftpm/checkouts/fixture/.git", "kind": "directory", "mode": "0700"},
+        {
+            "path": "swiftpm/checkouts/fixture/.git/HEAD", "kind": "file",
+            "mode": "0600", "size": len((resolved_revision + "\n").encode("ascii")),
+            "sha256": hashlib.sha256((resolved_revision + "\n").encode("ascii")).hexdigest(),
+        },
+        {"path": "swiftpm/checkouts/fixture/Sources", "kind": "directory", "mode": "0700"},
+        {
+            "path": "swiftpm/checkouts/fixture/Sources/Fixture.swift",
+            "kind": "file", "mode": "0600",
+            "size": len(b"public let fixture = true\n"),
+            "sha256": hashlib.sha256(b"public let fixture = true\n").hexdigest(),
+        },
+        {"path": "swiftpm/repositories", "kind": "directory", "mode": "0700"},
+    ]
+    work_records = [
+        work_records[0],
+        *sorted(work_records[1:], key=lambda item: str(item["path"])),
+    ]
+    return (
+        package_lock,
+        installed_lock,
+        package_resolved,
+        wrapper,
+        files,
+        records,
+        work_records,
+    )
+
+
+def _sdk_source_manifest_fixture(git_path: Path, git_sha256: str) -> bytes:
+    (
+        package_lock,
+        _,
+        package_resolved,
+        wrapper,
+        files,
+        records,
+        _,
+    ) = _sdk_dependency_material()
+
+    def source_inventory(prefix: str) -> dict[str, object]:
+        projected: list[dict[str, object]] = []
+        for record in records:
+            relative = str(record["path"])
+            if relative != prefix and not relative.startswith(prefix + "/"):
+                continue
+            item = dict(record)
+            item["path"] = (
+                "." if relative == prefix else relative.removeprefix(prefix + "/")
+            )
+            if item["kind"] == "directory":
+                item["mode"] = "0700"
+            elif item["kind"] == "file":
+                item["mode"] = (
+                    "0700" if int(str(item["mode"]), 8) & 0o111 else "0600"
+                )
+            projected.append(item)
+        payload = json.dumps(
+            projected, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return {
+            "file_bytes": sum(
+                int(item["size"])
+                for item in projected
+                if item["kind"] == "file"
+            ),
+            "format": "iroha-sumeragi-v2-sdk-dependency-source-inventory",
+            "record_count": len(projected),
+            "records": projected,
+            "records_sha256": hashlib.sha256(payload).hexdigest(),
+            "schema_version": 1,
+        }
+
+    revision = "a" * 40
+    tree = "b" * 40
+    return canonical_json(
+        {
+            "format": "iroha-sumeragi-v2-sdk-dependency-sources",
+            "git": {
+                "executable": str(git_path.resolve()),
+                "sha256": git_sha256,
+            },
+            "gradle": {
+                "distribution_archive": "/operator/gradle-9.3.0-bin.zip",
+                "distribution_sha256": hashlib.sha256(
+                    files["gradle/gradle-9.3.0-bin.zip"]
+                ).hexdigest(),
+                "distribution_url": (
+                    "https://services.gradle.org/distributions/"
+                    "gradle-9.3.0-bin.zip"
+                ),
+                "gradle_user_home": "/operator/gradle-home",
+                "gradle_user_home_inventory": source_inventory(
+                    "gradle/gradle-user-home"
+                ),
+                "java_wrapper_properties_sha256": hashlib.sha256(wrapper).hexdigest(),
+                "kotlin_wrapper_properties_sha256": hashlib.sha256(wrapper).hexdigest(),
+                "version": "9.3.0",
+                "wrapper_cache_key": "79n14ral3mx1ozqr3csh2u872",
+            },
+            "node": {
+                "node_modules_inventory": source_inventory("node/node_modules"),
+                "node_modules_root": "/operator/node_modules",
+                "package_lock_sha256": hashlib.sha256(package_lock).hexdigest(),
+            },
+            "schema_version": 2,
+            "swiftpm": {
+                "cache_inventory": source_inventory("swiftpm/cache"),
+                "cache_root": "/operator/swiftpm-cache",
+                "package_resolved_sha256": hashlib.sha256(
+                    package_resolved
+                ).hexdigest(),
+                "resolved_revisions": [
+                    {
+                        "checkout": "fixture",
+                        "identity": "fixture",
+                        "revision": revision,
+                        "tree": tree,
+                    }
+                ],
+            },
+        }
+    )
+
+
+def make_sdk_dependency_evidence(
+    invocation_root: Path, *, source_manifest_sha256: str
+) -> dict[str, Path]:
+    (
+        package_lock,
+        installed_lock,
+        package_resolved,
+        wrapper,
+        files,
+        records,
+        work_records,
+    ) = _sdk_dependency_material()
+    resolved_revision = "a" * 40
+    resolved_tree = "b" * 40
+    archive_path = invocation_root / "sdk-dependency-bundle.tar"
+    with archive_path.open("xb") as raw:
+        with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for record in records:
+                relative = str(record["path"])
+                member = tarfile.TarInfo(
+                    "sdk-inputs" if relative == "." else f"sdk-inputs/{relative}"
+                )
+                member.mode = int(str(record["mode"]), 8)
+                member.uid = member.gid = member.mtime = 0
+                member.uname = member.gname = ""
+                if record["kind"] == "directory":
+                    member.type = tarfile.DIRTYPE
+                    archive.addfile(member)
+                else:
+                    data = files[relative]
+                    member.size = len(data)
+                    archive.addfile(member, io.BytesIO(data))
+    archive_path.chmod(0o400)
+    archive_record = {
+        "archive_id": "release-sdk-dependencies.bundle.v1",
+        "archive_name": archive_path.name,
+        "mode": "0400",
+        "size_bytes": archive_path.stat().st_size,
+        "sha256": sha256(archive_path),
+    }
+    inventory = {
+        "format": "iroha-sumeragi-v2-sdk-dependency-bundle",
+        "schema_version": 1,
+        "archive_id": "release-sdk-dependencies.bundle.v1",
+        "source_disclosure": "withheld",
+        "source_manifest_sha256": source_manifest_sha256,
+        "source_state_sha256": "e" * 64,
+        "bindings": {
+            "node": {
+                "node_modules_archive_name": "node/node_modules",
+                "package_lock_archive_name": "node/package-lock.json",
+                "package_lock_sha256": hashlib.sha256(package_lock).hexdigest(),
+                "installed_lock_sha256": hashlib.sha256(installed_lock).hexdigest(),
+            },
+            "swiftpm": {
+                "cache_archive_name": "swiftpm/cache",
+                "package_resolved_archive_name": "swiftpm/Package.resolved",
+                "package_resolved_sha256": hashlib.sha256(package_resolved).hexdigest(),
+                "resolved_revisions": [
+                    {
+                        "identity": "fixture",
+                        "checkout": "fixture",
+                        "revision": resolved_revision,
+                        "tree": resolved_tree,
+                    }
+                ],
+            },
+            "gradle": {
+                "distribution_archive_name": "gradle/gradle-9.3.0-bin.zip",
+                "distribution_sha256": hashlib.sha256(
+                    files["gradle/gradle-9.3.0-bin.zip"]
+                ).hexdigest(),
+                "distribution_url": (
+                    "https://services.gradle.org/distributions/"
+                    "gradle-9.3.0-bin.zip"
+                ),
+                "gradle_user_home_archive_name": "gradle/gradle-user-home",
+                "launcher_archive_name": (
+                    "gradle/gradle-user-home/wrapper/dists/"
+                    "gradle-9.3.0-bin/79n14ral3mx1ozqr3csh2u872/"
+                    "gradle-9.3.0/bin/gradle"
+                ),
+                "wrapper_cache_key": "79n14ral3mx1ozqr3csh2u872",
+                "version": "9.3.0",
+                "wrapper_properties_sha256": {
+                    "java": hashlib.sha256(wrapper).hexdigest(),
+                    "kotlin": hashlib.sha256(wrapper).hexdigest(),
+                },
+            },
+        },
+        "archive": archive_record,
+        "record_count": len(records),
+        "file_bytes": sum(len(data) for data in files.values()),
+        "records": records,
+        "work_initial_record_count": len(work_records),
+        "work_initial_file_bytes": sum(
+            int(record.get("size", 0)) for record in work_records
+        ),
+        "work_initial_records": work_records,
+    }
+    input_inventory = invocation_root / "sdk-dependency-input.json"
+    input_inventory.write_bytes(canonical_json(inventory))
+    input_inventory.chmod(0o400)
+    final_inventory = invocation_root / "sdk-dependency-work-final.json"
+    final_inventory.write_bytes(
+        canonical_json(
+            {
+                "format": "iroha-sumeragi-v2-sdk-dependency-work-final",
+                "schema_version": 1,
+                "archive_id": "release-sdk-dependencies.work-final.v1",
+                "sdk_dependency_inventory_sha256": sha256(input_inventory),
+                "record_count": len(work_records),
+                "file_bytes": sum(
+                    int(record.get("size", 0)) for record in work_records
+                ),
+                "records": work_records,
+            }
+        )
+    )
+    final_inventory.chmod(0o400)
+    return {
+        "sdk_dependency_archive": archive_path,
+        "sdk_dependency_input_inventory": input_inventory,
+        "sdk_dependency_final_work_inventory": final_inventory,
+    }
+
+
 def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     candidate_manifest = "a" * 64
     sealed_manifest = "b" * 64
@@ -1402,99 +1882,60 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         f"G\0{signer_fingerprint}\0\0{signer_principal}\0\n"
     ).encode("utf-8")
     transcript = {
-        "schema_version": 2,
-        "archive_names": archive_names,
+        "format": "iroha-sumeragi-v2-release-identity-transcript",
+        "schema_version": 3,
+        "archive_ids": IDENTITY_ARCHIVE_IDS,
         "candidate_commit_oid": head,
-        "environment": closed_environment,
-        "policy_overrides": historical_config,
-        "policies": policies,
-        "replay": {
-            "candidate_root": "${CANDIDATE_ROOT}",
-            "evidence_directory": evidence_placeholder,
-            "environment": {
-                key: value.replace(str(signature_dir), evidence_placeholder)
-                for key, value in closed_environment.items()
-            },
-            "policy_overrides": replay_config,
-        },
-        "tools": tools,
-        "commands": {
-            "show_signature_metadata": command_record(
-                [
-                    str(stage_paths["git"]),
-                    *historical_config,
-                    "show",
-                    "--no-patch",
-                    "--format=%G?%x00%GF%x00%GP%x00%GS%x00",
-                    head,
-                ],
-                [
-                    f"{evidence_placeholder}/git",
-                    *replay_config,
-                    "show",
-                    "--no-patch",
-                    "--format=%G?%x00%GF%x00%GP%x00%GS%x00",
-                    head,
-                ],
-                0,
-                show_output,
-                b"",
+        "operations": {
+            "show_signature_metadata": sanitized_operation(
+                "git.show-signature-metadata.ssh.v1", 0, show_output, b""
             ),
-            "verify_commit": command_record(
-                [
-                    str(stage_paths["git"]),
-                    *historical_config,
-                    "verify-commit",
-                    "--raw",
-                    head,
-                ],
-                [
-                    f"{evidence_placeholder}/git",
-                    *replay_config,
-                    "verify-commit",
-                    "--raw",
-                    head,
-                ],
+            "verify_commit": sanitized_operation(
+                "git.verify-commit.ssh.v1",
                 0,
                 b"",
                 b"Good fixture SSH signature\n",
             ),
-        },
-        "tool_probes": {
-            "ssh_keygen_usage": command_record(
-                [str(stage_paths["ssh_keygen"]), "-?"],
-                [f"{evidence_placeholder}/ssh-keygen", "-?"],
+            "ssh_keygen_usage": sanitized_operation(
+                "ssh-keygen.usage-probe.v1",
                 1,
                 b"",
                 b"fixture ssh-keygen usage\n",
-            )
+            ),
         },
     }
     signature_transcript.write_bytes(canonical_json(transcript))
     signature_transcript.chmod(0o400)
-    attestation_evidence = {
-        "cargo_lock": artifact_metadata(signature_cargo_lock, 0o400),
-        "git": artifact_metadata(signature_git, 0o500),
-        "raw_commit": artifact_metadata(signature_raw_commit, 0o400),
-        "ssh_allowed_signers": artifact_metadata(signature_allowed_signers, 0o400),
-        "ssh_keygen": artifact_metadata(signature_ssh_keygen, 0o500),
-        "ssh_revocation": artifact_metadata(signature_revocation, 0o400),
-        "verify_transcript": artifact_metadata(signature_transcript, 0o400),
-    }
     candidate_identity = json.loads(candidate.read_text(encoding="utf-8"))
     attestation = {
-        "schema_version": 2,
-        "release_identity": candidate_identity,
-        "release_identity_sha256": sha256(candidate),
-        "tools": tools,
-        "policies": policies,
-        "verification": {
-            "status": "G",
-            "signer_fingerprint": signer_fingerprint,
-            "primary_key_fingerprint": "",
-            "allowed_signers_principal": signer_principal,
+        "format": "iroha-sumeragi-v2-release-identity-attestation",
+        "schema_version": 3,
+        "candidate": {
+            "commit_oid": candidate_identity["head_commit"],
+            "tree_oid": candidate_identity["head_tree"],
+            "source_manifest_sha256": candidate_identity[
+                "workspace_source_manifest_sha256"
+            ],
+            "cargo_lock_sha256": candidate_identity["cargo_lock_sha256"],
+            "release_identity_sha256": sha256(candidate),
         },
-        "evidence": attestation_evidence,
+        "archives": {
+            label: sanitized_identity_artifact(
+                signature_transcript
+                if label == "verify_transcript"
+                else {
+                    "cargo_lock": signature_cargo_lock,
+                    "git": signature_git,
+                    "raw_commit": signature_raw_commit,
+                    "ssh_allowed_signers": signature_allowed_signers,
+                    "ssh_keygen": signature_ssh_keygen,
+                    "ssh_revocation": signature_revocation,
+                }[label],
+                0o500 if label in {"git", "ssh_keygen"} else 0o400,
+                label,
+            )
+            for label in archive_names
+        },
     }
     signature_attestation.write_bytes(canonical_json(attestation))
     signature_attestation.chmod(0o400)
@@ -1522,6 +1963,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         ).hexdigest(),
         scaling_irohad_sha256=SCALING_IROHAD_SHA256,
         scaling_iroha_cli_sha256=SCALING_IROHA_CLI_SHA256,
+        sdk_source_manifest_data=_sdk_source_manifest_fixture(
+            signature_git, sha256(signature_git),
+        ),
     )
     bootstrap_evidence_dir = bootstrap["bootstrap_evidence_dir"]
     assert isinstance(bootstrap_evidence_dir, Path)
@@ -1545,6 +1989,12 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     release_output_directory.mkdir(mode=0o700)
     release_output_directory.chmod(0o700)
     terminal_output = release_output_directory / "RELEASE_COMPLETED.json"
+    sdk_dependencies = make_sdk_dependency_evidence(
+        release_invocation_root,
+        source_manifest_sha256=sha256(
+            bootstrap_evidence_dir / "sdk-dependency-bundle-manifest.json"
+        ),
+    )
 
     signature_dir = bootstrap_evidence_dir
     signature_attestation = bootstrap["bootstrap_attestation"]
@@ -1596,7 +2046,24 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         ROOT_DIR / writer_symbols["_NATIVE_AMX_GROUPED_PARITY_HARNESS"]
     ).read_text(encoding="utf-8")
     assert (
-        'readonly javascript_staged_scripts_root="${javascript_package_root}/scripts"'
+        'javascript_repository_root_first="${temporary_root}/javascript-repository-first"'
+        in harness_text
+    )
+    assert (
+        'javascript_repository_root_second="${temporary_root}/javascript-repository-second"'
+        in harness_text
+    )
+    assert (
+        'javascript_package_root_first="${javascript_repository_root_first}/javascript/iroha_js"'
+        in harness_text
+    )
+    assert (
+        'javascript_staged_scripts_root="${javascript_package_root}/scripts"'
+        in harness_text
+    )
+    assert (
+        'for javascript_package_root in \\\n'
+        '      "$javascript_package_root_first" "$javascript_package_root_second"; do'
         in harness_text
     )
     assert re.search(
@@ -2310,6 +2777,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         **prebuilt,
         **g4p,
         **g12,
+        **sdk_dependencies,
         "candidate": candidate,
         "sealed": sealed,
         "release_root": release_root,
@@ -2383,7 +2851,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
 
 
 def run_writer(
-    evidence: dict[str, Path | str | list[Path]],
+    evidence: dict[str, object],
     output: Path,
     writer: Path,
     *,
@@ -2417,6 +2885,8 @@ def run_writer(
             shutil.copy2(source_root / relative, destination)
     arguments = [
             sys.executable,
+            "-I",
+            "-S",
             str(writer),
             "--candidate-identity",
             str(evidence["candidate"]),
@@ -2424,6 +2894,22 @@ def run_writer(
             str(evidence["sealed"]),
             "--release-root",
             str(evidence["release_root"]),
+            "--bootstrap-completion",
+            str(evidence["bootstrap_completion"]),
+            "--bootstrap-evidence-dir",
+            str(evidence["bootstrap_evidence_dir"]),
+            "--bootstrap-identity",
+            str(evidence["bootstrap_identity"]),
+            "--bootstrap-attestation",
+            str(evidence["bootstrap_attestation"]),
+            "--bootstrap-transcript",
+            str(evidence["bootstrap_transcript"]),
+            "--expected-bootstrap-completion-sha256",
+            str(evidence["expected_bootstrap_completion_sha256"]),
+            "--bootstrap-candidate-root",
+            str(evidence["bootstrap_candidate_root"]),
+            "--bootstrap-runner",
+            str(evidence["bootstrap_runner"]),
             "--signature-attestation",
             str(evidence["signature_attestation"]),
             "--signature-transcript",
@@ -2450,22 +2936,6 @@ def run_writer(
             str(evidence["expected_revocation_sha256"]),
             "--expected-signer-fingerprint",
             str(evidence["expected_signer_fingerprint"]),
-            "--bootstrap-completion",
-            str(evidence["bootstrap_completion"]),
-            "--bootstrap-evidence-dir",
-            str(evidence["bootstrap_evidence_dir"]),
-            "--bootstrap-identity",
-            str(evidence["bootstrap_identity"]),
-            "--bootstrap-attestation",
-            str(evidence["bootstrap_attestation"]),
-            "--bootstrap-transcript",
-            str(evidence["bootstrap_transcript"]),
-            "--expected-bootstrap-completion-sha256",
-            str(evidence["expected_bootstrap_completion_sha256"]),
-            "--bootstrap-candidate-root",
-            str(evidence["bootstrap_candidate_root"]),
-            "--bootstrap-runner",
-            str(evidence["bootstrap_runner"]),
             "--corridor-completion",
             str(evidence["corridor_completion"]),
             "--formal-completion",
@@ -2484,6 +2954,12 @@ def run_writer(
             str(evidence["g12_soak_completion"]),
             "--scaling-evidence-manifest",
             str(evidence["scaling_manifest"]),
+            "--sdk-dependency-archive",
+            str(evidence["sdk_dependency_archive"]),
+            "--sdk-dependency-input-inventory",
+            str(evidence["sdk_dependency_input_inventory"]),
+            "--sdk-dependency-final-work-inventory",
+            str(evidence["sdk_dependency_final_work_inventory"]),
             "--expected-scaling-trial-harness-sha256",
             str(evidence["expected_scaling_trial_harness_sha256"]),
             "--expected-scaling-configuration-sha256",
@@ -2501,12 +2977,23 @@ def run_writer(
         arguments.extend(("--verify-existing", "--validation-ack",
             str(repository_root.parent / "receipt-validation-ack.json"),
             "--source-manifest-sha256", str(evidence["sealed_manifest"])))
+    runner_environment = evidence["bootstrap_runner_environment"]
+    assert isinstance(runner_environment, dict)
+    execution_environment = dict(runner_environment)
+    marker_digest = str(evidence["expected_bootstrap_completion_sha256"])
+    execution_environment.update(
+        {
+            "IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256": marker_digest,
+            "SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256": marker_digest,
+        }
+    )
     return subprocess.run(
         arguments,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=execution_environment,
     )
 
 
@@ -2597,16 +3084,13 @@ def rebind_bootstrap_runner_tool(
     evidence_dir = evidence["bootstrap_evidence_dir"]
     assert isinstance(tool, Path)
     assert isinstance(evidence_dir, Path)
-    manifest_source = tool.parent / "runner-tool-manifest.json"
     manifest_archive = evidence_dir / "runner-tool-manifest.json"
+    manifest_source = manifest_archive
     manifest_value = json.loads(manifest_source.read_text(encoding="utf-8"))
     manifest_value["tools"][name]["sha256"] = sha256(tool)
     manifest_source.chmod(0o600)
     manifest_source.write_bytes(canonical_json(manifest_value))
     manifest_source.chmod(0o400)
-    manifest_archive.chmod(0o600)
-    manifest_archive.write_bytes(manifest_source.read_bytes())
-    manifest_archive.chmod(0o400)
 
     def mutate(value: dict[str, object]) -> None:
         runner = value["runner"]
@@ -2621,8 +3105,7 @@ def rebind_bootstrap_runner_tool(
         assert isinstance(tool_record, dict)
         tool_record["sha256"] = sha256(tool)
         tool_record["size_bytes"] = tool.stat().st_size
-        manifest_record["observed_sha256"] = sha256(manifest_source)
-        manifest_record["protected_sha256"] = sha256(manifest_source)
+        manifest_record["sha256"] = sha256(manifest_source)
         manifest_record["size_bytes"] = manifest_source.stat().st_size
 
     mutate_bootstrap_marker(evidence, mutate)
@@ -2652,7 +3135,9 @@ def mutate_transcript(
     attestation_path = evidence["signature_attestation"]
     assert isinstance(attestation_path, Path)
     attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
-    attestation["evidence"]["verify_transcript"] = artifact_metadata(path, 0o400)
+    attestation["archives"]["verify_transcript"] = sanitized_identity_artifact(
+        path, 0o400, "verify_transcript"
+    )
     rewrite_json(attestation_path, attestation)
 
 
@@ -2672,15 +3157,8 @@ def rebind_git_archive(
     assert isinstance(attestation_path, Path)
     assert isinstance(transcript_path, Path)
     attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
-    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-    for value in (attestation, transcript):
-        value["tools"]["git"]["observed_sha256"] = digest
-        value["tools"]["git"]["protected_sha256"] = digest
-        value["tools"]["git"]["size_bytes"] = git_path.stat().st_size
-    attestation["evidence"]["git"] = artifact_metadata(git_path, 0o500)
-    rewrite_json(transcript_path, transcript)
-    attestation["evidence"]["verify_transcript"] = artifact_metadata(
-        transcript_path, 0o400
+    attestation["archives"]["git"] = sanitized_identity_artifact(
+        git_path, 0o500, "git"
     )
     rewrite_json(attestation_path, attestation)
 
@@ -2813,12 +3291,131 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "a7690b9ff5910c1d32b7b6a0671d85f5392f787a2c2bb328f5bb279963d4dda3"
+            "d6f00da22fd0a17d07615d8892a2680124d267f5c3174c9a538792c5f9f1cd32"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
-    assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
-        evidence["bootstrap_completion"]
+    bootstrap_completion = evidence["bootstrap_completion"]
+    assert isinstance(bootstrap_completion, Path)
+    assert receipt["evidence"]["bootstrap"]["completion"] == {
+        "archive_id": "release-bootstrap.completion.v2",
+        "mode": "0400",
+        "sha256": sha256(bootstrap_completion),
+        "size_bytes": bootstrap_completion.stat().st_size,
+    }
+    sdk_dependencies = receipt["evidence"]["sdk_dependencies"]
+    sdk_manifest = (
+        Path(evidence["bootstrap_evidence_dir"])
+        / "sdk-dependency-bundle-manifest.json"
     )
+    assert sdk_dependencies == {
+        "schema_version": 1,
+        "source_disclosure": "withheld",
+        "source_manifest_sha256": sha256(sdk_manifest),
+        "source_state_sha256": "e" * 64,
+        "archive": {
+            "archive_id": "release-sdk-dependencies.bundle.v1",
+            "archive_name": "sdk-dependency-bundle.tar",
+            "mode": "0400",
+            "sha256": sha256(Path(evidence["sdk_dependency_archive"])),
+            "size_bytes": Path(evidence["sdk_dependency_archive"]).stat().st_size,
+        },
+        "input_inventory": {
+            "archive_id": "release-sdk-dependencies.input-inventory.v1",
+            "archive_name": "sdk-dependency-input.json",
+            "mode": "0400",
+            "sha256": sha256(Path(evidence["sdk_dependency_input_inventory"])),
+            "size_bytes": Path(
+                evidence["sdk_dependency_input_inventory"]
+            ).stat().st_size,
+        },
+        "final_work_inventory": {
+            "archive_id": "release-sdk-dependencies.work-final.v1",
+            "archive_name": "sdk-dependency-work-final.json",
+            "mode": "0400",
+            "sha256": sha256(
+                Path(evidence["sdk_dependency_final_work_inventory"])
+            ),
+            "size_bytes": Path(
+                evidence["sdk_dependency_final_work_inventory"]
+            ).stat().st_size,
+        },
+    }
+    assert "path" not in json.dumps(sdk_dependencies)
+    assert str(Path(evidence["sdk_dependency_archive"]).parent) not in json.dumps(
+        sdk_dependencies
+    )
+    assert "/operator/" not in output.read_text(encoding="utf-8")
+
+    module = load_writer_module()
+    sdk_inventory_document = json.loads(
+        Path(evidence["sdk_dependency_input_inventory"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    sdk_records, sdk_by_path, _ = module._sdk_inventory_records(
+        sdk_inventory_document["records"],
+        "fixture SDK inventory",
+        root_mode="0500",
+    )
+    sdk_bindings = module._sdk_binding_contract(
+        sdk_inventory_document["bindings"], sdk_by_path
+    )
+    private_attack_root = tmp_path / "sdk-private-manifest-attacks"
+    private_attack_root.mkdir(mode=0o700)
+
+    def reject_private_manifest(
+        document: dict[str, object], expected: str,
+    ) -> None:
+        path = private_attack_root / f"manifest-{len(tuple(private_attack_root.iterdir()))}.json"
+        path.write_bytes(canonical_json(document))
+        path.chmod(0o400)
+        with pytest.raises(module.ReceiptError, match=expected):
+            module._sdk_validate_private_source_manifest(
+                path=path,
+                expected_sha256=sha256(path),
+                archive_records=sdk_records,
+                bindings=sdk_bindings,
+                expected_git_sha256=evidence["expected_git_sha256"],
+            )
+
+    missing_node_member = json.loads(sdk_manifest.read_text(encoding="utf-8"))
+    node_inventory = missing_node_member["node"]["node_modules_inventory"]
+    node_inventory["records"] = [
+        record for record in node_inventory["records"]
+        if record["path"] != "fixture/index.js"
+    ]
+    node_inventory["record_count"] = len(node_inventory["records"])
+    node_inventory["file_bytes"] = sum(
+        record.get("size", 0) for record in node_inventory["records"]
+    )
+    node_inventory["records_sha256"] = hashlib.sha256(
+        json.dumps(
+            node_inventory["records"],
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    reject_private_manifest(missing_node_member, "retained archive subtree")
+
+    dirty_swift_member = json.loads(sdk_manifest.read_text(encoding="utf-8"))
+    swift_inventory = dirty_swift_member["swiftpm"]["cache_inventory"]
+    for record in swift_inventory["records"]:
+        if record["path"] == "checkouts/fixture/Sources/Fixture.swift":
+            record["sha256"] = "f" * 64
+    swift_inventory["records_sha256"] = hashlib.sha256(
+        json.dumps(
+            swift_inventory["records"],
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    reject_private_manifest(dirty_swift_member, "retained archive subtree")
+
+    wrong_gradle_key = json.loads(sdk_manifest.read_text(encoding="utf-8"))
+    wrong_gradle_key["gradle"]["wrapper_cache_key"] = "0" * 24
+    reject_private_manifest(wrong_gradle_key, "private source bindings")
     signature_artifacts = {
         "release_signature_attestation": "signature_attestation",
         "release_signature_transcript": "signature_transcript",
@@ -2932,29 +3529,31 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     assert isinstance(prebuilt_manifest, Path)
     assert isinstance(prebuilt_binaries, list)
     assert isinstance(prebuilt_bundle, Path)
-    assert prebuilt["schema_version"] == 2
+    assert prebuilt["schema_version"] == 3
     assert prebuilt["manifest"] == {
-        "path": str(prebuilt_manifest),
+        "archive_id": "release-prebuilt.manifest.v2",
         "sha256": sha256(prebuilt_manifest),
         "size_bytes": prebuilt_manifest.stat().st_size,
         "mode": "0400",
-        "owner_uid": os.geteuid(),
-        "nlink": 1,
     }
     assert prebuilt["source_manifest_sha256"] == evidence["sealed_manifest"]
     assert prebuilt["cargo_lock_sha256"] == evidence["lock"]
-    assert prebuilt["bundle_dir"] == str(prebuilt_bundle)
+    assert prebuilt["archive_id"] == (
+        f"release-prebuilt.bundle.v1:{prebuilt_bundle.name}"
+    )
     assert prebuilt["host_triple"] == PREBUILT_HOST_TRIPLE
     assert prebuilt["target_triple"] == PREBUILT_HOST_TRIPLE
     assert prebuilt["profile"] == "release"
     assert prebuilt["version_transcripts"] == {
         "cargo": {
-            "argv": [str(evidence["corridor_cargo_tool"]), "--version"],
+            "operation_id": "cargo.version.v1",
+            "tool_archive_id": "release-runner-tool.cargo.v1",
             "sha256": hashlib.sha256(CARGO_VERSION_OUTPUT).hexdigest(),
             "size_bytes": len(CARGO_VERSION_OUTPUT),
         },
         "rustc": {
-            "argv": [str(evidence["corridor_rustc_tool"]), "-vV"],
+            "operation_id": "rustc.version.v1",
+            "tool_archive_id": "release-runner-tool.rustc.v1",
             "sha256": hashlib.sha256(RUSTC_VERSION_OUTPUT).hexdigest(),
             "size_bytes": len(RUSTC_VERSION_OUTPUT),
         },
@@ -2963,12 +3562,10 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         {
             "role": role,
             "relative_path": relative,
-            "path": str(path),
+            "archive_id": f"release-prebuilt.binary.{role}.v1",
             "sha256": sha256(path),
             "size_bytes": path.stat().st_size,
             "mode": "0500",
-            "owner_uid": os.geteuid(),
-            "nlink": 1,
         }
         for (role, relative), path in zip(
             (
@@ -2990,7 +3587,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     scaling_paths = sorted(
         path for path in scaling_root.rglob("*") if path.is_file()
     )
-    assert scaling_bundle["root"] == str(scaling_root.resolve())
+    assert scaling_bundle["archive_id"] == "release-scaling.bundle.v1"
     assert scaling_bundle["file_count"] == len(scaling_paths)
     assert scaling_bundle["total_size_bytes"] == sum(
         path.stat().st_size for path in scaling_paths
@@ -3000,13 +3597,14 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     ]
     for record, path in zip(scaling_bundle["files"], scaling_paths):
         assert record == {
+            "archive_id": (
+                "release-scaling.file.v1:"
+                + path.relative_to(scaling_root).as_posix()
+            ),
             "relative_path": path.relative_to(scaling_root).as_posix(),
-            "path": str(path.resolve()),
             "sha256": sha256(path),
             "size_bytes": path.stat().st_size,
             "mode": f"{path.stat().st_mode & 0o7777:04o}",
-            "owner_uid": os.geteuid(),
-            "nlink": 1,
         }
     release_root = evidence["release_root"]
     assert isinstance(release_root, Path)
@@ -3020,13 +3618,10 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         expected_retained_tooling.append(
             {
                 "role": role,
-                "source_path": source_path,
-                "path": str(retained_path),
+                "archive_id": f"release-scaling.retained-tool.{role}.v1",
                 "sha256": sha256(retained_path),
                 "size_bytes": retained_path.stat().st_size,
                 "mode": f"{retained_path.stat().st_mode & 0o7777:04o}",
-                "owner_uid": os.geteuid(),
-                "nlink": 1,
             }
         )
     assert receipt["evidence"]["multilane_scaling_trust_anchors"] == {
@@ -3038,7 +3633,6 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         ],
         "irohad_sha256": evidence["expected_scaling_irohad_sha256"],
         "iroha_cli_sha256": evidence["expected_scaling_iroha_cli_sha256"],
-        "repository_root": str(evidence["release_root"]),
         "retained_tooling": expected_retained_tooling,
     }
 
@@ -3106,6 +3700,11 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         receipt,
         candidate_identity=candidate_contract,
         sealed_identity=sealed_contract,
+        scaling_root=scaling_root,
+        bootstrap_evidence_root=evidence["bootstrap_evidence_dir"],
+        candidate_root=evidence["bootstrap_candidate_root"],
+        release_root=release_root,
+        bootstrap_runtime_contracts=[],
     )
     directory_paths = {
         contract.path
@@ -3225,6 +3824,11 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
             receipt,
             candidate_identity=candidate_contract,
             sealed_identity=sealed_contract,
+            scaling_root=scaling_root,
+            bootstrap_evidence_root=evidence["bootstrap_evidence_dir"],
+            candidate_root=evidence["bootstrap_candidate_root"],
+            release_root=release_root,
+            bootstrap_runtime_contracts=[],
         )
 
 
@@ -4374,6 +4978,39 @@ def test_verify_existing_rebuilds_and_durably_accepts_the_exact_receipt(
     assert verified.returncode == 0, verified.stderr
     assert "aggregate release receipt verified" in verified.stdout
     assert stat.S_IMODE(output.stat().st_mode) == 0o400
+    acknowledgment = json.loads(
+        (output.parents[2] / "receipt-validation-ack.json").read_bytes()
+    )
+    assert acknowledgment["schema_version"] == 3
+    invocation = acknowledgment["invocation"]
+    invocation_core = {
+        key: invocation[key]
+        for key in (
+            "profile", "operation", "python_flags", "validator", "ordered_options"
+        )
+    }
+    assert invocation["invocation_sha256"] == hashlib.sha256(
+        json.dumps(
+            invocation_core,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    names = [binding["name"] for binding in invocation["ordered_options"]]
+    assert names[-3:] == [
+        "--verify-existing", "--validation-ack", "--source-manifest-sha256"
+    ]
+    source_binding = invocation["ordered_options"][-1]
+    assert source_binding["normalized_value_sha256"] == hashlib.sha256(
+        json.dumps(
+            {"kind": "text", "value": evidence["sealed_manifest"]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert str(evidence["bootstrap_candidate_root"]) not in json.dumps(invocation)
 
 
 def test_verify_existing_rejects_terminal_receipt_semantic_drift(
@@ -4407,25 +5044,25 @@ def test_verify_existing_rejects_terminal_receipt_semantic_drift(
 @pytest.mark.parametrize(
     ("path", "replacement"),
     [
-        (("schema_version",), 1),
-        (("release_identity", "head_commit"), "9" * 40),
-        (("release_identity_sha256",), "0" * 64),
-        (("tools", "git", "archive_name"), "other-git"),
-        (("tools", "git", "mode"), "0501"),
-        (("tools", "git", "observed_sha256"), "1" * 64),
-        (("tools", "git", "protected_sha256"), "2" * 64),
-        (("policies", "signature_format"), "openpgp"),
-        (("policies", "expected_signer_fingerprint"), "SHA256:" + "B" * 43),
-        (("policies", "ssh_allowed_signers", "protected_sha256"), "3" * 64),
-        (("policies", "ssh_allowed_signers", "size_bytes"), False),
-        (("policies", "ssh_revocation", "size_bytes"), False),
-        (("verification", "status"), "U"),
-        (("verification", "signer_fingerprint"), "SHA256:" + "B" * 43),
-        (("verification", "primary_key_fingerprint"), "SHA256:" + "C" * 43),
-        (("verification", "allowed_signers_principal"), ""),
-        (("evidence", "raw_commit", "archive_name"), "commit"),
-        (("evidence", "raw_commit", "size_bytes"), 0),
-        (("evidence", "ssh_revocation", "size_bytes"), False),
+        (("schema_version",), 2),
+        (("format",), "other-attestation"),
+        (("candidate", "commit_oid"), "9" * 40),
+        (("candidate", "tree_oid"), "8" * 40),
+        (("candidate", "source_manifest_sha256"), "0" * 64),
+        (("candidate", "cargo_lock_sha256"), "1" * 64),
+        (("candidate", "release_identity_sha256"), "2" * 64),
+        (("archives", "raw_commit", "archive_id"), "other-commit"),
+        (("archives", "raw_commit", "mode"), "0401"),
+        (("archives", "raw_commit", "sha256"), "3" * 64),
+        (("archives", "raw_commit", "size_bytes"), 0),
+        (("archives", "git", "archive_id"), "other-git"),
+        (("archives", "git", "mode"), "0501"),
+        (("archives", "git", "sha256"), "4" * 64),
+        (("archives", "git", "size_bytes"), False),
+        (("archives", "ssh_revocation", "archive_id"), "other-revocation"),
+        (("archives", "ssh_revocation", "mode"), "0401"),
+        (("archives", "ssh_revocation", "sha256"), "5" * 64),
+        (("archives", "ssh_revocation", "size_bytes"), False),
     ],
 )
 def test_receipt_rejects_tampered_signature_attestation_fields(
@@ -4460,8 +5097,8 @@ def test_receipt_rejects_noncanonical_signature_json(
         attestation = evidence["signature_attestation"]
         assert isinstance(attestation, Path)
         attestation_value = json.loads(attestation.read_text(encoding="utf-8"))
-        attestation_value["evidence"]["verify_transcript"] = artifact_metadata(
-            artifact, 0o400
+        attestation_value["archives"]["verify_transcript"] = (
+            sanitized_identity_artifact(artifact, 0o400, "verify_transcript")
         )
         rewrite_json(attestation, attestation_value)
 
@@ -4759,22 +5396,22 @@ def test_receipt_rejects_signature_directory_inside_release_root(tmp_path: Path)
     "mutation",
     [
         "schema-version",
-        "archive-name",
+        "format",
+        "archive-id",
         "candidate-oid",
-        "environment-home",
-        "environment-extra",
-        "tools-disagree",
-        "policies-disagree",
-        "replay-root",
-        "replay-environment",
-        "replay-policy",
-        "historical-symbolic-head",
-        "replay-symbolic-head",
+        "extra-top-level",
+        "extra-operation",
+        "verify-operation-id",
         "verify-failed",
+        "verify-stdout-digest",
+        "verify-stderr-size",
+        "show-operation-id",
         "show-size",
-        "show-base64",
+        "show-digest",
         "show-bad-status",
-        "probe-replay",
+        "probe-operation-id",
+        "probe-status",
+        "probe-digest",
     ],
 )
 def test_receipt_rejects_tampered_signature_transcript(
@@ -4785,52 +5422,45 @@ def test_receipt_rejects_tampered_signature_transcript(
 
     def apply(value: dict[str, object]) -> None:
         if mutation == "schema-version":
-            value["schema_version"] = 1
-        elif mutation == "archive-name":
-            value["archive_names"]["raw_commit"] = "commit"
+            value["schema_version"] = 2
+        elif mutation == "format":
+            value["format"] = "other-transcript"
+        elif mutation == "archive-id":
+            value["archive_ids"]["raw_commit"] = "other-commit"
         elif mutation == "candidate-oid":
             value["candidate_commit_oid"] = "9" * 40
-        elif mutation == "environment-home":
-            value["environment"]["HOME"] = "/tmp/untrusted-home"
-        elif mutation == "environment-extra":
-            value["environment"]["GIT_CONFIG_COUNT"] = "1"
-        elif mutation == "tools-disagree":
-            value["tools"]["git"]["observed_sha256"] = "4" * 64
-        elif mutation == "policies-disagree":
-            value["policies"]["signature_format"] = "openpgp"
-        elif mutation == "replay-root":
-            value["replay"]["candidate_root"] = "HEAD"
-        elif mutation == "replay-environment":
-            value["replay"]["environment"]["HOME"] = str(
-                evidence["signature_dir"]
-            )
-        elif mutation == "replay-policy":
-            value["replay"]["policy_overrides"][5] = "gpg.ssh.program=ssh-keygen"
-        elif mutation == "historical-symbolic-head":
-            value["commands"]["verify_commit"]["argv"][-1] = "HEAD"
-        elif mutation == "replay-symbolic-head":
-            value["commands"]["verify_commit"]["replay_argv"][-1] = "HEAD"
+        elif mutation == "extra-top-level":
+            value["source_path"] = str(evidence["signature_dir"])
+        elif mutation == "extra-operation":
+            value["operations"]["verify_commit"]["argv"] = ["git"]
+        elif mutation == "verify-operation-id":
+            value["operations"]["verify_commit"]["operation_id"] = "other"
         elif mutation == "verify-failed":
-            value["commands"]["verify_commit"]["exit_status"] = 1
+            value["operations"]["verify_commit"]["exit_status"] = 1
+        elif mutation == "verify-stdout-digest":
+            value["operations"]["verify_commit"]["stdout_sha256"] = "6" * 64
+        elif mutation == "verify-stderr-size":
+            value["operations"]["verify_commit"]["stderr_size_bytes"] += 1
+        elif mutation == "show-operation-id":
+            value["operations"]["show_signature_metadata"]["operation_id"] = "other"
         elif mutation == "show-size":
-            value["commands"]["show_signature_metadata"]["stdout_size_bytes"] += 1
-        elif mutation == "show-base64":
-            value["commands"]["show_signature_metadata"]["stdout_base64"] = "***"
+            value["operations"]["show_signature_metadata"]["stdout_size_bytes"] += 1
+        elif mutation == "show-digest":
+            value["operations"]["show_signature_metadata"]["stdout_sha256"] = "7" * 64
         elif mutation == "show-bad-status":
-            command = value["commands"]["show_signature_metadata"]
-            assert isinstance(command, dict)
-            set_command_stream(
-                command,
-                "stdout",
-                (
-                    f"B\0{evidence['expected_signer_fingerprint']}\0\0"
-                    f"{evidence['signer_principal']}\0\n"
-                ).encode("utf-8"),
+            bad = (
+                f"B\0{evidence['expected_signer_fingerprint']}\0\0"
+                f"{evidence['signer_principal']}\0\n"
+            ).encode()
+            value["operations"]["show_signature_metadata"].update(
+                sanitized_operation("git.show-signature-metadata.ssh.v1", 0, bad, b"")
             )
-        elif mutation == "probe-replay":
-            value["tool_probes"]["ssh_keygen_usage"]["replay_argv"][0] = (
-                "ssh-keygen"
-            )
+        elif mutation == "probe-operation-id":
+            value["operations"]["ssh_keygen_usage"]["operation_id"] = "other"
+        elif mutation == "probe-status":
+            value["operations"]["ssh_keygen_usage"]["exit_status"] = 0
+        elif mutation == "probe-digest":
+            value["operations"]["ssh_keygen_usage"]["stderr_sha256"] = "8" * 64
         else:
             raise AssertionError(mutation)
 
@@ -4974,15 +5604,9 @@ def test_receipt_rejects_fully_rebound_cross_policy_allowed_signers(
     )
     allowed.chmod(0o400)
     forged_digest = sha256(allowed)
-    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
     attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
-    forged_policy = protected_metadata(allowed, 0o400, forged_digest)
-    transcript["policies"]["ssh_allowed_signers"] = forged_policy
-    attestation["policies"]["ssh_allowed_signers"] = forged_policy
-    attestation["evidence"]["ssh_allowed_signers"] = artifact_metadata(allowed, 0o400)
-    rewrite_json(transcript_path, transcript)
-    attestation["evidence"]["verify_transcript"] = artifact_metadata(
-        transcript_path, 0o400
+    attestation["archives"]["ssh_allowed_signers"] = (
+        sanitized_identity_artifact(allowed, 0o400, "ssh_allowed_signers")
     )
     rewrite_json(attestation_path, attestation)
 

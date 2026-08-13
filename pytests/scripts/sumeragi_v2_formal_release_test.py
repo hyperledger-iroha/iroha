@@ -634,6 +634,15 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     ).read_text(encoding="utf-8")
     assert "unset JAVA_BIN" in release
+    assert (
+        'export IROHA_RELEASE_FORMAL_PROCESS_OBSERVATION_MODE='
+        '"owned-darwin-process-group-v1"'
+        in release
+    )
+    assert release.count(
+        'export IROHA_RELEASE_FORMAL_PROCESS_OBSERVATION_MODE='
+        '"owned-darwin-process-group-v1"'
+    ) == 1
     assert 'release_java_bin="$(canonical_executable java)"' in release
     assert "/target/tlapm/" not in release
     assert "/target/verus/" not in release

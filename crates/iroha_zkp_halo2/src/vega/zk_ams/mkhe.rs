@@ -116,6 +116,12 @@ mod direct_collective_eval_ceremony;
 mod direct_object_transport;
 #[allow(
     dead_code,
+    reason = "the RKG-ephemeral opening is retained fail-closed until the exact direct relation prover consumes it"
+)]
+#[path = "mkhe/direct_rkg_ephemeral_membership.rs"]
+mod direct_rkg_ephemeral_membership;
+#[allow(
+    dead_code,
     reason = "native CPK relation remains private and fail-closed until the complete streamed RNS/auth verifier is wired"
 )]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]

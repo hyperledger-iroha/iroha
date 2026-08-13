@@ -8,6 +8,7 @@ def private_output(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def test_terminal_publication_is_no_clobber_and_durable(tmp_path: Path) -> None:
+    _case_release_approval_file_protection_and_bounds_fail_closed()
     module = load_writer_module()
     directory, output = private_output(tmp_path)
     data = canonical_json({"result": "release-complete"})

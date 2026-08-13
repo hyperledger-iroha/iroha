@@ -4,8 +4,12 @@
 The first-release verifier accepts only Git SSH signatures.  Every executable
 and policy input is protected by a caller-supplied SHA-256 digest, copied into
 one private evidence directory, and used from that stable copy.  The exact
-copies used for verification are then published as release evidence.  The
-attestation is a marker: prerequisites are made durable before it is linked.
+copies used for verification are then published as release evidence. Exact
+source paths and the path-bearing execution transcript are confined to a
+bootstrap-private provenance document. The attestation and replay transcript
+use only stable archive identifiers and content metadata, so they are safe to
+pass to build children and terminal receipt construction. The attestation is a
+marker: prerequisites are made durable before it is linked.
 
 The release-host owner and every owner of an ancestor of the private evidence
 directory are part of the trust boundary. The verifier rejects symlinks and
@@ -67,6 +71,23 @@ _COMMAND_TIMEOUT_SECONDS = 120
 _EVIDENCE_DIRECTORY_MODE = 0o700
 _TOOL_MODE = 0o500
 _DATA_MODE = 0o400
+_ATTESTATION_FORMAT = "iroha-sumeragi-v2-release-identity-attestation"
+_ATTESTATION_SCHEMA_VERSION = 3
+_TRANSCRIPT_FORMAT = "iroha-sumeragi-v2-release-identity-transcript"
+_TRANSCRIPT_SCHEMA_VERSION = 3
+_PRIVATE_PROVENANCE_FORMAT = (
+    "iroha-sumeragi-v2-release-identity-bootstrap-private-provenance"
+)
+_PRIVATE_PROVENANCE_SCHEMA_VERSION = 1
+_ARCHIVE_IDS = {
+    "cargo_lock": "release-identity.cargo-lock.v1",
+    "git": "release-identity.git.v1",
+    "raw_commit": "release-identity.raw-commit.v1",
+    "ssh_allowed_signers": "release-identity.ssh-allowed-signers.v1",
+    "ssh_keygen": "release-identity.ssh-keygen.v1",
+    "ssh_revocation": "release-identity.ssh-revocation.v1",
+    "verify_transcript": "release-identity.verify-transcript.v1",
+}
 
 
 class VerificationError(RuntimeError):
@@ -372,6 +393,12 @@ def _validate_allowed_signers_policy(data: bytes) -> None:
 def _output_targets(args: argparse.Namespace) -> list[OutputTarget]:
     return [
         OutputTarget("attestation", args.attestation_output, "", _DATA_MODE, True),
+        OutputTarget(
+            "bootstrap-private provenance",
+            args.bootstrap_private_provenance_output,
+            "",
+            _DATA_MODE,
+        ),
         OutputTarget(
             "verify transcript", args.verify_transcript_output, "", _DATA_MODE
         ),
@@ -1147,33 +1174,34 @@ def _command_evidence(
     }
 
 
+def _sanitized_command_evidence(
+    result: CommandResult, operation_id: str
+) -> dict[str, Any]:
+    """Describe one operation without publishing its path-bearing argv/output."""
+
+    return {
+        "operation_id": operation_id,
+        "exit_status": result.returncode,
+        "stdout_sha256": _sha256(result.stdout),
+        "stdout_size_bytes": len(result.stdout),
+        "stderr_sha256": _sha256(result.stderr),
+        "stderr_size_bytes": len(result.stderr),
+    }
+
+
 def _replace_paths(value: str, substitutions: dict[str, str]) -> str:
     for source in sorted(substitutions, key=len, reverse=True):
         value = value.replace(source, substitutions[source])
     return value
 
 
-def _artifact(
-    data: bytes, mode: int, archive_name: str | None = None
-) -> dict[str, int | str]:
-    artifact: dict[str, int | str] = {
-        "mode": f"{mode:04o}",
-        "sha256": _sha256(data),
-        "size_bytes": len(data),
-    }
-    if archive_name is not None:
-        artifact["archive_name"] = archive_name
-    return artifact
-
-
-def _protected_artifact(
-    data: bytes, mode: int, archive_name: str, protected_sha256: str
+def _sanitized_artifact(
+    data: bytes, mode: int, archive_id: str
 ) -> dict[str, int | str]:
     return {
-        "archive_name": archive_name,
+        "archive_id": archive_id,
         "mode": f"{mode:04o}",
-        "observed_sha256": _sha256(data),
-        "protected_sha256": protected_sha256,
+        "sha256": _sha256(data),
         "size_bytes": len(data),
     }
 
@@ -1366,39 +1394,63 @@ def verify(args: argparse.Namespace) -> None:
         )
         _revalidate_evidence_directory(directory)
 
-        tools = {
+        private_tools = {
             "git": {
-                "archive_name": targets["Git archive"].name,
+                "archive_id": _ARCHIVE_IDS["git"],
+                "archive_path": str(stable_git),
                 "mode": "0500",
                 "observed_sha256": _sha256(git_snapshot.data),
                 "protected_sha256": expected_git_sha,
                 "size_bytes": len(git_snapshot.data),
-                "source_path": str(git_snapshot.path),
+                "source_path": str(
+                    _absolute(args.original_git_path)
+                    if args.original_git_path is not None
+                    else git_snapshot.path
+                ),
             },
             "ssh_keygen": {
-                "archive_name": targets["ssh-keygen archive"].name,
+                "archive_id": _ARCHIVE_IDS["ssh_keygen"],
+                "archive_path": str(stable_ssh),
                 "mode": "0500",
                 "observed_sha256": _sha256(ssh_snapshot.data),
                 "protected_sha256": expected_ssh_sha,
                 "size_bytes": len(ssh_snapshot.data),
-                "source_path": str(ssh_snapshot.path),
+                "source_path": str(
+                    _absolute(args.original_ssh_keygen_path)
+                    if args.original_ssh_keygen_path is not None
+                    else ssh_snapshot.path
+                ),
             },
         }
-        policies = {
+        private_policies = {
             "expected_signer_fingerprint": expected_fingerprint,
             "signature_format": "ssh",
-            "ssh_allowed_signers": _protected_artifact(
-                allowed_snapshot.data,
-                _DATA_MODE,
-                targets["SSH allowed-signers archive"].name,
-                expected_allowed_sha,
-            ),
-            "ssh_revocation": _protected_artifact(
-                revocation_snapshot.data,
-                _DATA_MODE,
-                targets["SSH revocation-policy archive"].name,
-                expected_revocation_sha,
-            ),
+            "ssh_allowed_signers": {
+                "archive_id": _ARCHIVE_IDS["ssh_allowed_signers"],
+                "archive_path": str(stable_allowed),
+                "mode": "0400",
+                "observed_sha256": _sha256(allowed_snapshot.data),
+                "protected_sha256": expected_allowed_sha,
+                "size_bytes": len(allowed_snapshot.data),
+                "source_path": str(
+                    _absolute(args.original_ssh_allowed_signers_path)
+                    if args.original_ssh_allowed_signers_path is not None
+                    else allowed_snapshot.path
+                ),
+            },
+            "ssh_revocation": {
+                "archive_id": _ARCHIVE_IDS["ssh_revocation"],
+                "archive_path": str(stable_revocation),
+                "mode": "0400",
+                "observed_sha256": _sha256(revocation_snapshot.data),
+                "protected_sha256": expected_revocation_sha,
+                "size_bytes": len(revocation_snapshot.data),
+                "source_path": str(
+                    _absolute(args.original_ssh_revocation_path)
+                    if args.original_ssh_revocation_path is not None
+                    else revocation_snapshot.path
+                ),
+            },
         }
         archive_names = {
             "cargo_lock": targets["Cargo.lock archive"].name,
@@ -1420,42 +1472,103 @@ def verify(args: argparse.Namespace) -> None:
             ),
             str(directory.path): "${EVIDENCE_DIRECTORY}",
         }
+        verification = {
+            "signature_format": "ssh",
+            "status": status,
+            "signer_fingerprint": fingerprint,
+            "primary_key_fingerprint": primary_fingerprint,
+            "allowed_signers_principal": signer,
+        }
         transcript = _canonical_json(
             {
-                "schema_version": 2,
-                "archive_names": archive_names,
+                "format": _TRANSCRIPT_FORMAT,
+                "schema_version": _TRANSCRIPT_SCHEMA_VERSION,
+                "archive_ids": dict(_ARCHIVE_IDS),
                 "candidate_commit_oid": commit_oid,
-                "environment": environment,
-                "policy_overrides": signature_config,
-                "policies": policies,
-                "replay": {
-                    "candidate_root": "${CANDIDATE_ROOT}",
-                    "evidence_directory": "${EVIDENCE_DIRECTORY}",
-                    "environment": {
-                        key: _replace_paths(value, replay_substitutions)
-                        for key, value in environment.items()
-                    },
-                    "policy_overrides": [
-                        _replace_paths(value, replay_substitutions)
-                        for value in signature_config
-                    ],
-                },
-                "tools": tools,
-                "commands": {
-                    "show_signature_metadata": _command_evidence(
-                        show_result, replay_substitutions
+                "operations": {
+                    "show_signature_metadata": _sanitized_command_evidence(
+                        show_result,
+                        "git.show-signature-metadata.ssh.v1",
                     ),
-                    "verify_commit": _command_evidence(
-                        verify_result, replay_substitutions
+                    "verify_commit": _sanitized_command_evidence(
+                        verify_result,
+                        "git.verify-commit.ssh.v1",
                     ),
-                },
-                "tool_probes": {
-                    "ssh_keygen_usage": _command_evidence(
-                        ssh_probe, replay_substitutions
+                    "ssh_keygen_usage": _sanitized_command_evidence(
+                        ssh_probe,
+                        "ssh-keygen.usage-probe.v1",
                     ),
                 },
             }
         )
+        private_provenance = _canonical_json(
+            {
+                "format": _PRIVATE_PROVENANCE_FORMAT,
+                "schema_version": _PRIVATE_PROVENANCE_SCHEMA_VERSION,
+                "candidate": {
+                    "root_path": str(root),
+                    "identity_source_path": str(identity_snapshot.path),
+                    "cargo_lock_source_path": str(lock_snapshot.path),
+                    "commit_oid": commit_oid,
+                    "tree_oid": identity["head_tree"],
+                    "source_manifest_sha256": identity[
+                        "workspace_source_manifest_sha256"
+                    ],
+                    "cargo_lock_sha256": identity["cargo_lock_sha256"],
+                    "release_identity_sha256": _sha256(identity_snapshot.data),
+                },
+                "outputs": {
+                    target.label: str(target.path)
+                    for target in sorted(
+                        targets.values(), key=lambda item: item.label
+                    )
+                },
+                "archive_names": archive_names,
+                "tools": private_tools,
+                "policies": private_policies,
+                "verification": verification,
+                "execution": {
+                    "environment": environment,
+                    "policy_overrides": signature_config,
+                    "replay": {
+                        "candidate_root": "${CANDIDATE_ROOT}",
+                        "evidence_directory": "${EVIDENCE_DIRECTORY}",
+                        "environment": {
+                            key: _replace_paths(value, replay_substitutions)
+                            for key, value in environment.items()
+                        },
+                        "policy_overrides": [
+                            _replace_paths(value, replay_substitutions)
+                            for value in signature_config
+                        ],
+                    },
+                    "commands": {
+                        "show_signature_metadata": _command_evidence(
+                            show_result, replay_substitutions
+                        ),
+                        "verify_commit": _command_evidence(
+                            verify_result, replay_substitutions
+                        ),
+                    },
+                    "tool_probes": {
+                        "ssh_keygen_usage": _command_evidence(
+                            ssh_probe, replay_substitutions
+                        ),
+                    },
+                },
+                "sanitized_transcript": _sanitized_artifact(
+                    transcript,
+                    _DATA_MODE,
+                    _ARCHIVE_IDS["verify_transcript"],
+                ),
+            }
+        )
+        private_provenance_artifact = _stage_artifact(
+            directory,
+            targets["bootstrap-private provenance"],
+            private_provenance,
+        )
+        staged.append(private_provenance_artifact)
         transcript_artifact = _stage_artifact(
             directory, targets["verify transcript"], transcript
         )
@@ -1470,44 +1583,46 @@ def verify(args: argparse.Namespace) -> None:
         staged.append(lock_artifact)
 
         evidence = {
-            "cargo_lock": _artifact(
-                lock_snapshot.data, _DATA_MODE, archive_names["cargo_lock"]
+            "cargo_lock": _sanitized_artifact(
+                lock_snapshot.data, _DATA_MODE, _ARCHIVE_IDS["cargo_lock"]
             ),
-            "git": _artifact(git_snapshot.data, _TOOL_MODE, archive_names["git"]),
-            "raw_commit": _artifact(
-                raw_commit, _DATA_MODE, archive_names["raw_commit"]
+            "git": _sanitized_artifact(
+                git_snapshot.data, _TOOL_MODE, _ARCHIVE_IDS["git"]
             ),
-            "ssh_allowed_signers": _artifact(
+            "raw_commit": _sanitized_artifact(
+                raw_commit, _DATA_MODE, _ARCHIVE_IDS["raw_commit"]
+            ),
+            "ssh_allowed_signers": _sanitized_artifact(
                 allowed_snapshot.data,
                 _DATA_MODE,
-                archive_names["ssh_allowed_signers"],
+                _ARCHIVE_IDS["ssh_allowed_signers"],
             ),
-            "ssh_keygen": _artifact(
-                ssh_snapshot.data, _TOOL_MODE, archive_names["ssh_keygen"]
+            "ssh_keygen": _sanitized_artifact(
+                ssh_snapshot.data, _TOOL_MODE, _ARCHIVE_IDS["ssh_keygen"]
             ),
-            "ssh_revocation": _artifact(
+            "ssh_revocation": _sanitized_artifact(
                 revocation_snapshot.data,
                 _DATA_MODE,
-                archive_names["ssh_revocation"],
+                _ARCHIVE_IDS["ssh_revocation"],
             ),
-            "verify_transcript": _artifact(
-                transcript, _DATA_MODE, archive_names["verify_transcript"]
+            "verify_transcript": _sanitized_artifact(
+                transcript, _DATA_MODE, _ARCHIVE_IDS["verify_transcript"]
             ),
         }
         attestation = _canonical_json(
             {
-                "schema_version": 2,
-                "release_identity": identity,
-                "release_identity_sha256": _sha256(identity_snapshot.data),
-                "tools": tools,
-                "policies": policies,
-                "verification": {
-                    "status": status,
-                    "signer_fingerprint": fingerprint,
-                    "primary_key_fingerprint": primary_fingerprint,
-                    "allowed_signers_principal": signer,
+                "format": _ATTESTATION_FORMAT,
+                "schema_version": _ATTESTATION_SCHEMA_VERSION,
+                "candidate": {
+                    "commit_oid": commit_oid,
+                    "tree_oid": identity["head_tree"],
+                    "source_manifest_sha256": identity[
+                        "workspace_source_manifest_sha256"
+                    ],
+                    "cargo_lock_sha256": identity["cargo_lock_sha256"],
+                    "release_identity_sha256": _sha256(identity_snapshot.data),
                 },
-                "evidence": evidence,
+                "archives": evidence,
             }
         )
         attestation_artifact = _stage_artifact(
@@ -1539,15 +1654,22 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--identity", type=Path, required=True)
     parser.add_argument("--git-bin", type=Path, required=True)
+    parser.add_argument("--original-git-path", type=Path)
     parser.add_argument("--expected-git-sha256", required=True)
     parser.add_argument("--ssh-keygen-bin", type=Path, required=True)
+    parser.add_argument("--original-ssh-keygen-path", type=Path)
     parser.add_argument("--expected-ssh-keygen-sha256", required=True)
     parser.add_argument("--expected-signer-fingerprint", required=True)
     parser.add_argument("--ssh-allowed-signers", type=Path, required=True)
+    parser.add_argument("--original-ssh-allowed-signers-path", type=Path)
     parser.add_argument("--expected-ssh-allowed-signers-sha256", required=True)
     parser.add_argument("--ssh-revocation-file", type=Path, required=True)
+    parser.add_argument("--original-ssh-revocation-path", type=Path)
     parser.add_argument("--expected-ssh-revocation-sha256", required=True)
     parser.add_argument("--attestation-output", type=Path, required=True)
+    parser.add_argument(
+        "--bootstrap-private-provenance-output", type=Path, required=True
+    )
     parser.add_argument("--verify-transcript-output", type=Path, required=True)
     parser.add_argument("--raw-commit-output", type=Path, required=True)
     parser.add_argument("--cargo-lock-output", type=Path, required=True)

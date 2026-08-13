@@ -13,6 +13,7 @@
 
 mod authenticated_block_proofs;
 mod secure_private_fs;
+mod sorafs_orderbook_submission;
 
 macro_rules! norito_json {
     ({ $($key:literal : $value:expr),+ $(,)? }) => {{
@@ -165,7 +166,6 @@ use iroha_data_model::{
     sorafs::pin_registry::StorageClass,
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
-        TransactionSubmissionReceipt,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder},
     },
@@ -11410,15 +11410,6 @@ pub fn encode_transaction_payload_batch(payloads: Vec<Buffer>) -> napi::Result<B
     let encoded = norito::to_bytes(&payloads).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
-/// Decode a Norito-framed transaction submission receipt into its JSON representation.
-#[napi]
-#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
-pub fn decode_transaction_receipt_json(bytes: Uint8Array) -> napi::Result<String> {
-    ensure_packed_struct_disabled();
-    let receipt: TransactionSubmissionReceipt =
-        decode_from_bytes(bytes.as_ref()).map_err(norito_to_napi)?;
-    json::to_json(&receipt).map_err(norito_to_napi)
-}
 /// Re-sign a Norito-serialized transaction with the provided Ed25519 private key
 /// and return the updated signed transaction bytes.
 ///
@@ -11885,7 +11876,7 @@ fn parse_confidential_unshield_outputs_v3(
 }
 const EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES: usize = 1024 * 1024;
 const EXTERNAL_TRANSACTION_METADATA_MAX_BYTES: usize = 64 * 1024;
-fn parse_transaction_network_id_bytes(value: &[u8]) -> napi::Result<NetworkId> {
+pub(crate) fn parse_transaction_network_id_bytes(value: &[u8]) -> napi::Result<NetworkId> {
     let bytes: [u8; Hash::LENGTH] = value.try_into().map_err(|_| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -18683,8 +18674,8 @@ seiyaku Privacy {
         };
         let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
         let bytes = to_bytes(&receipt).expect("encode receipt");
-        let decoded =
-            decode_transaction_receipt_json(bytes.into()).expect("decode receipt into json");
+        let decoded = sorafs_orderbook_submission::decode_transaction_receipt_json(bytes.into())
+            .expect("decode receipt into json");
         let expected = json::to_json(&receipt).expect("serialize receipt json");
         assert_eq!(decoded, expected);
     }

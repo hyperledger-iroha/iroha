@@ -154,9 +154,9 @@ fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
     let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
     let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-    admission.retain_completion(Instant::now(), false, None, None);
-    admission.retain_completion(Instant::now(), true, Some(7), Some(key));
-    admission.retain_completion(Instant::now(), false, Some(8), None);
+    admission.retain_completion(Instant::now(), false, None, None, None, None);
+    admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
+    admission.retain_completion(Instant::now(), false, Some(8), None, None, None);
 
     assert!(admission.recovered_decision_apply_completion_is_exact(key));
     assert!(
@@ -184,9 +184,16 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
         v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
     let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-    admission.retain_completion(Instant::now(), false, None, None);
-    admission.retain_completion(Instant::now(), true, Some(7), Some(key));
-    admission.retain_completion(Instant::now(), true, Some(7), Some(same_ordinal_foreign));
+    admission.retain_completion(Instant::now(), false, None, None, None, None);
+    admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
+    admission.retain_completion(
+        Instant::now(),
+        true,
+        Some(7),
+        Some(same_ordinal_foreign),
+        None,
+        None,
+    );
     command_tx.queue.lock().recovered_decision_applies.insert(
         key,
         V2IoTrackedRecoveredDecisionApplyV1 {
@@ -264,7 +271,7 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
             .try_send(V2IoCommand::Shutdown)
             .expect("fill the sole physical queue position");
         let key = RecoveredDecisionApplyDispatchKeyV1::for_test(11, 3);
-        admission.retain_completion(Instant::now(), true, Some(11), Some(key));
+        admission.retain_completion(Instant::now(), true, Some(11), Some(key), None, None);
         command_tx.queue.lock().recovered_decision_applies.insert(
             key,
             V2IoTrackedRecoveredDecisionApplyV1 {
@@ -349,7 +356,7 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
         .expect("reserve an unclaimed Serve placeholder")
         .lifecycle_id;
     let key = RecoveredDecisionApplyDispatchKeyV1::for_test(13, 4);
-    admission.retain_completion(Instant::now(), true, Some(13), Some(key));
+    admission.retain_completion(Instant::now(), true, Some(13), Some(key), None, None);
     command_tx.queue.lock().recovered_decision_applies.insert(
         key,
         V2IoTrackedRecoveredDecisionApplyV1 {
@@ -502,11 +509,39 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
     identity: V2BodyStoreInstanceIdentity,
     class_capacity: usize,
 ) -> LifecyclePlannerIoFixture {
+    install_lifecycle_planner_io_for_validator_for_test(
+        services,
+        context,
+        0,
+        output_guard,
+        body_store,
+        identity,
+        class_capacity,
+    )
+}
+
+/// Install a moved exact store for a chosen local-validator service fixture.
+pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
+    services: &mut ProductionV2Services,
+    context: wire::HeightContext,
+    local_validator: wire::ValidatorIndex,
+    output_guard: Arc<ConsensusOutputGuard>,
+    body_store: V2BodyStore,
+    identity: V2BodyStoreInstanceIdentity,
+    class_capacity: usize,
+) -> LifecyclePlannerIoFixture {
     assert!(class_capacity > 0, "test I/O capacity must be non-zero");
     assert!(
         body_store.instance_identity().same_instance(&identity),
         "the worker identity must come from the moved exact store"
     );
+    let local_index = usize::try_from(local_validator).expect("test validator index fits usize");
+    let local_peer = context
+        .roster
+        .get(local_index)
+        .expect("test validator belongs to the service context")
+        .validator
+        .clone();
     let admission = Arc::new(
         V2IoAdmission::new(class_capacity, class_capacity)
             .expect("bounded lifecycle planner I/O admission"),
@@ -520,8 +555,8 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
     );
     let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
     services.context = context.clone();
-    services.local_peer = context.roster[0].validator.clone();
-    services.local_validator = Some(0);
+    services.local_peer = local_peer;
+    services.local_validator = Some(local_validator);
     services.active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
     services.output_guard = output_guard;
     services.lifecycle_body_store_identity = Some(identity);
@@ -538,6 +573,18 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
     }
 }
 
+/// Install the exact private signer matching the test service's local peer.
+pub(in crate::sumeragi) fn install_local_signer_for_test(
+    services: &mut ProductionV2Services,
+    key_pair: &KeyPair,
+) {
+    assert_eq!(
+        services.local_peer.public_key(),
+        key_pair.public_key(),
+        "test signer must match the already bound local service peer"
+    );
+    services.key_pair = key_pair.clone();
+}
 #[test]
 fn lifecycle_capacity_reservation_freezes_fifo_tail_and_rolls_back_under_lock() {
     let (service, _) = fixture();

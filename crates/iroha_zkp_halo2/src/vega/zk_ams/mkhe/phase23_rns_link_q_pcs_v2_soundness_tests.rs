@@ -1,6 +1,7 @@
 use super::super::{Fq2ParametersV1, Fq2V1};
 use super::*;
 use crate::vega::sponge::shake256;
+use sha2::{Digest as _, Sha256};
 
 const SOURCE_DIGEST: [u8; 32] = [0x22; 32];
 const ALGEBRA_DIGEST: [u8; 32] = [0x33; 32];
@@ -18,6 +19,22 @@ const BATCH_SCHEDULE_KAT: [u8; 32] = [
     0xb3, 0xdf, 0xab, 0x02, 0xbf, 0x2c, 0xd4, 0xcf, 0x5b, 0xb2, 0x3c, 0x77, 0x3c, 0x66, 0x16, 0xba,
     0xa8, 0x67, 0x28, 0xaa, 0x73, 0x00, 0x36, 0x7a, 0x0c, 0x8a, 0x99, 0xd0, 0x98, 0xe6, 0xb1, 0x90,
 ];
+const PRE_FRI_TRANSCRIPT_KAT: [u8; 32] = [
+    0xb6, 0xe4, 0x18, 0x1d, 0xb4, 0xde, 0xd2, 0x0e, 0x26, 0x14, 0x71, 0xfe, 0xa9, 0x93, 0x48, 0xdc,
+    0x06, 0x50, 0x2c, 0xfe, 0xdd, 0xeb, 0xa0, 0x0d, 0x9a, 0xe2, 0x07, 0x9b, 0x78, 0xe3, 0xba, 0xd3,
+];
+const POST_FRI0_TRANSCRIPT_KAT: [u8; 32] = [
+    0xc1, 0x31, 0x7e, 0x0f, 0x12, 0xb3, 0xe5, 0xba, 0x8d, 0xd8, 0x9c, 0xcd, 0x20, 0xb0, 0xf5, 0x92,
+    0x8f, 0x2b, 0xd7, 0xdd, 0x05, 0x3c, 0x0a, 0x7a, 0x32, 0x77, 0xfd, 0x8d, 0x6d, 0x14, 0xa6, 0xd3,
+];
+const FOLD0_SCHEDULE_KAT: [u8; 32] = [
+    0x8e, 0x4a, 0x29, 0x52, 0x37, 0x22, 0x08, 0xf8, 0x5c, 0x7c, 0x56, 0x5d, 0xcf, 0x20, 0x6c, 0xd3,
+    0x3c, 0xbb, 0xd1, 0x04, 0x17, 0x62, 0xd8, 0x69, 0x7a, 0x6e, 0x26, 0xf2, 0xe6, 0xb7, 0x3c, 0x3c,
+];
+const ALPHA0_FIRST_KAT: (u64, u64) = (1_072_159_532_130_022_203, 1_116_667_884_697_309_814);
+const ALPHA0_LAST_KAT: (u64, u64) = (212_205_419_376_918_950, 464_094_173_245_421_321);
+const FOLD0_LANE0_KAT: (u64, u64) = (262_030_072_022_937_729, 117_015_592_385_837_654);
+const FOLD0_LANE1_KAT: (u64, u64) = (950_909_105_422_868_960, 1_055_806_915_739_682_745);
 const FOLD_SCHEDULE_KAT: [u8; 32] = [
     0x53, 0xb1, 0x0f, 0x65, 0xbe, 0xc2, 0x68, 0x61, 0x0a, 0x1b, 0xcf, 0x03, 0xde, 0xd9, 0x9d, 0x48,
     0xcc, 0xd1, 0x5f, 0xd4, 0xe2, 0x3b, 0xcc, 0xcd, 0xc1, 0x15, 0xa2, 0xf3, 0x1d, 0x72, 0x8c, 0xc6,
@@ -341,6 +358,63 @@ fn manual_authentication_count(mut indices: Vec<u32>, mut length: usize) -> usiz
     authentication
 }
 
+fn authentication_cap_witness_queries(auth_only: bool) -> [u32; QUERY_COUNT_V2] {
+    let mut states = [0_u8; QUERY_COUNT_V2];
+    let mut next = 0_usize;
+    for state in 0_u16..=u8::MAX as u16 {
+        if (state as u8).count_ones() % 2 == 1 {
+            states[next] = state as u8;
+            next += 1;
+        }
+    }
+    for state in 0_u16..=u8::MAX as u16 {
+        if (state as u8).count_ones() % 2 == 0 {
+            states[next] = state as u8;
+            next += 1;
+            if next == QUERY_COUNT_V2 {
+                break;
+            }
+        }
+    }
+    assert_eq!(next, QUERY_COUNT_V2);
+
+    let mut queries = [0_u32; QUERY_COUNT_V2];
+    for (query, state) in queries.iter_mut().zip(states) {
+        let start = if auth_only { 1_usize } else { 0 };
+        for bit in start..18_usize {
+            let state_bit = (if auth_only { bit - 1 } else { bit }) % 8;
+            *query |= u32::from((state >> state_bit) & 1) << bit;
+        }
+    }
+    queries
+}
+
+fn sha256_query_array(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    for query in queries {
+        digest.update(query.to_be_bytes());
+    }
+    digest.finalize().into()
+}
+
+fn manual_fri_geometry(mut queries: [u32; QUERY_COUNT_V2]) -> (usize, usize) {
+    let mut opened = 0_usize;
+    let mut authentication = 0_usize;
+    let mut length = 524_288_usize;
+    for _ in 0..18 {
+        let indices = manual_indices(&queries, length);
+        opened += indices.len();
+        authentication += manual_authentication_count(indices, length);
+        let half = (length / 2) as u32;
+        for query in &mut queries {
+            *query %= half;
+        }
+        length /= 2;
+    }
+    assert_eq!(length, 2);
+    (opened, authentication)
+}
+
 fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
@@ -362,7 +436,7 @@ fn append_manual_section(wire: &mut Vec<u8>, queries: &[u32; QUERY_COUNT_V2], le
     wire.resize(wire.len() + authentication * 32, 0xa5);
 }
 
-fn canonical_wire() -> Vec<u8> {
+fn canonical_wire_for_queries(query_override: Option<[u32; QUERY_COUNT_V2]>) -> Vec<u8> {
     let mut wire = vec![0_u8; FIXED_BEFORE_SECTIONS_V2];
     wire[..16].copy_from_slice(b"IROHA-QPCSV2\0\0\0\0");
     wire[16..24].copy_from_slice(&[2, 17, 19, 38, 5, 10, 18, 2]);
@@ -372,7 +446,7 @@ fn canonical_wire() -> Vec<u8> {
     put_u16(&mut wire, 34, 320);
     put_u32(&mut wire, 36, 4_028);
     put_u32(&mut wire, 40, 3_392);
-    put_u32(&mut wire, 44, 19_712);
+    put_u32(&mut wire, 44, 20_030);
     put_u32(&mut wire, 48, 6_080);
     put_u32(&mut wire, 52, 16);
     put_u64(&mut wire, 56, 29_245_792);
@@ -420,7 +494,7 @@ fn canonical_wire() -> Vec<u8> {
     let terminal_start = roots_start + FRI_ROOT_BYTES_V2;
     let terminal = &wire[terminal_start..terminal_start + TERMINAL_BYTES_V2];
     transcript = manual_absorb_terminal(transcript, terminal);
-    let queries = manual_queries(transcript);
+    let queries = query_override.unwrap_or_else(|| manual_queries(transcript));
     append_manual_section(&mut wire, &queries, DOMAIN_SIZE_V2);
     append_manual_section(&mut wire, &queries, DOMAIN_SIZE_V2);
     let mut layer_queries = queries;
@@ -437,6 +511,10 @@ fn canonical_wire() -> Vec<u8> {
     wire
 }
 
+fn canonical_wire() -> Vec<u8> {
+    canonical_wire_for_queries(None)
+}
+
 fn through_relations<'a>(wire: &'a [u8]) -> RelationsCheckedV2<'a> {
     let mut header = begin_v2(wire, context(), SourceReplaySealV2::TestOnly).unwrap();
     let mut points = header.derive_points_v2().unwrap();
@@ -447,6 +525,83 @@ fn through_fri<'a>(wire: &'a [u8]) -> FriTranscriptBoundV2<'a> {
     let mut relations = through_relations(wire);
     let mut quotient = relations.bind_quotient_root_v2().unwrap();
     quotient.bind_fri_transcript_v2().unwrap()
+}
+
+#[test]
+fn independent_authentication_cap_witness_geometry_is_exact_and_correlated() {
+    const AUTH_ONLY_QUERY_SHA256: [u8; 32] = [
+        0x9e, 0x07, 0xdc, 0xc4, 0xd2, 0x42, 0xe2, 0x75, 0x7b, 0xe1, 0xf2, 0x07, 0xc4, 0x1a, 0xf8,
+        0xb2, 0x23, 0x73, 0xa9, 0xc2, 0xe6, 0x26, 0xe3, 0x3c, 0x55, 0x07, 0x44, 0xc3, 0xd0, 0x2c,
+        0x63, 0x87,
+    ];
+    const COMBINED_MAX_QUERY_SHA256: [u8; 32] = [
+        0xf9, 0x42, 0x32, 0x31, 0xe4, 0x0b, 0xa5, 0xa6, 0xb1, 0xf1, 0x2c, 0x17, 0x03, 0x3e, 0x89,
+        0xa5, 0xd3, 0xbd, 0x12, 0xcb, 0x10, 0x55, 0x78, 0xbd, 0x45, 0x2a, 0x1d, 0xeb, 0xf4, 0x7b,
+        0xdf, 0x2c,
+    ];
+
+    let auth_only = authentication_cap_witness_queries(true);
+    assert_eq!(sha256_query_array(&auth_only), AUTH_ONLY_QUERY_SHA256);
+    assert_eq!(manual_fri_geometry(auth_only), (3_710, 20_030));
+    let initial_indices = manual_indices(&auth_only, 524_288);
+    assert_eq!(initial_indices.len(), 320);
+    assert_eq!(manual_authentication_count(initial_indices, 524_288), 3_392);
+    let auth_only_fri_bytes = 3_710 * 6_080 + 20_030 * 32;
+    assert_eq!(auth_only_fri_bytes, 23_197_760);
+    assert_eq!(
+        checked_fri_multiproof_bytes_v2(3_710, 20_030).unwrap(),
+        auth_only_fri_bytes
+    );
+    let auth_only_whole_bytes = 16_480 + 2 * (320 * 6_080 + 3_392 * 32) + auth_only_fri_bytes;
+    assert_eq!(auth_only_whole_bytes, 27_322_528);
+    let auth_only_wire = canonical_wire_for_queries(Some(auth_only));
+    assert_eq!(auth_only_wire.len(), auth_only_whole_bytes);
+    let mut auth_only_fri = through_fri(&auth_only_wire);
+    // Test the bounded parser independently of a transcript-preimage search.
+    auth_only_fri.live.as_mut().unwrap().queries = auth_only;
+    assert!(auth_only_fri.parse_exact_sections_v2().is_ok());
+    drop(auth_only_fri);
+    drop(auth_only_wire);
+
+    let combined_max = authentication_cap_witness_queries(false);
+    assert_eq!(sha256_query_array(&combined_max), COMBINED_MAX_QUERY_SHA256);
+    assert_eq!(manual_fri_geometry(combined_max), (4_028, 19_712));
+    let combined_initial_indices = manual_indices(&combined_max, 524_288);
+    assert_eq!(combined_initial_indices.len(), 320);
+    assert_eq!(
+        manual_authentication_count(combined_initial_indices, 524_288),
+        3_392
+    );
+    assert_eq!(
+        checked_fri_multiproof_bytes_v2(4_028, 19_712).unwrap(),
+        25_121_024
+    );
+    assert_eq!(
+        16_480 + 2 * (320 * 6_080 + 3_392 * 32) + 25_121_024,
+        29_245_792
+    );
+    let mut combined_max_wire = canonical_wire_for_queries(Some(combined_max));
+    assert_eq!(combined_max_wire.len(), 29_245_792);
+    assert_eq!(combined_max_wire.len(), MAX_PROOF_BYTES_V2);
+    assert_eq!(read_u32_v2(&combined_max_wire, 44).unwrap(), 20_030);
+    let mut combined_max_fri = through_fri(&combined_max_wire);
+    // Test the exact cap independently of a transcript-preimage search.
+    combined_max_fri.live.as_mut().unwrap().queries = combined_max;
+    assert!(combined_max_fri.parse_exact_sections_v2().is_ok());
+    drop(combined_max_fri);
+    put_u32(&mut combined_max_wire, 44, 19_712);
+    assert!(matches!(
+        begin_v2(&combined_max_wire, context(), SourceReplaySealV2::TestOnly),
+        Err(SoundnessErrorV2::InvalidHeader)
+    ));
+
+    assert!(matches!(
+        checked_fri_multiproof_bytes_v2(4_028, 19_713),
+        Err(SoundnessErrorV2::InvalidSectionCount)
+    ));
+    assert_eq!(MAX_MULTIPROOF_AUTH_BYTES_V2, 858_048);
+    assert_eq!(MAX_MULTIPROOF_SECTION_BYTES_V2, 29_229_312);
+    assert_eq!(GLOBAL_PROOF_CAP_BYTES_V2 - MAX_PROOF_BYTES_V2, 4_308_640);
 }
 
 #[test]
@@ -653,6 +808,99 @@ fn move_only_batch_owner_reuses_the_exact_760_value_schedule_and_poison_order() 
 }
 
 #[test]
+fn layer0_root_owner_derives_exact_380_alphas_folds_and_poisons_hostile_order() {
+    let wire = canonical_wire();
+    assert_eq!(
+        manual_transcript_through_quotient(&wire),
+        PRE_FRI_TRANSCRIPT_KAT
+    );
+    let rows = ProverBatchRowsCompleteV2 {
+        transcript: PRE_FRI_TRANSCRIPT_KAT,
+        batch_schedule_digest: BATCH_SCHEDULE_KAT,
+    };
+    let mut fold = rows.bind_fri_layer0_root_v2([0x60; 32]).unwrap();
+    assert_eq!(
+        fold.context_v2().unwrap(),
+        (
+            PRE_FRI_TRANSCRIPT_KAT,
+            POST_FRI0_TRANSCRIPT_KAT,
+            BATCH_SCHEDULE_KAT,
+            FOLD0_SCHEDULE_KAT,
+            [0x60; 32],
+        )
+    );
+    let first_alpha = fold.live.as_ref().unwrap().alphas[0];
+    assert_eq!((first_alpha.c0, first_alpha.c1), ALPHA0_FIRST_KAT);
+    assert_eq!(fold.live.as_ref().unwrap().alphas.len(), 380);
+    let last_alpha = fold.live.as_ref().unwrap().alphas[379];
+    assert_eq!((last_alpha.c0, last_alpha.c1), ALPHA0_LAST_KAT);
+
+    let mut positive = [0_u8; 16_384];
+    let mut negative = [0_u8; 16_384];
+    for value in positive.chunks_exact_mut(16) {
+        value[..8].copy_from_slice(&3_u64.to_be_bytes());
+        value[8..].copy_from_slice(&4_u64.to_be_bytes());
+    }
+    for value in negative.chunks_exact_mut(16) {
+        value[..8].copy_from_slice(&5_u64.to_be_bytes());
+        value[8..].copy_from_slice(&6_u64.to_be_bytes());
+    }
+    let mut output = [0_u8; 16_384];
+    fold.fold_next_pair_v2(0, 0, &positive, &negative, &mut output)
+        .unwrap();
+    let decode = |lane: usize| {
+        (
+            u64::from_be_bytes(output[lane * 16..lane * 16 + 8].try_into().unwrap()),
+            u64::from_be_bytes(output[lane * 16 + 8..lane * 16 + 16].try_into().unwrap()),
+        )
+    };
+    assert_eq!(decode(0), FOLD0_LANE0_KAT);
+    assert_eq!(decode(1), FOLD0_LANE1_KAT);
+    fold.next_pair_block = 256;
+    fold.next_column = 0;
+    let complete = fold.complete_v2().unwrap();
+    assert_eq!(
+        complete.context_v2(),
+        (
+            PRE_FRI_TRANSCRIPT_KAT,
+            POST_FRI0_TRANSCRIPT_KAT,
+            BATCH_SCHEDULE_KAT,
+            FOLD0_SCHEDULE_KAT,
+            [0x60; 32],
+        )
+    );
+
+    let rows = ProverBatchRowsCompleteV2 {
+        transcript: PRE_FRI_TRANSCRIPT_KAT,
+        batch_schedule_digest: BATCH_SCHEDULE_KAT,
+    };
+    let mut hostile = rows.bind_fri_layer0_root_v2([0x60; 32]).unwrap();
+    assert!(matches!(
+        hostile.fold_next_pair_v2(0, 1, &positive, &negative, &mut output),
+        Err(SoundnessErrorV2::InvalidFriEquation)
+    ));
+    assert!(matches!(
+        hostile.fold_next_pair_v2(0, 0, &positive, &negative, &mut output),
+        Err(SoundnessErrorV2::Poisoned)
+    ));
+
+    positive[..8].copy_from_slice(&RELEASE_MODULI_V1[0].to_be_bytes());
+    let rows = ProverBatchRowsCompleteV2 {
+        transcript: PRE_FRI_TRANSCRIPT_KAT,
+        batch_schedule_digest: BATCH_SCHEDULE_KAT,
+    };
+    let mut noncanonical = rows.bind_fri_layer0_root_v2([0x60; 32]).unwrap();
+    assert!(matches!(
+        noncanonical.fold_next_pair_v2(0, 0, &positive, &negative, &mut output),
+        Err(SoundnessErrorV2::NonCanonicalResidue)
+    ));
+    assert!(matches!(
+        noncanonical.fold_next_pair_v2(0, 0, &positive, &negative, &mut output),
+        Err(SoundnessErrorV2::Poisoned)
+    ));
+}
+
+#[test]
 fn canonical_envelope_reaches_only_non_authorizing_structural_state() {
     let wire = canonical_wire();
     let mut header = begin_v2(&wire, context(), SourceReplaySealV2::TestOnly).unwrap();
@@ -818,13 +1066,25 @@ fn section_counts_canonical_values_caps_and_trailing_bytes_are_strict() {
 fn source_guards_keep_the_slice_private_bounded_and_honest() {
     let source = include_str!("phase23_rns_link_q_pcs_v2_soundness.rs");
     let parent = include_str!("phase23_rns_link_q_pcs.rs");
-    assert!(source.lines().count() <= 1_200);
+    assert!(source.lines().count() <= 1_450);
     assert!(source.contains("source_and_algebra: Infallible"));
     assert!(source.contains("authenticated_multipass_replay: Infallible"));
     assert!(source.contains("const ROWS_PER_LIMB_V2: usize = 10;"));
     assert!(source.contains("const BATCH_CHALLENGE_COUNT_V2: usize = COORDINATE_COUNT_V2 * 2;"));
     assert!(source.contains("field.pow(field.domain_root, u128::from(block) * 1_024)"));
+    assert!(source.contains("struct ProverFriLayer0ChallengesV2"));
+    assert!(source.contains("struct ProverFriLayer0FoldCompleteV2"));
+    assert!(source.contains("absorb_root_v2(FRI_ROOT_DOMAIN_V2, self.transcript, 0, root)"));
+    assert!(
+        source
+            .contains("absorb_schedule_value_v2(fold_schedule_digest, 1, limb, row, 0, 0, alpha)")
+    );
+    assert!(source.contains("let exponent = u128::from(pair_block) * 1_024;"));
     assert!(source.contains("const MAX_PROOF_BYTES_V2: usize = 29_245_792;"));
+    assert!(source.contains("const MAX_FRI_AUTH_HASHES_V2: usize = 20_030;"));
+    assert!(source.contains("const MAX_FRI_MULTIPROOF_BYTES_V2: usize = 25_121_024;"));
+    assert!(source.contains("const MAX_MULTIPROOF_SECTION_BYTES_V2: usize ="));
+    assert!(source.matches("checked_fri_multiproof_bytes_v2(").count() >= 2);
     for false_gate in [
         "SOURCE_AGGREGATION_LINKED_V2: bool = false",
         "CROSS_SET_ALGEBRA_VERIFIED_V2: bool = false",
@@ -865,6 +1125,8 @@ fn source_guards_keep_the_slice_private_bounded_and_honest() {
     assert!(!source.contains("impl Clone for RelationsCheckedV2"));
     assert!(!source.contains("impl Clone for QuotientRootBoundV2"));
     assert!(!source.contains("impl Clone for ProverBatchChallengesV2"));
+    assert!(!source.contains("impl Clone for ProverFriLayer0ChallengesV2"));
+    assert!(!source.contains("impl Clone for ProverFriLayer0FoldCompleteV2"));
     assert!(!source.contains("impl Clone for FriTranscriptBoundV2"));
     assert!(!source.contains("impl Clone for StructurallyParsedV2"));
 }

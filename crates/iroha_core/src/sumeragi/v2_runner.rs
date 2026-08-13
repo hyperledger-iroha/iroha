@@ -119,6 +119,47 @@ const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
 const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
 
+/// Move-only authority for binding runner-owned lifecycle execution dependencies.
+///
+/// The future runner cutover will mint this private seal immediately before it
+/// moves Queue, archive, and event ownership into recovered startup. Sumeragi
+/// siblings may name the consumed type but cannot manufacture production
+/// authority for caller-selected dependencies.
+#[must_use = "the runner dependency permit must enter recovered lifecycle startup"]
+pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
+    _seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1,
+    local_signer: KeyPair,
+}
+
+struct RecoveredLifecycleOwnerFactoryDependencyPermitSealV1;
+
+impl Drop for RecoveredLifecycleOwnerFactoryDependencyPermitSealV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
+    // TODO: Mint this private permit at the atomic runner/owner cutover which
+    // moves the runner's exact Queue, archives, and EventsSender into startup.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn mint_for_recovered_runner(local_signer: KeyPair) -> Self {
+        Self {
+            _seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1,
+            local_signer,
+        }
+    }
+
+    #[cfg(test)]
+    /// Mint the same sealed dependency permit for production-shaped unit tests.
+    pub(in crate::sumeragi) fn for_test(local_signer: KeyPair) -> Self {
+        Self::mint_for_recovered_runner(local_signer)
+    }
+
+    /// Consume the runner seal into its factory-owned local signer.
+    pub(in crate::sumeragi) fn into_local_signer(self) -> KeyPair {
+        self.local_signer
+    }
+}
+
 /// Cadence-derived process-local deadline for closed-ingress interrupted-tip recovery.
 #[derive(Clone, Copy, Debug)]
 struct PendingTipRecoveryDeadline {
@@ -330,10 +371,10 @@ impl PendingSuccessorActivation {
         Ok(match authority {
             RecoveredSuccessorActivationAuthority::CompleteTip(authority) => {
                 let expected_predecessor = authority.predecessor();
-                // TODO: The sealed owner/launch cutover must make every live
-                // height write this canonical lifecycle target. Until that
-                // cutover replaces the legacy runner constructors, a missing
-                // target correctly fails closed here before ingress.
+                // TODO: The generic sealed owner/launch cutover must make every
+                // live height use this canonical lifecycle target. This
+                // restart-only bridge authenticates and consumes the same
+                // target without claiming that broader replacement complete.
                 let retired = authority
                     .into_canonical_predecessor_storage(local_signer)?
                     .retire()?;
@@ -351,15 +392,38 @@ impl PendingSuccessorActivation {
         })
     }
 
-    /// Prove every recovered activation crossed its required durable boundary.
-    fn preflight_ingress_open(&self) -> Result<(), V2RunnerError> {
+    /// Reauthenticate retained restart storage before constructing live H+1 services.
+    fn preflight_recovered_startup(&self) -> Result<(), V2RunnerError> {
         match self {
-            Self::RecoveredCompleteTip { authority } => {
-                Err(V2RunnerError::CompleteTipSuccessorLifecycleOwnerRequired {
+            Self::RecoveredCompleteTip { authority }
+                if !authority.authorizes_retained_successor() =>
+            {
+                Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid {
                     predecessor: authority.predecessor(),
                 })
             }
-            Self::Applied { .. } | Self::SnapshotBootstrap { .. } => Ok(()),
+            Self::Applied { .. }
+            | Self::RecoveredCompleteTip { .. }
+            | Self::SnapshotBootstrap { .. } => Ok(()),
+        }
+    }
+
+    /// Bind the prepared status to its retained restart authority before ingress opens.
+    fn preflight_ingress_open(
+        &self,
+        successor: &wire::SumeragiV2Status,
+    ) -> Result<(), V2RunnerError> {
+        match self {
+            Self::RecoveredCompleteTip { authority }
+                if !authority.authorizes_successor_status(successor) =>
+            {
+                Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid {
+                    predecessor: authority.predecessor(),
+                })
+            }
+            Self::Applied { .. }
+            | Self::RecoveredCompleteTip { .. }
+            | Self::SnapshotBootstrap { .. } => Ok(()),
         }
     }
 
@@ -376,9 +440,7 @@ impl PendingSuccessorActivation {
                 )?;
             }
             Self::RecoveredCompleteTip { authority } => {
-                return Err(V2RunnerError::CompleteTipSuccessorLifecycleOwnerRequired {
-                    predecessor: authority.predecessor(),
-                });
+                super::status::activate_recovered_complete_tip_v2_height(authority, successor)?;
             }
             Self::SnapshotBootstrap { authority } => {
                 super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;
@@ -932,10 +994,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         .map(|authority| PendingSuccessorActivation::recovered(authority, &common_config.key_pair))
         .transpose()?;
     if let Some(activation) = pending_successor_activation.as_ref() {
-        // CompleteTip has already retired H and authenticated H+1 here, but
-        // must not let the legacy H+1 adapter, workers, clocks, or output start
-        // before the sealed lifecycle owner consumes that exact successor.
-        activation.preflight_ingress_open()?;
+        // CompleteTip has already retired H and authenticated H+1 here. Reopen
+        // that exact retained successor frame before any H+1 adapter, worker,
+        // clock, or output construction; final status binding is repeated at
+        // the ingress-publication boundary below.
+        activation.preflight_recovered_startup()?;
     }
     if let Some(guard) = recovered_activation_guard {
         guard.complete();
@@ -1079,12 +1142,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let adapter_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
+        let wal_authority = kura
+            .mint_safety_wal_directory_authority()
+            .map_err(|error| V2RunnerError::Service(error.to_string()))?;
         let adapter = if pending_successor_activation.is_some() {
             // Preserve the finalized predecessor's Running handoff until the
             // complete successor stack is live. No reducer status from this
             // adapter may escape the construction boundary early.
             SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(
-                wal_path.clone(),
+                kura.as_ref(),
+                wal_authority,
                 verified_context.clone(),
                 local_validator,
                 Generation::INITIAL,
@@ -1095,7 +1162,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             )
         } else {
             SumeragiV2Adapter::open_with_capacity_geometry(
-                wal_path.clone(),
+                kura.as_ref(),
+                wal_authority,
                 verified_context.clone(),
                 local_validator,
                 Generation::INITIAL,
@@ -4399,13 +4467,13 @@ pub(super) enum V2RunnerError {
     /// Canonical CompleteTip lifecycle storage could not be retired exactly.
     #[error(transparent)]
     CompleteTipPredecessorStorage(#[from] CompleteTipPredecessorStorageErrorV1),
-    /// CompleteTip retirement succeeded, but the canonical successor lifecycle
-    /// frame has not yet been consumed by the sealed owner/launch boundary.
+    /// CompleteTip retirement succeeded, but its retained canonical successor
+    /// ledger or prepared status no longer matches the exact restart authority.
     #[error(
-        "Sumeragi v2 CompleteTip predecessor {predecessor:?} was retired, but its canonical successor lifecycle owner is not active"
+        "Sumeragi v2 CompleteTip predecessor {predecessor:?} no longer authenticates its canonical successor"
     )]
-    CompleteTipSuccessorLifecycleOwnerRequired {
-        /// Exact retired durable predecessor whose successor remains closed.
+    CompleteTipSuccessorAuthorityInvalid {
+        /// Exact retired durable predecessor whose successor was rejected.
         predecessor: DurableV2PredecessorIdentity,
     },
     /// Reducer/WAL adapter failed.

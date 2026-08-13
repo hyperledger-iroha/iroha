@@ -68,6 +68,8 @@ pub(super) enum ProverPrerequisiteErrorV2 {
     InvalidPostRootTranscript,
     InvalidOpeningQuotient,
     InvalidRelation,
+    InvalidCanonicalProof,
+    CanonicalProofSink,
     Poisoned,
     Spool(QPcsSpoolErrorV2),
 }

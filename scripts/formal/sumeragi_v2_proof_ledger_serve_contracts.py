@@ -1447,6 +1447,9 @@ _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
         "a87131cdea8fcf204ab3a04992f93e05fc32400f475abcda450f2636d08b97de"
     ),
     "store_open_with_capacities": (
+        "8abe37b42d072f5a50b54c37025e6042bdafd6cecaec48e7f3fc217a41537b95"
+    ),
+    "store_open_with_storage_and_capacities": (
         "efd1503685bf7b1871785e2dcc66f7b24286035c043015f0faef8ac7679d6199"
     ),
     "store_load": (
@@ -1508,7 +1511,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "e91ac22cf354ee698ce40c2d49b423fedd0bb054728337b14d43940e43802600"
+        "077c4e35cad9015abafc3bf41988b1852ff71a91ae240f772e1052cd859c66ae"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1643,7 +1646,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
-    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
+    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
     "open_rejects_a_preexisting_symlink_for_the_owned_wal_directory": (

@@ -57,19 +57,23 @@ not immutable-candidate execution or release receipts.
   corridor contains 88 legs. These are source counts, not claims that any suite
   was executed for this reconciliation.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
-  former lifecycle-cursor marker is gone: signed lifecycle bootstrap,
+  former lifecycle-cursor and SafetyWal filesystem-identity markers are gone:
+  the production runner now consumes a move-only authority minted from Kura's
+  retained opened store-root handle, with descriptor-relative no-follow
+  traversal and exact live-Kura identity rechecks. Signed lifecycle bootstrap,
   generation takeover, Queue snapshot recovery, local Kura rehydration, drain
   queue installation, and one-shot activation revalidation are present in the
-  production startup path. Generic consensus TODOs remain explicitly out of
-  scope below.
+  production startup path. Generic lifecycle-coordinator replacement TODOs
+  remain explicitly out of scope below.
 - The schema-5 formal registry names all 27 production actions, and the
   structural production-trace extraction reports no open action name. This is
   a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
   mutation, or cross-tool certificate is claimed.
-- Mutable source-budget checks report within their configured bounds. The
-  reviewed Rust include topology contains 37 parents and 226 direct entries;
+- Mutable source-budget checks do not currently report within their configured
+  bounds, so source-budget closure remains a release blocker. The
+  reviewed Rust include topology contains 37 parents and 229 direct entries;
   its canonical payload SHA-256 is
-  `6689c2ef7d6004b99a93afa73933bc2e01f5c9c7759e9c51786911363359ccdb`.
+  `82cbfd14b681b83e6d10ec5dfa8267e501812ce05415eb3401c935136f7d4647`.
   The SDK closure resolver and complete transitive manifests are mutable
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
@@ -1688,21 +1692,24 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The current mutable source closure enumerates
-1,380 grouped and 1,380 diagnostics records. The checked-in grouped fixture has
+1,382 grouped and 1,382 diagnostics records. The checked-in grouped fixture has
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`8de5c1769024405472e33814a34a91533c639b2761ab3e070a3d34b897805769`
+`c530b869d54d4311ac515e3898e0bd50665b96bf6e231369f240b36128846073`
 and
-`65204d542c0dbe9c4291c6c6d6c83851dfcbc2402137f9af7d86b9a40ab4aae0`.
+`018b67cf9e461160eaf845006ea945c46be01b5b935ea7ae29a2fcba29a9585f`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The live resolver fails closed on untracked reviewed inputs.
-Rust-owned fixture regeneration, both OpenAPI regenerations, JavaScript
-distribution regeneration, parity hashes, and one complete immutable-candidate
-harness replay are all still pending. Neither the checked-in bytes nor any
-mutable-development digest is a release receipt.
+The source-bound corridor now requires two disjoint Rust fixture generations,
+and both JavaScript SDK harnesses require two byte-identical complete
+distribution builds. The OpenAPI gate already regenerates and compares the
+exact five generated artifacts in two independent mirrors. Approved generator
+execution, parity hashes, and one complete immutable-candidate harness replay
+are still pending. Neither the checked-in bytes nor any mutable-development
+digest is a release receipt.
 
 **Closure condition.** Generate one canonical grouped fixture and negative
 corpus from Rust and consume the exact files in OpenAPI, Python, JavaScript,
@@ -1967,15 +1974,15 @@ controls. The diagnostics inventory is Rust `14`, Python `121`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `26`, and Java `24`. The recursive
 source-closure design covers every transitive production input, including the
 browser JavaScript distribution, Kotlin/Java Native models, grouped JSON, and
-wire TSV; the mutable closure enumerates 1,380 grouped and 1,380 diagnostics
+wire TSV; the mutable closure enumerates 1,382 grouped and 1,382 diagnostics
 records. The current grouped JSON and wire TSV SHA-256 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`8de5c1769024405472e33814a34a91533c639b2761ab3e070a3d34b897805769`
+`c530b869d54d4311ac515e3898e0bd50665b96bf6e231369f240b36128846073`
 and
-`65204d542c0dbe9c4291c6c6d6c83851dfcbc2402137f9af7d86b9a40ab4aae0`.
+`018b67cf9e461160eaf845006ea945c46be01b5b935ea7ae29a2fcba29a9585f`.
 
 Those are development-source inventories, not SDK results. The JavaScript
 source and distribution trees match in this mutable checkout. The five OpenAPI
@@ -2050,8 +2057,12 @@ diagnostics must be added here or mapped to a ledger row before release.
 
 The current reviewed closure contains no explicit TODO in lane routing,
 autoscale, merge, reservation ownership, Native AMX, drain, retirement, or
-multilane diagnostics. Any newly introduced marker must be classified here
-before release. Generic consensus TODOs remain out of scope as recorded below.
+multilane diagnostics. The former SafetyWal filesystem-identity marker is now
+implemented and source-bound: production runner cutover mints the opened WAL
+directory authority from Kura's retained opened root, and the adapter consumes
+that move-only authority only for the exact Kura instance. Any newly introduced
+marker must be classified here before release. Generic lifecycle-coordinator
+TODOs remain out of scope as recorded below.
 
 ### Unresolved in scope without a TODO marker
 

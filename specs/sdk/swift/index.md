@@ -18,8 +18,11 @@ moving branch.
 
 These remote coordinates are release targets, not evidence that the tags are
 already public. Keep public installation instructions behind the release gate
-until the signed SwiftPM `0.1.0` tag, monorepo `iroha-swift-v0.1.0` tag, and
-package canary are verified; local development uses the relative package path.
+until the canonical signed monorepo `v0.1.0` tag, immutable NoritoBridge release
+asset, both CocoaPods specs, and package canary are verified. The separate
+`hyperledger/iroha-swift` SwiftPM repository and its `0.1.0` tag are an additional
+external publication target; the monorepo tag does not publish them. Local
+development uses the relative package path.
 
 - **Xcode SPM UI:** `File → Add Package Dependencies…` →
   `https://github.com/hyperledger/iroha-swift` (select exact version `0.1.0`) →
@@ -43,15 +46,25 @@ package canary are verified; local development uses the relative package path.
   ]
   ```
 
-- **CocoaPods:** `pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger-iroha/iroha/iroha-swift-v0.1.0/IrohaSwift/IrohaSwift.podspec'`
+- **CocoaPods:** `pod 'IrohaSwift', '0.1.0'` after `NoritoBridge 0.1.0` and
+  `IrohaSwift 0.1.0` are published to the selected spec repository. Do not use a
+  raw podspec URL: the registry spec preserves the reviewed source and exact
+  checksum-pinned binary dependency.
 
 When developing from a checked-out workspace you can keep using the relative path variant
 (`.package(name: "IrohaSwift", path: "../../IrohaSwift")`) to avoid fetching over the
 network.
 
 ### Bridge delivery and platform minimums
-- Toolchain/platform: Swift 5.9+ with iOS 15+ or macOS 12+ for both SPM and CocoaPods.
-- Bridge: `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json` must ship with the app or pod (the manifest records the bridge version plus per-platform SHA-256 hashes). `ci/check_swift_spm_validation.sh` proves that the complete artifact builds and that a missing bridge is rejected, while `ci/check_swift_pod_bridge.sh` lints the podspec with the bundled bridge so pod consumers stay in parity with SwiftPM binary targets. Both run in `.github/workflows/mobile_sdk_artifacts.yml`.
+- Toolchain/platform: SwiftPM supports iOS 15+ and macOS 12+ with Swift 5.9+.
+  The current CocoaPods specs and lint lane support iOS 15+ only.
+- Bridge: local SwiftPM development uses `dist/NoritoBridge.xcframework` and its
+  manifest. CocoaPods instead resolves the same authenticated ZIP through the
+  checksum-pinned `NoritoBridge` binary pod. `ci/check_swift_pod_bridge.sh`
+  validates the packaged inventory and builds both the binary and source pods
+  through a package-local `file://` source. CocoaPods may still consult configured
+  spec sources, and public registry installation remains a
+  release-time evidence step.
 - Policy: the bridge is mandatory. Package resolution fails when `dist/NoritoBridge.xcframework` is absent or incomplete; runtime `bridgeUnavailable`/`nativeBridgeUnavailable` errors identify a broken or unloaded required artifact rather than selecting a Swift-only codec fallback.
 
 ## Quickstart

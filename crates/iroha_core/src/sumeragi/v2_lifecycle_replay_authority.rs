@@ -15,8 +15,8 @@ use crate::sumeragi::{
     v2::{
         AdapterEffect, ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity,
         PersistedWalFrameLocatorV1, RecoveredDecisionApplyCandidateProjectionPermit,
-        RecoveredWalFrameIdentity, RegisteredPrepareInvalidBodyReportCapability, SignRequest,
-        VerifiedHeightContext,
+        RecoveredLifecycleNextWalVoteSealPermitV1, RecoveredWalFrameIdentity,
+        RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
     },
     v2_body_store::{DurableBodyReceipt, DurableCertifiedFetchBodyReceipt, ValidatedBodyReceipt},
     v2_certified_serve_payload_store::{
@@ -28,6 +28,7 @@ use crate::sumeragi::{
     v2_core::EventTag,
     v2_runtime::{
         LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
         RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
         RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
     },
@@ -496,6 +497,61 @@ pub(crate) struct RecoveredWalVoteReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
 }
 
+/// Opaque adapter-authenticated authority for one WAL-owned follow-on Vote Sign.
+///
+/// The exact unsigned Sign, authenticated WAL owner, canonical replay evidence,
+/// and validated body receipt remain inseparable. This is deliberately inert
+/// until combined with the signed Broadcast parent; the live transaction and
+/// cold recovery path must retain the resulting pair as one authority.
+#[must_use = "a recovered follow-on Sign must remain sealed to its WAL and body authority"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteSealV1 {
+    wal_identity: RecoveredWalFrameIdentity,
+    replay_evidence: RecoveredWalVoteReplayEvidenceV1,
+    effect: AdapterEffect,
+    validated: ValidatedBodyReceipt,
+}
+
+/// Complete replay-authorized projection of one recovered follow-on Vote Sign.
+///
+/// The consumed adapter seal remains attached to its reconstructed pending
+/// owner and canonical standalone admission. No effect, pending, WAL, body,
+/// candidate, key, or parts accessor exists. Registry publication consumes it
+/// only through the dedicated private affine permit.
+#[must_use = "a recovered follow-on Sign projection must enter its combined registry transition"]
+pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+    seal: RecoveredLifecycleNextWalVoteSealV1,
+    pending: PendingRuntimeEffectBinding,
+    candidate: CandidateAdmission,
+}
+
+/// Closed signed-Broadcast successor of one recovered follow-on WAL Vote.
+///
+/// The signed effect, inherited pending owner, and replay-authorized admission
+/// remain inseparable. Only WAL recovery can unpack this projection, using its
+/// private affine permit, after the adapter-authenticated signature has been
+/// rejoined to the exact recovered Vote carrier.
+#[must_use = "a recovered next-WAL-Vote Broadcast must rejoin WAL-owned publication"]
+pub(super) struct RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
+    effect: AdapterEffect,
+    pending: PendingRuntimeEffectBinding,
+    candidate: CandidateAdmission,
+}
+
+impl RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
+    /// Release the closed projection only to the WAL module's private permit.
+    pub(super) fn consume_for_recovered_wal(
+        self,
+        _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> (
+        AdapterEffect,
+        PendingRuntimeEffectBinding,
+        CandidateAdmission,
+    ) {
+        (self.effect, self.pending, self.candidate)
+    }
+}
+
 /// Canonical structural evidence for a recovered ProposalIntent or TimeoutIntent Sign.
 ///
 /// This is inert, cloneable evidence; executable authority remains in the
@@ -912,6 +968,54 @@ impl RecoveredDecisionApplyReplayLineageV1 {
             ) == Some(true)
     }
 
+    /// Project only the first body-backed Store successor of the recovered Fetch.
+    ///
+    /// This does not require or fabricate a validation result. The full replay
+    /// family remains sealed solely so later cold recovery can prove that the
+    /// Store row still descends from the original payload-free WAL Decision.
+    pub(super) fn project_recovered_fetch_store_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        receipt: &DurableBodyReceipt,
+        store_effect: &AdapterEffect,
+        store_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CandidateAdmission> {
+        let context = super::projection::lifecycle_context(verified.context());
+        if receipt.context_id() != verified.context().id() || !self.is_stage_closed(context) {
+            return None;
+        }
+        let payload =
+            DurablePayloadReference::BodyFrame(durable_body_frame_reference(context, receipt)?);
+        let authority = self
+            .body
+            .authority_for(context, LifecycleStageKind::StoreBody)?;
+        let candidate = candidate_from_authorized_projection(
+            context,
+            super::projection::authority_free_admission_projection(
+                context,
+                verified,
+                store_effect,
+                store_pending,
+            )
+            .ok()?,
+            payload,
+            authority,
+        )?;
+        (candidate.work_class == LifecycleWorkClass::Store
+            && candidate.stage.kind() == LifecycleStageKind::StoreBody
+            && candidate.initial_state == InitialLifecycleState::Ready
+            && candidate.payload == payload
+            && candidate.replay_authority_is_exact(context)
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::FetchToStore,
+                &self.fetch,
+                DurablePayloadReference::None,
+                &candidate.replay_authority,
+                candidate.payload,
+            ) == Some(true))
+        .then_some(candidate)
+    }
+
     /// Consume the inert replay family into the sole fixed reducer-derived
     /// Store/Validate/Apply logical lineage.
     ///
@@ -1006,6 +1110,22 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
             && record.durable_payload() == Some(candidate.payload)
             && record.continuation() == Some(continuation)
             && record.replay_matches_candidate(candidate)
+    }
+
+    /// Construct one exact logical lineage for ledger-local restart tests.
+    #[cfg(test)]
+    pub(super) fn from_candidates_for_test(
+        fetch: LifecycleReplayAuthorityV1,
+        store: CandidateAdmission,
+        validate: CandidateAdmission,
+        apply: CandidateAdmission,
+    ) -> Self {
+        Self {
+            fetch,
+            store,
+            validate,
+            apply,
+        }
     }
 
     /// Recheck the complete fixed body lineage without releasing a candidate.
@@ -1151,6 +1271,88 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         Some([store, validate, apply])
     }
 
+    /// Advance one already durable live Store and append its exact Validate/Apply tail.
+    ///
+    /// The Store ordinal can precede unrelated durable rows: its typed
+    /// continuation, rather than physical adjacency, binds the newly appended
+    /// Validate child. Validate and Apply are still adjacent because this
+    /// restart repair publishes both in one LedgerV1 frame.
+    pub(super) fn successor_records_after_live_store(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+        validate_ordinal: u128,
+        apply_ordinal: u128,
+    ) -> Option<[LifecycleLedgerRecordV1; 3]> {
+        if !self.exactly_matches_live_store_record(owner, store)
+            || store.ordinal() >= validate_ordinal
+            || validate_ordinal.checked_add(1) != Some(apply_ordinal)
+        {
+            return None;
+        }
+        let store = LifecycleLedgerRecordV1::new(
+            self.store.key,
+            owner,
+            store.ordinal(),
+            self.store.work_class,
+            self.store.stage,
+            Some(TerminalOutcome::Advanced),
+            self.store.reconstruction_source,
+            self.store.payload,
+            self.store.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                super::schema::DurableContinuationEdge::StoreToValidate,
+                validate_ordinal,
+            ),
+        )
+        .ok()?;
+        let validate = LifecycleLedgerRecordV1::new(
+            self.validate.key,
+            owner,
+            validate_ordinal,
+            self.validate.work_class,
+            self.validate.stage,
+            Some(TerminalOutcome::Advanced),
+            self.validate.reconstruction_source,
+            self.validate.payload,
+            self.validate.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                super::schema::DurableContinuationEdge::ValidateToApply,
+                apply_ordinal,
+            ),
+        )
+        .ok()?;
+        let apply = LifecycleLedgerRecordV1::new(
+            self.apply.key,
+            owner,
+            apply_ordinal,
+            self.apply.work_class,
+            self.apply.stage,
+            None,
+            self.apply.reconstruction_source,
+            self.apply.payload,
+            self.apply.replay_authority.clone(),
+            super::schema::DurableContinuation::None,
+        )
+        .ok()?;
+        Some([store, validate, apply])
+    }
+
+    /// Compare the exact crash-cut Store before its validation successor exists.
+    pub(super) fn exactly_matches_live_store_record(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        Self::candidate_matches_record(
+            &self.store,
+            store,
+            owner,
+            None,
+            super::schema::DurableContinuation::None,
+        )
+    }
+
     /// Compare all three successor rows, including the final live Apply.
     pub(super) fn exactly_matches_successor_records(
         &self,
@@ -1159,7 +1361,7 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         validate: &LifecycleLedgerRecordV1,
         apply: &LifecycleLedgerRecordV1,
     ) -> bool {
-        store.ordinal().checked_add(1) == Some(validate.ordinal())
+        store.ordinal() < validate.ordinal()
             && validate.ordinal().checked_add(1) == Some(apply.ordinal())
             && Self::candidate_matches_record(
                 &self.store,
@@ -1204,7 +1406,7 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         validate: &LifecycleLedgerRecordV1,
         apply: &LifecycleLedgerRecordV1,
     ) -> bool {
-        store.ordinal().checked_add(1) == Some(validate.ordinal())
+        store.ordinal() < validate.ordinal()
             && validate.ordinal().checked_add(1) == Some(apply.ordinal())
             && Self::candidate_matches_record(
                 &self.store,
@@ -1393,6 +1595,565 @@ impl RecoveredWalVoteReplayEvidenceV1 {
             self.authority.clone(),
         )
     }
+
+    /// Recompute and compare one recovered Vote candidate without releasing it.
+    pub(in crate::sumeragi) fn project_recovered_vote_candidate_for_comparison(
+        &self,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        expected: &CandidateAdmission,
+    ) -> bool {
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        } = effect
+        else {
+            return false;
+        };
+        if !self.exactly_matches_recovered_vote(locator, *tag, vote) {
+            return false;
+        }
+        let active_context = super::projection::lifecycle_context(verified.context());
+        let Ok(projected) = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            effect,
+            pending,
+        ) else {
+            return false;
+        };
+        candidate_from_authorized_projection(
+            active_context,
+            projected,
+            DurablePayloadReference::None,
+            self.authority.clone(),
+        )
+        .as_ref()
+            == Some(expected)
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleNextWalVoteSealV1 {
+    /// Seal one exact adapter successor against its authenticated WAL owner and body.
+    ///
+    /// Construction additionally requires the adapter-private one-shot permit,
+    /// so structural replay evidence retained by another recovery path cannot
+    /// independently mint a runnable successor.
+    pub(in crate::sumeragi) fn from_authenticated_adapter(
+        _permit: RecoveredLifecycleNextWalVoteSealPermitV1,
+        wal_identity: RecoveredWalFrameIdentity,
+        replay_evidence: RecoveredWalVoteReplayEvidenceV1,
+        effect: AdapterEffect,
+        validated: ValidatedBodyReceipt,
+    ) -> Option<Self> {
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        } = &effect
+        else {
+            return None;
+        };
+        let durable = validated.durable();
+        if !vote.signature.is_empty()
+            || !replay_evidence.exactly_matches_recovered_vote(wal_identity, *tag, vote)
+            || durable.context_id() != vote.round.context_id
+            || durable.round() != vote.proposal_round
+            || durable.subject() != vote.subject
+            || validated.execution_commitment() != vote.execution_commitment
+        {
+            return None;
+        }
+        Some(Self {
+            wal_identity,
+            replay_evidence,
+            effect,
+            validated,
+        })
+    }
+
+    /// Compare the complete sealed binding without releasing any authority part.
+    pub(in crate::sumeragi) fn exactly_matches(
+        &self,
+        wal_identity: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        validated: &ValidatedBodyReceipt,
+    ) -> bool {
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        } = effect
+        else {
+            return false;
+        };
+        self.wal_identity.exactly_matches(wal_identity)
+            && self.effect == *effect
+            && self.validated == *validated
+            && self
+                .replay_evidence
+                .exactly_matches_recovered_vote(wal_identity, *tag, vote)
+    }
+
+    /// Recheck the sealed successor against the WAL carrier's verified height.
+    pub(in crate::sumeragi) fn matches_verified_height(
+        &self,
+        verified: &VerifiedHeightContext,
+    ) -> bool {
+        let AdapterEffect::Sign {
+            request: SignRequest::Vote(vote),
+            ..
+        } = &self.effect
+        else {
+            return false;
+        };
+        let durable = self.validated.durable();
+        vote.round.context_id == verified.context().id()
+            && vote.round.height == verified.context().height
+            && usize::try_from(vote.signer)
+                .is_ok_and(|index| index < verified.context().roster.len())
+            && durable.context_id() == verified.context().id()
+            && durable.round() == vote.proposal_round
+            && durable.subject() == vote.subject
+            && self.validated.execution_commitment() == vote.execution_commitment
+    }
+
+    /// Consume this full executable seal into one runtime-authenticated candidate.
+    ///
+    /// Every failure returns the intact seal. The pending owner is reconstructed
+    /// from the opaque WAL locator, and the canonical replay envelope mints the
+    /// admission only after the exact verified height and body binding rejoin.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_candidate_projection(
+        self,
+        permit: RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        candidate_permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+    ) -> Result<RecoveredLifecycleNextWalVoteCandidateProjectionV1, Self> {
+        if !self.wal_identity.is_exact()
+            || !self.matches_verified_height(verified)
+            || !self.exactly_matches(self.wal_identity, &self.effect, &self.validated)
+        {
+            return Err(self);
+        }
+        let Some(pending) = PendingRuntimeEffectBinding::from_exact_recovered_next_wal_vote(
+            &permit,
+            self.wal_identity,
+            &self.effect,
+        ) else {
+            return Err(self);
+        };
+        let Some(candidate) = self.replay_evidence.project_recovered_vote_candidate(
+            candidate_permit,
+            verified,
+            self.wal_identity,
+            &self.effect,
+            &pending,
+        ) else {
+            return Err(self);
+        };
+        let projection = RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+            seal: self,
+            pending,
+            candidate,
+        };
+        if !projection.is_exact(verified) {
+            let RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+                seal,
+                pending: _,
+                candidate: _,
+            } = projection;
+            return Err(seal);
+        }
+        Ok(projection)
+    }
+
+    /// Rejoin the retained body marker to one exact recovered phase-vote repair.
+    ///
+    /// This comparison releases no receipt or replay constituent. It is the
+    /// only phase-parent body oracle used by the combined successor projection.
+    pub(super) fn matches_phase_vote_repair(
+        &self,
+        repair: &super::wal_recovery::DurableAuthenticatedWalVoteLifecycleRepair,
+    ) -> bool {
+        repair.concrete_pair_matches_validation(&self.validated)
+    }
+
+    /// Construct a fully checked adapter-shaped seal for focused runtime tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        wal_identity: RecoveredWalFrameIdentity,
+        tag: EventTag,
+        vote: wire::Vote,
+        validated: ValidatedBodyReceipt,
+    ) -> Option<Self> {
+        let replay_evidence =
+            RecoveredWalVoteReplayEvidenceV1::from_sealed_recovered_vote(wal_identity, tag, &vote)?;
+        let effect = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        };
+        let seal = Self {
+            wal_identity,
+            replay_evidence,
+            effect,
+            validated,
+        };
+        seal.exactly_matches(wal_identity, &seal.effect, &seal.validated)
+            .then_some(seal)
+    }
+
+    /// Substitute only the opaque WAL owner in a focused fail-closed test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn substitute_wal_identity_for_test(
+        &mut self,
+        wal_identity: RecoveredWalFrameIdentity,
+    ) {
+        self.wal_identity = wal_identity;
+    }
+
+    /// Substitute only the executable effect in a focused fail-closed test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn substitute_effect_for_test(&mut self, effect: AdapterEffect) {
+        self.effect = effect;
+    }
+
+    /// Substitute only the retained body authority in a focused fail-closed test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn substitute_validated_for_test(
+        &mut self,
+        validated: ValidatedBodyReceipt,
+    ) {
+        self.validated = validated;
+    }
+}
+
+impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+    /// Revalidate the full retained executable seal, pending owner, candidate,
+    /// and canonical standalone Ready/Effect geometry.
+    pub(in crate::sumeragi) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
+        let context = super::projection::lifecycle_context(verified.context());
+        self.seal.wal_identity.is_exact()
+            && self.seal.matches_verified_height(verified)
+            && self.seal.exactly_matches(
+                self.seal.wal_identity,
+                &self.seal.effect,
+                &self.seal.validated,
+            )
+            && self.pending.exactly_binds_adapter_effect(&self.seal.effect)
+            && self
+                .seal
+                .replay_evidence
+                .project_recovered_vote_candidate_for_comparison(
+                    verified,
+                    self.seal.wal_identity,
+                    &self.seal.effect,
+                    &self.pending,
+                    &self.candidate,
+                )
+            && recovered_next_wal_vote_candidate_shape_is_exact(&self.candidate, context)
+    }
+
+    /// Clone the exact next Sign only for the WAL module's cold-adapter seal.
+    ///
+    /// The move-only WAL permit prevents this comparison projection from
+    /// becoming a general effect accessor. The full executable seal remains
+    /// owned by this value for the cold registry splice.
+    pub(super) fn project_cold_adapter_next_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> Option<AdapterEffect> {
+        self.is_exact(verified).then(|| self.seal.effect.clone())
+    }
+
+    /// Project the exact signed Broadcast successor without releasing either
+    /// the recovered Vote or the derived executable child.
+    ///
+    /// The adapter-authenticated message must be the retained unsigned Vote
+    /// with only its signature filled, and that signature is rechecked against
+    /// the exact recovered height roster. The returned closed value can be
+    /// unpacked only by WAL recovery's private affine permit.
+    pub(super) fn project_authenticated_signed_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        broadcast: AdapterEffect,
+    ) -> Option<RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1> {
+        let AdapterEffect::Broadcast(message) = &broadcast else {
+            return None;
+        };
+        if !self.is_exact(verified) || verified.verify_consensus_message(message).is_err() {
+            return None;
+        }
+        let pending = self
+            .pending
+            .project_signed_broadcast_successor(&self.seal.effect, &broadcast)?;
+        let candidate = exact_signed_broadcast_successor_candidate(verified, &broadcast, &pending)?;
+        let projection = RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
+            effect: broadcast,
+            pending,
+            candidate,
+        };
+        self.signed_broadcast_successor_is_exact(
+            verified,
+            &projection.effect,
+            &projection.pending,
+            &projection.candidate,
+        )
+        .then_some(projection)
+    }
+
+    /// Recheck a closed signed child against this exact recovered WAL Vote.
+    pub(super) fn signed_broadcast_successor_is_exact(
+        &self,
+        verified: &VerifiedHeightContext,
+        broadcast: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        candidate: &CandidateAdmission,
+    ) -> bool {
+        let AdapterEffect::Broadcast(message) = broadcast else {
+            return false;
+        };
+        self.is_exact(verified)
+            && verified.verify_consensus_message(message).is_ok()
+            && self
+                .pending
+                .project_signed_broadcast_successor(&self.seal.effect, broadcast)
+                .as_ref()
+                == Some(pending)
+            && exact_signed_broadcast_successor_candidate(verified, broadcast, pending).as_ref()
+                == Some(candidate)
+    }
+
+    /// Return the exact installed effect digest without exposing its binding.
+    pub(super) fn digest(&self) -> LifecycleDigest {
+        LifecycleDigest::new(*self.pending.exact_effect_identity().as_ref())
+    }
+
+    /// Recheck the complete executable carrier at one deterministic address.
+    pub(super) fn validates_at(
+        &self,
+        verified: &VerifiedHeightContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+    ) -> bool {
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let slot = PhysicalSlotId::for_capacity(super::schema::CapacityClass::Effect, 0);
+        self.is_exact(verified)
+            && self.digest() == installed_digest
+            && self.candidate.causal_root == address.owner.causal_root()
+            && address.owner.first_admission_ordinal() == address.ordinal
+            && address.slot == slot
+            && physical == std::collections::BTreeMap::from([(slot, installed_digest)])
+            && universe == std::collections::BTreeSet::from([slot])
+            && consumed == universe
+    }
+
+    /// Compare the exact Ready coordinator row, metadata, indexes, and geometry.
+    pub(super) fn matches_current_ready_record(
+        &self,
+        verified: &VerifiedHeightContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+    ) -> bool {
+        let context = super::projection::lifecycle_context(verified.context());
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let (Some(record), Some(metadata)) = (
+            coordinator.records.get(&address.ordinal),
+            coordinator.durable_records.get(&address.ordinal),
+        ) else {
+            return false;
+        };
+        self.validates_at(verified, address, digest)
+            && coordinator.fault.is_none()
+            && coordinator.active_context == context
+            && coordinator.high_water >= address.ordinal
+            && record.key == self.candidate.key
+            && record.owner == address.owner
+            && record.ordinal == address.ordinal
+            && record.work_class == LifecycleWorkClass::SignVote
+            && record.stage == self.candidate.stage
+            && record.state == super::LifecycleState::Ready
+            && record.physical_slots == physical
+            && record.episode.slot_universe == universe
+            && record.episode.consumed_slots == consumed
+            && physical.get(&address.slot) == Some(&digest)
+            && metadata.matches_admission(&self.candidate)
+            && metadata.continuation == super::schema::DurableContinuation::None
+            && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
+            && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
+            && coordinator.ready_index.contains(&address.ordinal)
+    }
+
+    /// Compare the exact claimed row and the coordinator's sole active lease.
+    pub(super) fn matches_current_claimed_record(
+        &self,
+        verified: &VerifiedHeightContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+        lease: &super::TurnLease,
+    ) -> bool {
+        let context = super::projection::lifecycle_context(verified.context());
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let (Some(record), Some(metadata)) = (
+            coordinator.records.get(&address.ordinal),
+            coordinator.durable_records.get(&address.ordinal),
+        ) else {
+            return false;
+        };
+        self.validates_at(verified, address, digest)
+            && coordinator.fault.is_none()
+            && coordinator.active_context == context
+            && coordinator.active_lease.as_ref() == Some(lease)
+            && lease.ordinal() == address.ordinal
+            && lease.owner() == address.owner
+            && lease.key() == record.key
+            && lease.work_class() == LifecycleWorkClass::SignVote
+            && lease.stage() == record.stage
+            && lease.physical_slots() == &physical
+            && record.key == self.candidate.key
+            && record.owner == address.owner
+            && record.ordinal == address.ordinal
+            && record.work_class == LifecycleWorkClass::SignVote
+            && record.stage == self.candidate.stage
+            && record.state == super::LifecycleState::Claimed(lease.id())
+            && record.physical_slots == physical
+            && record.episode.slot_universe == universe
+            && record.episode.consumed_slots == consumed
+            && metadata.matches_admission(&self.candidate)
+            && metadata.continuation == super::schema::DurableContinuation::None
+            && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
+            && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
+            && !coordinator.ready_index.contains(&address.ordinal)
+    }
+
+    /// Project the exact retained Sign into the existing opaque worker task.
+    pub(super) fn project_recovered_lifecycle_sign_task(
+        &self,
+        verified: &VerifiedHeightContext,
+        identity: super::work_registry::RecoveredLifecycleSignDispatchIdentityV1,
+    ) -> Option<crate::sumeragi::v2_worker::RecoveredLifecycleSignTaskV1> {
+        if !self.is_exact(verified) {
+            return None;
+        }
+        let AdapterEffect::Sign { tag, request } = &self.seal.effect else {
+            return None;
+        };
+        crate::sumeragi::v2_worker::RecoveredLifecycleSignTaskV1::from_registry_projection(
+            identity,
+            *tag,
+            request.clone(),
+        )
+    }
+
+    /// Clone only the inert admission under the transition module's affine permit.
+    pub(super) fn project_candidate_for_combined_transition(
+        &self,
+        _permit: super::body_pipeline_transition::RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1,
+    ) -> CandidateAdmission {
+        self.candidate.clone()
+    }
+
+    /// Compare one fresh standalone ledger row with the complete sealed candidate.
+    pub(super) fn exactly_matches_fresh_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        let owner = OwnerId::new(self.candidate.causal_root, record.ordinal());
+        recovered_next_wal_vote_candidate_shape_is_exact(&self.candidate, context)
+            && record.key() == Some(self.candidate.key)
+            && record.owner() == owner
+            && record.work_class() == Some(LifecycleWorkClass::SignVote)
+            && record.stage() == Some(self.candidate.stage)
+            && record.terminal() == Some(None)
+            && record.reconstruction_source() == self.candidate.reconstruction_source
+            && record.durable_payload() == Some(DurablePayloadReference::None)
+            && record.continuation() == Some(super::schema::DurableContinuation::None)
+            && record.replay_matches_candidate(&self.candidate)
+    }
+
+    /// Insert this exact candidate after its fresh row has been revalidated.
+    pub(super) fn splice_candidate_from_fresh_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+        candidates: &mut std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        self.exactly_matches_fresh_record(context, record)
+            && !candidates.contains_key(&self.candidate.key)
+            && candidates
+                .insert(self.candidate.key, self.candidate.clone())
+                .is_none()
+    }
+
+    /// Compare one cold-census entry without exposing its candidate key.
+    pub(super) fn owns_spliced_candidate(
+        &self,
+        candidates: &std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        candidates.get(&self.candidate.key) == Some(&self.candidate)
+    }
+
+    /// Compare pair identity without exposing either next-Sign constituent.
+    pub(super) fn is_distinct_from_broadcast_candidate(
+        &self,
+        broadcast: &CandidateAdmission,
+    ) -> bool {
+        self.candidate.key != broadcast.key && self.candidate.causal_root != broadcast.causal_root
+    }
+
+    /// Check cold-census vacancy without releasing the next-Sign key.
+    pub(super) fn is_absent_from_candidates(
+        &self,
+        candidates: &std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        !candidates.contains_key(&self.candidate.key)
+    }
+}
+
+fn recovered_next_wal_vote_candidate_shape_is_exact(
+    candidate: &CandidateAdmission,
+    context: LifecycleContext,
+) -> bool {
+    let Ok(canonical) = candidate.physical_geometry.canonicalized() else {
+        return false;
+    };
+    let Ok((physical, universe, consumed)) = candidate.physical_geometry.normalized() else {
+        return false;
+    };
+    candidate.work_class == LifecycleWorkClass::SignVote
+        && matches!(
+            candidate.stage.kind(),
+            LifecycleStageKind::SignPrepareVote | LifecycleStageKind::SignCommitVote
+        )
+        && candidate.stage.predecessor_scope() == PredecessorScope::Independent
+        && candidate.initial_state == InitialLifecycleState::Ready
+        && candidate.key.context() == context.id()
+        && candidate.key.round().height() == context.height()
+        && candidate.causal_root.digest() == candidate.reconstruction_source
+        && candidate.payload == DurablePayloadReference::None
+        && candidate.producer_turn.is_none()
+        && candidate.replay_authority_is_exact(context)
+        && canonical == candidate.physical_geometry
+        && physical.len() == 1
+        && universe.len() == 1
+        && consumed == universe
+        && physical
+            .keys()
+            .all(|slot| slot.capacity_class() == Some(super::schema::CapacityClass::Effect))
 }
 
 /// Non-decodable live authority for one exact fsynced WAL continuation.
@@ -1930,6 +2691,52 @@ pub(super) struct SignedBroadcastReplayEvidenceV1 {
     pending: DirectSignedPendingBindingV1,
 }
 
+/// Opaque decoded signed-Broadcast child awaiting its recovered WAL parent.
+///
+/// Ledger bytes alone are not execution authority: this projection can be
+/// unpacked only with the WAL module's private one-shot permit, after which the
+/// parent binding and verified roster must reconstruct the exact candidate.
+pub(super) struct DurableRecoveredSignedBroadcastChildV1 {
+    effect: AdapterEffect,
+}
+
+impl DurableRecoveredSignedBroadcastChildV1 {
+    /// Release the canonical signed effect only to its recovered-WAL parent.
+    pub(super) fn consume_for_recovered_wal(
+        self,
+        _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> AdapterEffect {
+        self.effect
+    }
+}
+
+/// Authenticate the durable envelope shape without granting execution authority.
+pub(super) fn project_durable_recovered_signed_broadcast_child(
+    context: LifecycleContext,
+    key: LifecycleKey,
+    work_class: LifecycleWorkClass,
+    stage: LifecycleStage,
+    terminal: Option<TerminalOutcome>,
+    reconstruction_source: LifecycleDigest,
+    owner: OwnerId,
+    payload: DurablePayloadReference,
+    continuation: super::schema::DurableContinuation,
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<DurableRecoveredSignedBroadcastChildV1> {
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &authority.source else {
+        return None;
+    };
+    let effect = AdapterEffect::Broadcast(message.clone());
+    (work_class == LifecycleWorkClass::Broadcast
+        && terminal.is_none()
+        && reconstruction_source == owner.causal_root().digest()
+        && payload == DurablePayloadReference::None
+        && continuation == super::schema::DurableContinuation::None
+        && authority.structurally_matches_record(context, key, work_class, stage, payload)
+        && exact_signed_broadcast_authority(&effect).as_ref() == Some(authority))
+    .then_some(DurableRecoveredSignedBroadcastChildV1 { effect })
+}
+
 impl SignedBroadcastReplayEvidenceV1 {
     /// Seal one exact runtime-bound signed broadcast into canonical evidence.
     pub(super) fn from_exact_effect(
@@ -1956,6 +2763,148 @@ impl SignedBroadcastReplayEvidenceV1 {
             && exact_signed_broadcast_authority(effect)
                 .is_some_and(|expected| expected == self.authority)
     }
+}
+
+/// Project the exact signed Broadcast child of one pending Sign owner.
+///
+/// The pending binding remains non-decodable process authority. The returned
+/// admission carries the complete signed consensus envelope as durable replay
+/// source, while its inherited causal root has already been checked by the
+/// fixed `Sign -> Broadcast` binding projection.
+pub(super) fn exact_signed_broadcast_successor_candidate(
+    verified: &VerifiedHeightContext,
+    broadcast_effect: &AdapterEffect,
+    broadcast_pending: &PendingRuntimeEffectBinding,
+) -> Option<CandidateAdmission> {
+    let evidence =
+        SignedBroadcastReplayEvidenceV1::from_exact_effect(broadcast_effect, broadcast_pending)?;
+    let authority = evidence.authority.clone();
+    let AdapterEffect::Broadcast(message) = broadcast_effect else {
+        return None;
+    };
+    let round = match &message.payload {
+        wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal.round,
+        wire::ConsensusMessageV2Payload::Vote(vote) => vote.round,
+        wire::ConsensusMessageV2Payload::TimeoutVote(vote) => vote.round,
+        wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => return None,
+    };
+    let context = replay_context(round);
+    let projected = super::projection::authority_free_admission_projection(
+        context,
+        verified,
+        broadcast_effect,
+        broadcast_pending,
+    )
+    .ok()?;
+    candidate_from_authorized_projection(
+        context,
+        projected,
+        DurablePayloadReference::None,
+        authority,
+    )
+}
+
+/// Rejoin one durable WAL Sign source to its exact signed Broadcast envelope.
+///
+/// LedgerV1 invokes this for the four Sign-to-Broadcast continuation codes.
+/// The parent must retain an unsigned WAL action, and the child must be the
+/// byte-exact same message with only a nonempty signature filled. This is an
+/// inert persistence check; cold production open additionally verifies the
+/// signature cryptographically against the recovered height roster.
+pub(super) fn signed_broadcast_continuation_is_exact(
+    edge: super::schema::DurableContinuationEdge,
+    parent: &LifecycleReplayAuthorityV1,
+    parent_payload: DurablePayloadReference,
+    child: &LifecycleReplayAuthorityV1,
+    child_payload: DurablePayloadReference,
+) -> Option<bool> {
+    use super::schema::DurableContinuationEdge;
+
+    if !matches!(
+        edge,
+        DurableContinuationEdge::SignProposalToBroadcast
+            | DurableContinuationEdge::SignPrepareToBroadcast
+            | DurableContinuationEdge::SignCommitToBroadcast
+            | DurableContinuationEdge::SignTimeoutToBroadcast
+    ) {
+        return None;
+    }
+    let LifecycleReplaySourceV1::Wal(parent_source) = &parent.source else {
+        return Some(false);
+    };
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &child.source else {
+        return Some(false);
+    };
+    if parent_payload != DurablePayloadReference::None
+        || child_payload != DurablePayloadReference::None
+        || !parent.payload.is_none()
+        || !child.payload.is_none()
+        || exact_signed_broadcast_authority(&AdapterEffect::Broadcast(message.clone())).as_ref()
+            != Some(child)
+    {
+        return Some(false);
+    }
+    let exact = match (edge, &parent_source.action, &message.payload) {
+        (
+            DurableContinuationEdge::SignProposalToBroadcast,
+            WalReplayActionV1::SignProposal(unsigned),
+            wire::ConsensusMessageV2Payload::Proposal(signed),
+        ) => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignPrepareToBroadcast,
+            WalReplayActionV1::SignVote(unsigned),
+            wire::ConsensusMessageV2Payload::Vote(signed),
+        ) if unsigned.phase == wire::GlobalPhase::Prepare => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignCommitToBroadcast,
+            WalReplayActionV1::SignVote(unsigned),
+            wire::ConsensusMessageV2Payload::Vote(signed),
+        ) if unsigned.phase == wire::GlobalPhase::Commit => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignTimeoutToBroadcast,
+            WalReplayActionV1::SignTimeoutVote(unsigned),
+            wire::ConsensusMessageV2Payload::TimeoutVote(signed),
+        ) => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignProposalToBroadcast
+            | DurableContinuationEdge::SignPrepareToBroadcast
+            | DurableContinuationEdge::SignCommitToBroadcast
+            | DurableContinuationEdge::SignTimeoutToBroadcast,
+            _,
+            _,
+        ) => false,
+        _ => unreachable!("non-Sign continuation returned above"),
+    };
+    Some(exact)
 }
 
 /// Canonical inert replay evidence for one exact authenticated equivocation report.
@@ -6043,7 +6992,11 @@ pub(super) fn recovered_decision_body_continuation_is_exact(
         }
         super::schema::DurableContinuationEdge::ValidateToInvalidBodyReport
         | super::schema::DurableContinuationEdge::ValidateToSignPrepare
-        | super::schema::DurableContinuationEdge::ValidateToSignCommit => false,
+        | super::schema::DurableContinuationEdge::ValidateToSignCommit
+        | super::schema::DurableContinuationEdge::SignProposalToBroadcast
+        | super::schema::DurableContinuationEdge::SignPrepareToBroadcast
+        | super::schema::DurableContinuationEdge::SignCommitToBroadcast
+        | super::schema::DurableContinuationEdge::SignTimeoutToBroadcast => false,
     })
 }
 

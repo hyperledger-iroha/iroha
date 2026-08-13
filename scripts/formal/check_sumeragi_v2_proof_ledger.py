@@ -75,7 +75,7 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py", "sumeragi_v2_proof_ledger_reply_writer_deadline_production_contracts.py",
     "sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py", "sumeragi_v2_proof_ledger_shared_tlc_result_contracts.py",
     "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py", "sumeragi_v2_proof_ledger_runtime_ingress_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_recovery_contracts.py", "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_production_contracts.py", "sumeragi_v2_proof_ledger_successor_recovery_contracts.py", "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
     "sumeragi_v2_proof_ledger_release_inventory_contracts.py", "sumeragi_v2_proof_ledger_proof_architecture_contracts.py",
     "sumeragi_v2_proof_ledger_effect_capacity_tail_contracts.py", "sumeragi_v2_proof_ledger_effect_capacity_contracts.py",
     "sumeragi_v2_proof_ledger_leader_wire_contracts.py", "sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py",
@@ -49454,7 +49454,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "replayed_proposal_sign": (
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
-    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
+    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "6799b44549fe649a8253b718b8f3ba76fcce296e594f41e212d9c8c7e3bc3d23"
     ),
@@ -60981,7 +60981,7 @@ self.finality_completion
         _require_rust_item_context(effects_path, item, (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),), f"recovered Decision Apply finality {description}", errors)
     _require_rust_token_sequence(
         effects_path, prepare_recovered_finality,
-        """self.pending_work() != 0 || self.retained_effect_batch.is_some()
+        """self.pending_work() != 0 || !self.recovered_decision_fetch_request_index_is_exact_and_empty() || self.retained_effect_batch.is_some()
 || self.parked_effect_batch.is_some() || self.retained_certified_body_response.is_some()
 || self.pending_tip_recovery.is_some() || self.finality_completion.is_some()
 || self.runtime.queued_commands() != 0""",
@@ -60989,7 +60989,7 @@ self.finality_completion
         errors)
     _require_rust_token_sequence(
         effects_path, commit_recovered_finality,
-        """self.finality_completion.is_none() && self.pending_work() == 0
+        """self.finality_completion.is_none() && self.pending_work() == 0 && self.recovered_decision_fetch_request_index_is_exact_and_empty()
 && dispatch_key.matches_height_context(&self.context) && artifact.height_context == self.context
 && artifact.subject == receipt.subject() && receipt.context_id() == self.context.id()
 && receipt.height() == self.context.height && receipt.artifact_hash() == HashOf::new(&artifact)
@@ -61004,8 +61004,8 @@ ownership: FinalityCompletionOwner::RecoveredDecisionApply(dispatch_key), });"""
         errors)
     _require_rust_token_sequence(
         effects_path, ingress_seam_items["effects::complete_application"][1],
-        "|| self.finality_completion.is_some()",
-        "runtime Apply completion must reject a second terminal installation", errors)
+        "|| self.finality_completion.is_some() || !self.recovered_decision_fetch_request_index_is_exact_and_empty()",
+        "runtime Apply completion must reject a second terminal or recovered-Fetch overlap", errors)
     _require_rust_source_token_sequence(
         effects_path, effects_source, "self.finality_completion = Some(FinalityCompletion",
         "the executor must have exactly the reviewed runtime and recovered finality constructors",
@@ -75148,6 +75148,7 @@ if confirmed_snapshot != artifact_snapshot
     return errors
 
 
+_execute_checker_component("sumeragi_v2_proof_ledger_successor_production_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_chain_inventory_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_release_inventory_contracts.py")

@@ -12,7 +12,8 @@ use super::{
     LifecycleCoordinator, LifecycleWorkRegistryHolder,
     ingress_position::{
         FairIngressQueueCut, FairIngressQueueCutError, FairIngressQueuePositions,
-        PendingFairIngressIdentity, PreparedFairIngressQueueWitness,
+        LockedPreparedFairIngressExactDequeue, PendingFairIngressIdentity,
+        PreparedFairIngressQueueWitness,
     },
     projection::{
         certified_fetch_lifecycle_key, certified_fetch_wait_source, pending_effect_causal_root,
@@ -30,10 +31,13 @@ use crate::sumeragi::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition,
     FairV2IngressQueueGateVerdict, FairV2IngressSourceClass, InboundBlockMessage,
     message::BlockMessage,
-    v2_body_store::{DurableCertifiedFetchBodyReceipt, V2BodyStore, V2BodyStoreError},
+    v2_body_store::{
+        DurableCertifiedFetchBodyReceipt, RecoveredDecisionFetchStoreBodyAuthorityV1, V2BodyStore,
+        V2BodyStoreError,
+    },
     v2_effects::{
         CertifiedResponsePriorityCandidate, CertifiedResponsePriorityProbe, EffectTransportError,
-        EffectWorkId, V2EffectExecutor,
+        EffectWorkId, RecoveredDecisionFetchResponseCandidateV1, V2EffectExecutor,
     },
     v2_runtime::SerializedV2Runtime,
     v2_transport::AuthenticatedCertifiedBodyResponse,
@@ -214,6 +218,168 @@ impl CertifiedFetchBodyPersistenceCompletion {
     }
 }
 
+/// Opaque physical-ingress and lifecycle identity of one recovered Decision
+/// Fetch body persistence command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistenceIdV1 {
+    ingress_identity: PendingFairIngressIdentity,
+    dispatch_key: super::work_registry::RecoveredDecisionFetchDispatchKeyV1,
+}
+
+/// Move-only body-store command owned by the recovered Decision Fetch carrier.
+#[derive(Debug)]
+#[must_use = "the recovered Decision Fetch response must be durably persisted"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistenceTaskV1 {
+    id: RecoveredDecisionFetchBodyPersistenceIdV1,
+    claim_preflight: crate::sumeragi::v2_transport::CertifiedBodyResponseClaimPreflight,
+    authenticated: AuthenticatedCertifiedBodyResponse,
+}
+
+impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
+    /// Build one exact authenticated persistence task behind a sealed test target.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        target: &LifecycleIngressIoTargetSeal,
+        dispatch_key: super::work_registry::RecoveredDecisionFetchDispatchKeyV1,
+        authenticated: AuthenticatedCertifiedBodyResponse,
+    ) -> Self {
+        assert_eq!(
+            target.kind(),
+            LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
+        );
+        assert!(target.matches_recovered_decision_fetch_key(dispatch_key));
+        Self {
+            id: RecoveredDecisionFetchBodyPersistenceIdV1 {
+                ingress_identity: target.ingress_identity(),
+                dispatch_key,
+            },
+            claim_preflight:
+                crate::sumeragi::v2_transport::CertifiedBodyResponseClaimPreflight::Vacant,
+            authenticated,
+        }
+    }
+
+    /// Return the dedicated lifecycle/ingress queue identity.
+    pub(in crate::sumeragi) const fn id(&self) -> RecoveredDecisionFetchBodyPersistenceIdV1 {
+        self.id
+    }
+
+    /// Return the recovered lifecycle dispatch owner.
+    pub(in crate::sumeragi) const fn dispatch_key(
+        &self,
+    ) -> super::work_registry::RecoveredDecisionFetchDispatchKeyV1 {
+        self.id.dispatch_key
+    }
+
+    /// Return the exact queue ordinal solely for fresh selector recapture.
+    pub(in crate::sumeragi) const fn physical_admission_ordinal(&self) -> u64 {
+        self.id.ingress_identity.physical_admission_ordinal()
+    }
+
+    /// Match the exact selected physical ingress occurrence.
+    pub(in crate::sumeragi) const fn matches_ingress_identity(
+        &self,
+        identity: PendingFairIngressIdentity,
+    ) -> bool {
+        self.id.ingress_identity == identity
+    }
+
+    /// Hash the complete authenticated response without exposing its parts.
+    pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        HashOf::new(self.authenticated.response())
+    }
+
+    /// Return the response-family state observed by the final exact probe.
+    pub(in crate::sumeragi) const fn claim_preflight(
+        &self,
+    ) -> crate::sumeragi::v2_transport::CertifiedBodyResponseClaimPreflight {
+        self.claim_preflight
+    }
+
+    /// Persist the authenticated response through the crash-safe body store.
+    pub(in crate::sumeragi) fn persist(
+        self,
+        body_store: &mut V2BodyStore,
+    ) -> Result<RecoveredDecisionFetchBodyPersistenceCompletionV1, (V2BodyStoreError, Self)> {
+        let receipt =
+            match body_store.persist_authenticated_certified_fetch_response(&self.authenticated) {
+                Ok(receipt) => receipt,
+                Err(error) => return Err((error, self)),
+            };
+        Ok(RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+            id: self.id,
+            authenticated: self.authenticated,
+            receipt,
+        })
+    }
+}
+
+/// Durable body receipt retained under the recovered Decision Fetch owner.
+#[derive(Debug)]
+#[must_use = "the recovered Decision Fetch completion must enter the fixed Store settlement"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+    id: RecoveredDecisionFetchBodyPersistenceIdV1,
+    authenticated: AuthenticatedCertifiedBodyResponse,
+    receipt: DurableCertifiedFetchBodyReceipt,
+}
+
+impl RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+    /// Return the exact dedicated queue identity.
+    pub(in crate::sumeragi) const fn id(&self) -> RecoveredDecisionFetchBodyPersistenceIdV1 {
+        self.id
+    }
+
+    /// Return the lifecycle dispatch owner without exposing response parts.
+    pub(in crate::sumeragi) const fn dispatch_key(
+        &self,
+    ) -> super::work_registry::RecoveredDecisionFetchDispatchKeyV1 {
+        self.id.dispatch_key
+    }
+
+    /// Return the queue ordinal solely for fresh exact-selector recapture.
+    pub(in crate::sumeragi) const fn physical_admission_ordinal(&self) -> u64 {
+        self.id.ingress_identity.physical_admission_ordinal()
+    }
+
+    /// Hash the exact durable authenticated response.
+    pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        HashOf::new(self.authenticated.response())
+    }
+
+    /// Project the fixed body-frame authority without exposing response or receipt parts.
+    pub(in crate::sumeragi) fn project_store_body_authority(
+        &self,
+    ) -> Option<RecoveredDecisionFetchStoreBodyAuthorityV1> {
+        RecoveredDecisionFetchStoreBodyAuthorityV1::from_persisted_certified_response(
+            &self.authenticated,
+            &self.receipt,
+        )
+    }
+}
+
+/// Why a recovered selector could not become one dedicated persistence task.
+#[derive(Debug)]
+pub(in crate::sumeragi) enum RecoveredDecisionFetchBodyPersistencePreparationFailureV1 {
+    /// The selected occurrence was not the exact recovered response family.
+    Selector(CertifiedFetchReadyPublicationError),
+    /// The executor candidate changed during the final equality re-probe.
+    Executor(EffectTransportError),
+}
+
+/// Ownership-preserving recovered persistence preparation failure.
+#[must_use = "the unchanged selector remains available for capacity rollback"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
+    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
+    prepared: PreparedLifecycleIngressSelector,
+}
+
+impl RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
+    /// Recover the unchanged complete selector for reservation rollback.
+    pub(in crate::sumeragi) fn into_prepared(self) -> PreparedLifecycleIngressSelector {
+        self.prepared
+    }
+}
+
 /// Why a selector could not be consumed into one storage-worker command.
 #[derive(Debug)]
 #[allow(variant_size_differences)]
@@ -318,6 +484,32 @@ struct PreparedCertifiedFetchExactDequeue {
     context: LifecycleContext,
     ingress_identity: PendingFairIngressIdentity,
     queue_witness: PreparedFairIngressQueueWitness,
+}
+
+/// Closed pre-fsync failure for recovered exact-ingress locking.
+#[derive(Debug)]
+pub(in crate::sumeragi) enum RecoveredDecisionFetchExactDequeueErrorV1 {
+    /// The fresh selected family differs from the parked durable completion.
+    CompletionIdentity,
+    /// The dedicated executor request owner changed during the final re-probe.
+    Executor(EffectTransportError),
+    /// The frozen queue prefix changed before the service lock was acquired.
+    Queue(FairIngressQueueCutError),
+}
+
+/// Prevalidated recovered response dequeue held across LedgerV1 fsync.
+#[must_use = "recovered Decision Fetch ingress occurrence has not been acknowledged"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchExactDequeueV1<'a> {
+    locked: LockedPreparedFairIngressExactDequeue<'a>,
+}
+
+impl PreparedRecoveredDecisionFetchExactDequeueV1<'_> {
+    /// Assertion-remove the exact selected response after durable publication.
+    pub(in crate::sumeragi) fn commit(self) {
+        let (inbound, disposition) = self.locked.commit();
+        assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+        drop(inbound);
+    }
 }
 
 impl PreparedCertifiedFetchExactDequeue {
@@ -505,7 +697,58 @@ enum CertifiedFetchCompletionPreparationError {
 struct PreparedClaimedResponseFamily {
     ingress_identity: PendingFairIngressIdentity,
     inbound: Arc<InboundBlockMessage>,
-    candidate: Box<CertifiedResponsePriorityCandidate>,
+    candidate: PreparedCertifiedResponseCandidate,
+}
+
+#[derive(Debug)]
+enum PreparedCertifiedResponseCandidate {
+    Ordinary(Box<CertifiedResponsePriorityCandidate>),
+    Recovered(Box<RecoveredDecisionFetchResponseCandidateV1>),
+}
+
+impl PreparedCertifiedResponseCandidate {
+    fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        match self {
+            Self::Ordinary(candidate) => candidate.request_hash(),
+            Self::Recovered(candidate) => candidate.request_hash(),
+        }
+    }
+
+    fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        match self {
+            Self::Ordinary(candidate) => candidate.response_hash(),
+            Self::Recovered(candidate) => candidate.response_hash(),
+        }
+    }
+
+    fn matches_authenticated_response(
+        &self,
+        response: &wire::CertifiedBodyResponse,
+        responder: &iroha_data_model::peer::PeerId,
+    ) -> bool {
+        match self {
+            Self::Ordinary(candidate) => {
+                candidate.matches_authenticated_response(response, responder)
+            }
+            Self::Recovered(candidate) => {
+                candidate.matches_authenticated_response(response, responder)
+            }
+        }
+    }
+
+    fn ordinary(&self) -> Option<&CertifiedResponsePriorityCandidate> {
+        match self {
+            Self::Ordinary(candidate) => Some(candidate),
+            Self::Recovered(_) => None,
+        }
+    }
+
+    fn recovered(&self) -> Option<&RecoveredDecisionFetchResponseCandidateV1> {
+        match self {
+            Self::Ordinary(_) => None,
+            Self::Recovered(candidate) => Some(candidate),
+        }
+    }
 }
 
 impl PreparedClaimedResponseFamily {
@@ -653,6 +896,7 @@ pub(crate) struct PreparedLifecycleIngressSelector {
 enum PreparedLifecycleIngressIoTarget {
     CertifiedServe { request: LifecycleDigest },
     CertifiedFetchBodyPersistence,
+    RecoveredDecisionFetchBodyPersistence,
     Unsupported,
 }
 
@@ -663,6 +907,8 @@ pub(crate) enum LifecycleIngressIoTargetKind {
     CertifiedServe,
     /// Persist one authenticated certified-Fetch response on the consensus lane.
     CertifiedFetchBodyPersistence,
+    /// Persist one lifecycle-recovered Decision Fetch response without ordinary work ownership.
+    RecoveredDecisionFetchBodyPersistence,
 }
 
 /// Opaque binding between a selected fair-ingress occurrence and its I/O target.
@@ -677,6 +923,7 @@ pub(crate) struct LifecycleIngressIoTargetSeal {
     kind: LifecycleIngressIoTargetKind,
     certified_serve_request: Option<LifecycleDigest>,
     certified_fetch_work_id: Option<EffectWorkId>,
+    recovered_decision_fetch_key: Option<super::work_registry::RecoveredDecisionFetchDispatchKeyV1>,
     _linearity: LifecycleIngressIoTargetSealLinearity,
 }
 
@@ -710,6 +957,30 @@ impl LifecycleIngressIoTargetSeal {
                 LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
             )
             .then(|| EffectWorkId::for_test(physical_admission_ordinal)),
+            recovered_decision_fetch_key: None,
+            _linearity: LifecycleIngressIoTargetSealLinearity,
+        }
+    }
+
+    /// Construct a fixture-only recovered Fetch target with its exact owner key.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_recovered_decision_fetch_test(
+        context: &wire::HeightContext,
+        dispatch_key: super::work_registry::RecoveredDecisionFetchDispatchKeyV1,
+        physical_admission_ordinal: u64,
+    ) -> Self {
+        let context = lifecycle_context_from_wire(context);
+        Self {
+            context,
+            ingress_identity: PendingFairIngressIdentity::for_test(
+                context,
+                LifecycleDigest::new([0xA8; 32]),
+                physical_admission_ordinal,
+            ),
+            kind: LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence,
+            certified_serve_request: None,
+            certified_fetch_work_id: None,
+            recovered_decision_fetch_key: Some(dispatch_key),
             _linearity: LifecycleIngressIoTargetSealLinearity,
         }
     }
@@ -735,6 +1006,7 @@ impl LifecycleIngressIoTargetSeal {
             kind: LifecycleIngressIoTargetKind::CertifiedServe,
             certified_serve_request: Some(LifecycleDigest::new(digest)),
             certified_fetch_work_id: None,
+            recovered_decision_fetch_key: None,
             _linearity: LifecycleIngressIoTargetSealLinearity,
         }
     }
@@ -766,6 +1038,15 @@ impl LifecycleIngressIoTargetSeal {
             && self.certified_fetch_work_id == Some(candidate)
     }
 
+    /// Compare the dedicated recovered Decision Fetch owner key without exposing it.
+    pub(in crate::sumeragi) fn matches_recovered_decision_fetch_key(
+        &self,
+        candidate: super::work_registry::RecoveredDecisionFetchDispatchKeyV1,
+    ) -> bool {
+        self.kind == LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
+            && self.recovered_decision_fetch_key == Some(candidate)
+    }
+
     /// Return whether this selector-owned target names one exact signed
     /// Certified-Serve request. The stored digest remains opaque and no reply
     /// route or queue position is reconstructed.
@@ -778,6 +1059,7 @@ impl LifecycleIngressIoTargetSeal {
         self.kind == LifecycleIngressIoTargetKind::CertifiedServe
             && self.certified_serve_request == Some(LifecycleDigest::new(digest))
             && self.certified_fetch_work_id.is_none()
+            && self.recovered_decision_fetch_key.is_none()
     }
 }
 
@@ -854,37 +1136,57 @@ impl PreparedLifecycleIngressSelector {
     pub(crate) fn take_lifecycle_io_target(
         &mut self,
     ) -> Result<LifecycleIngressIoTargetSeal, LifecycleIngressIoTargetError> {
-        let (kind, certified_serve_request, certified_fetch_work_id) = match self.io_target {
-            PreparedLifecycleIngressIoTarget::CertifiedServe { request } => (
-                LifecycleIngressIoTargetKind::CertifiedServe,
-                Some(request),
-                None,
-            ),
-            PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence => {
-                let ready = self
-                    .selected_certified_fetch_ready_authority()
-                    .map_err(|_| LifecycleIngressIoTargetError::InvalidCertifiedFetch)?;
-                let work_id = self
-                    .claimed_response_families
-                    .get(&ready.request_hash)
-                    .map(|family| family.candidate.work_id())
-                    .ok_or(LifecycleIngressIoTargetError::InvalidCertifiedFetch)?;
-                (
-                    LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+        let (kind, certified_serve_request, certified_fetch_work_id, recovered_decision_fetch_key) =
+            match self.io_target {
+                PreparedLifecycleIngressIoTarget::CertifiedServe { request } => (
+                    LifecycleIngressIoTargetKind::CertifiedServe,
+                    Some(request),
                     None,
-                    Some(work_id),
-                )
-            }
-            PreparedLifecycleIngressIoTarget::Unsupported => {
-                return Err(LifecycleIngressIoTargetError::UnsupportedCarrier);
-            }
-        };
+                    None,
+                ),
+                PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence => {
+                    let family = self
+                        .selected_claimed_response_family()
+                        .map_err(|_| LifecycleIngressIoTargetError::InvalidCertifiedFetch)?;
+                    let work_id = family
+                        .candidate
+                        .ordinary()
+                        .map(CertifiedResponsePriorityCandidate::work_id)
+                        .ok_or(LifecycleIngressIoTargetError::InvalidCertifiedFetch)?;
+                    (
+                        LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+                        None,
+                        Some(work_id),
+                        None,
+                    )
+                }
+                PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence => {
+                    let family = self
+                        .selected_claimed_response_family()
+                        .map_err(|_| LifecycleIngressIoTargetError::InvalidCertifiedFetch)?;
+                    let key = family
+                        .candidate
+                        .recovered()
+                        .map(RecoveredDecisionFetchResponseCandidateV1::dispatch_key)
+                        .ok_or(LifecycleIngressIoTargetError::InvalidCertifiedFetch)?;
+                    (
+                        LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence,
+                        None,
+                        None,
+                        Some(key),
+                    )
+                }
+                PreparedLifecycleIngressIoTarget::Unsupported => {
+                    return Err(LifecycleIngressIoTargetError::UnsupportedCarrier);
+                }
+            };
         let target = LifecycleIngressIoTargetSeal {
             context: self.context,
             ingress_identity: *self.selected_identity(),
             kind,
             certified_serve_request,
             certified_fetch_work_id,
+            recovered_decision_fetch_key,
             _linearity: LifecycleIngressIoTargetSealLinearity,
         };
         self.io_target = PreparedLifecycleIngressIoTarget::Unsupported;
@@ -914,15 +1216,28 @@ impl PreparedLifecycleIngressSelector {
                 if target.certified_fetch_work_id.is_some() {
                     return Err(target);
                 }
+                if target.recovered_decision_fetch_key.is_some() {
+                    return Err(target);
+                }
                 PreparedLifecycleIngressIoTarget::CertifiedServe { request }
             }
             LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence => {
                 if target.certified_serve_request.is_some()
                     || target.certified_fetch_work_id.is_none()
+                    || target.recovered_decision_fetch_key.is_some()
                 {
                     return Err(target);
                 }
                 PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
+            }
+            LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence => {
+                if target.certified_serve_request.is_some()
+                    || target.certified_fetch_work_id.is_some()
+                    || target.recovered_decision_fetch_key.is_none()
+                {
+                    return Err(target);
+                }
+                PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence
             }
         };
         Ok(())
@@ -980,9 +1295,9 @@ impl PreparedLifecycleIngressSelector {
 
     /// Derive a sealed wake authority only when the queue-selected occurrence
     /// is the unique authenticated winner of its exact response family.
-    fn selected_certified_fetch_ready_authority(
+    fn selected_claimed_response_family(
         &self,
-    ) -> Result<CertifiedFetchReadyAuthority, CertifiedFetchReadyPublicationError> {
+    ) -> Result<&PreparedClaimedResponseFamily, CertifiedFetchReadyPublicationError> {
         let selected_identity = self.selected_identity();
         let selected_ordinal = selected_identity.physical_admission_ordinal();
         if selected_ordinal == 0
@@ -1012,8 +1327,19 @@ impl PreparedLifecycleIngressSelector {
         {
             return Err(CertifiedFetchReadyPublicationError::InvalidSelectedOccurrence);
         }
+        Ok(prepared)
+    }
 
-        let candidate = prepared.candidate.as_ref();
+    fn selected_certified_fetch_ready_authority(
+        &self,
+    ) -> Result<CertifiedFetchReadyAuthority, CertifiedFetchReadyPublicationError> {
+        let selected_identity = self.selected_identity();
+        let prepared = self.selected_claimed_response_family()?;
+        let request_hash = prepared.request_hash();
+        let candidate = prepared
+            .candidate
+            .ordinary()
+            .ok_or(CertifiedFetchReadyPublicationError::InvalidCandidateBinding)?;
         let binding = candidate.pending_effect_binding();
         let statement = binding
             .candidate_statement()
@@ -1027,7 +1353,7 @@ impl PreparedLifecycleIngressSelector {
             || statement.subject() != Some(candidate.subject())
             || statement.phase().is_none()
             || statement.execution_commitment().is_none()
-            || candidate.request_hash() != *request_hash
+            || candidate.request_hash() != request_hash
         {
             return Err(CertifiedFetchReadyPublicationError::InvalidCandidateBinding);
         }
@@ -1049,7 +1375,7 @@ impl PreparedLifecycleIngressSelector {
         }
         Ok(CertifiedFetchReadyAuthority {
             ingress_identity: *selected_identity,
-            request_hash: *request_hash,
+            request_hash,
             key,
             causal_root: pending_effect_causal_root(binding),
         })
@@ -1076,7 +1402,11 @@ impl PreparedLifecycleIngressSelector {
             .authenticated_response()
             .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?;
         if family.ingress_identity != id.ingress_identity
-            || family.candidate.work_id() != id.work_id
+            || family
+                .candidate
+                .ordinary()
+                .map(CertifiedResponsePriorityCandidate::work_id)
+                != Some(id.work_id)
             || response != authenticated.response()
             || !family
                 .candidate
@@ -1085,6 +1415,89 @@ impl PreparedLifecycleIngressSelector {
             return Err(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity);
         }
         Ok(family)
+    }
+
+    fn recovered_persisted_family(
+        &self,
+        completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
+    ) -> Result<&PreparedClaimedResponseFamily, RecoveredDecisionFetchExactDequeueErrorV1> {
+        let id = completion.id;
+        if *self.selected_identity() != id.ingress_identity
+            || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
+        {
+            return Err(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity);
+        }
+        let family = self
+            .claimed_response_families
+            .values()
+            .find(|family| family.ingress_identity == id.ingress_identity)
+            .ok_or(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity)?;
+        let Some(candidate) = family.candidate.recovered() else {
+            return Err(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity);
+        };
+        let Some((response, responder)) = family.authenticated_response() else {
+            return Err(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity);
+        };
+        if candidate.dispatch_key() != id.dispatch_key
+            || response != completion.authenticated.response()
+            || HashOf::new(response) != completion.response_hash()
+            || !family
+                .candidate
+                .matches_authenticated_response(response, responder)
+        {
+            return Err(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity);
+        }
+        Ok(family)
+    }
+
+    /// Re-probe and pre-lock one recovered response occurrence before LedgerV1 fsync.
+    pub(in crate::sumeragi) fn into_locked_recovered_decision_fetch_dequeue<'a>(
+        self,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        ingress: &'a FairV2Ingress,
+        completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchExactDequeueV1<'a>,
+        RecoveredDecisionFetchExactDequeueErrorV1,
+    > {
+        let revalidated = {
+            let family = self.recovered_persisted_family(completion)?;
+            let (response, responder) = family
+                .authenticated_response()
+                .ok_or(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity)?;
+            executor
+                .revalidate_recovered_decision_fetch_response_candidate(
+                    family
+                        .candidate
+                        .recovered()
+                        .ok_or(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity)?,
+                    response,
+                    responder,
+                )
+                .map_err(RecoveredDecisionFetchExactDequeueErrorV1::Executor)?
+        };
+        if !revalidated {
+            return Err(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity);
+        }
+        let Self {
+            context,
+            request_fence_active: _,
+            queue_witness,
+            io_target: _,
+            verdicts: _,
+            priority_owners: _,
+            claimed_response_families,
+            selector_debt: _,
+        } = self;
+        drop(claimed_response_families);
+        let locked = queue_witness
+            .lock_exact_dequeue_retaining(
+                ingress,
+                context,
+                completion.id.ingress_identity.physical_admission_ordinal(),
+            )
+            .map_err(|(error, _witness)| RecoveredDecisionFetchExactDequeueErrorV1::Queue(error))?;
+        Ok(PreparedRecoveredDecisionFetchExactDequeueV1 { locked })
     }
 
     fn into_exact_certified_fetch_dequeue(
@@ -1100,7 +1513,10 @@ impl PreparedLifecycleIngressSelector {
                 .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?;
             executor
                 .revalidate_certified_response_priority_candidate(
-                    family.candidate.as_ref(),
+                    family
+                        .candidate
+                        .ordinary()
+                        .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?,
                     response,
                     responder,
                 )
@@ -1158,7 +1574,11 @@ impl PreparedLifecycleIngressSelector {
             response_hash: prepared.candidate.response_hash(),
             authenticated_responder,
             authenticated_response,
-            candidate_pending: prepared.candidate.pending_effect_binding(),
+            candidate_pending: prepared
+                .candidate
+                .ordinary()
+                .ok_or(CertifiedFetchReadyPublicationError::InvalidCandidateBinding)?
+                .pending_effect_binding(),
         })
     }
 
@@ -1436,8 +1856,15 @@ impl LifecycleCoordinator {
                 retry!(error, receipt);
             }
         };
+        let Some(candidate) = family.candidate.ordinary() else {
+            let receipt = durable_registry.abort_before_dequeue();
+            retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity,
+                receipt
+            );
+        };
         let executor_prepared = match executor
-            .prepare_lifecycle_certified_fetch_completion(family.candidate.as_ref(), &authenticated)
+            .prepare_lifecycle_certified_fetch_completion(candidate, &authenticated)
         {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -1896,6 +2323,110 @@ impl LifecycleCoordinator {
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
+    /// Consume one exact recovered response family into its dedicated body-store command.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_body_persistence(
+        &self,
+        mut prepared: PreparedLifecycleIngressSelector,
+    ) -> Result<
+        RecoveredDecisionFetchBodyPersistenceTaskV1,
+        RecoveredDecisionFetchBodyPersistencePreparationErrorV1,
+    > {
+        let selected_identity = *prepared.selected_identity();
+        let (request_hash, revalidated) = {
+            let family = match prepared.selected_claimed_response_family() {
+                Ok(family) => family,
+                Err(failure) => {
+                    return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
+                        _failure:
+                            RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
+                                failure,
+                            ),
+                        prepared,
+                    });
+                }
+            };
+            let Some(candidate) = family.candidate.recovered() else {
+                return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
+                    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
+                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
+                    ),
+                    prepared,
+                });
+            };
+            let Some((response, responder)) = family.authenticated_response() else {
+                return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
+                    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
+                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
+                    ),
+                    prepared,
+                });
+            };
+            (
+                family.request_hash(),
+                self.revalidate_recovered_decision_fetch_response_candidate(
+                    candidate, response, responder,
+                ),
+            )
+        };
+        match revalidated {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
+                    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Selector(
+                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
+                    ),
+                    prepared,
+                });
+            }
+            Err(failure) => {
+                return Err(RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
+                    _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1::Executor(
+                        failure,
+                    ),
+                    prepared,
+                });
+            }
+        }
+
+        let family = prepared
+            .claimed_response_families
+            .remove(&request_hash)
+            .expect("revalidated recovered response family remains present");
+        let PreparedClaimedResponseFamily {
+            ingress_identity,
+            inbound,
+            candidate,
+        } = family;
+        let PreparedCertifiedResponseCandidate::Recovered(candidate) = candidate else {
+            unreachable!("revalidated recovered candidate preserves its family");
+        };
+        assert_eq!(ingress_identity, selected_identity);
+        let dispatch_key = candidate.dispatch_key();
+        let claim_preflight = candidate.claim_preflight();
+        let authenticated = candidate.into_authenticated_response();
+        drop(inbound);
+        let PreparedLifecycleIngressSelector {
+            context: _,
+            request_fence_active: _,
+            queue_witness,
+            io_target: _,
+            verdicts: _,
+            priority_owners: _,
+            claimed_response_families,
+            selector_debt: _,
+        } = prepared;
+        drop(queue_witness);
+        drop(claimed_response_families);
+        Ok(RecoveredDecisionFetchBodyPersistenceTaskV1 {
+            id: RecoveredDecisionFetchBodyPersistenceIdV1 {
+                ingress_identity,
+                dispatch_key,
+            },
+            claim_preflight,
+            authenticated,
+        })
+    }
+
     /// Consume one exact selected family into a bounded body-store command.
     ///
     /// The final equality re-probe runs while the immutable family carrier and
@@ -1935,11 +2466,15 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     prepared,
                 });
             };
-            self.revalidate_certified_response_priority_candidate(
-                family.candidate.as_ref(),
-                response,
-                responder,
-            )
+            let Some(candidate) = family.candidate.ordinary() else {
+                return Err(CertifiedFetchBodyPersistencePreparationError {
+                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
+                    ),
+                    prepared,
+                });
+            };
+            self.revalidate_certified_response_priority_candidate(candidate, response, responder)
         };
         match revalidated {
             Ok(true) => {}
@@ -1969,6 +2504,14 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             inbound,
             candidate,
         } = family;
+        let PreparedCertifiedResponseCandidate::Ordinary(candidate) = candidate else {
+            return Err(CertifiedFetchBodyPersistencePreparationError {
+                failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                    CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
+                ),
+                prepared,
+            });
+        };
         let work_id = candidate.work_id();
         let authenticated = candidate.into_authenticated_response();
         drop(inbound);
@@ -2138,7 +2681,41 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                                             PreparedClaimedResponseFamily {
                                                 ingress_identity,
                                                 inbound: occurrence.clone_inbound(),
-                                                candidate,
+                                                candidate:
+                                                    PreparedCertifiedResponseCandidate::Ordinary(
+                                                        candidate,
+                                                    ),
+                                            },
+                                        )
+                                        .is_some()
+                                {
+                                    return Err(
+                                        LifecycleIngressSelectorError::InvalidOccurrenceIdentity {
+                                            ordinal,
+                                        },
+                                    );
+                                }
+                            }
+                            Ok(CertifiedResponsePriorityProbe::RecoveredPreflightRequired(
+                                candidate,
+                            )) => {
+                                if request_fenced_completion {
+                                    verdict = verdict.with_authority(
+                                        LifecycleIngressPriorityAuthority::RequestFencedCompletion,
+                                    );
+                                }
+                                let ingress_identity = occurrence_identities[&ordinal];
+                                if !candidate.matches_authenticated_response(response, responder)
+                                    || response_candidates
+                                        .insert(
+                                            ordinal,
+                                            PreparedClaimedResponseFamily {
+                                                ingress_identity,
+                                                inbound: occurrence.clone_inbound(),
+                                                candidate:
+                                                    PreparedCertifiedResponseCandidate::Recovered(
+                                                        candidate,
+                                                    ),
                                             },
                                         )
                                         .is_some()
@@ -2207,21 +2784,46 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     ordinal: prepared.ingress_identity.physical_admission_ordinal(),
                 },
             )?;
-            if !self
-                .revalidate_certified_response_priority_candidate(
-                    &prepared.candidate,
-                    response,
-                    authenticated_responder,
-                )
-                .map_err(|error| LifecycleIngressSelectorError::ExecutorAuthority {
-                    ordinal: Some(prepared.ingress_identity.physical_admission_ordinal()),
-                    error: Box::new(error),
-                })?
-            {
+            let revalidated = match &prepared.candidate {
+                PreparedCertifiedResponseCandidate::Ordinary(candidate) => self
+                    .revalidate_certified_response_priority_candidate(
+                        candidate,
+                        response,
+                        authenticated_responder,
+                    ),
+                PreparedCertifiedResponseCandidate::Recovered(candidate) => self
+                    .revalidate_recovered_decision_fetch_response_candidate(
+                        candidate,
+                        response,
+                        authenticated_responder,
+                    ),
+            }
+            .map_err(|error| LifecycleIngressSelectorError::ExecutorAuthority {
+                ordinal: Some(prepared.ingress_identity.physical_admission_ordinal()),
+                error: Box::new(error),
+            })?;
+            if !revalidated {
                 return Err(LifecycleIngressSelectorError::CandidateRevalidationDrift {
                     ordinal: prepared.ingress_identity.physical_admission_ordinal(),
                 });
             }
+        }
+
+        if matches!(
+            io_target,
+            PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
+        ) && let Some(selected_family) = claimed_response_families
+            .values()
+            .find(|family| family.ingress_identity.physical_admission_ordinal() == selected_ordinal)
+        {
+            io_target = match &selected_family.candidate {
+                PreparedCertifiedResponseCandidate::Ordinary(_) => {
+                    PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
+                }
+                PreparedCertifiedResponseCandidate::Recovered(_) => {
+                    PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence
+                }
+            };
         }
 
         let (priority_owners, selector_debt) =

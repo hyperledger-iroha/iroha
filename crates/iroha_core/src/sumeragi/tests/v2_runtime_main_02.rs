@@ -1,4 +1,504 @@
 #[test]
+fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
+    let directory = TempDir::new().expect("temporary real-adapter ordering directory");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(0),
+    );
+    let start = Instant::now();
+    runtime
+        .arm_live_clocks(start)
+        .expect("arm runtime after adapter startup");
+
+    // Service one complete periodic episode before the signer becomes
+    // busy. A later tick must mint a new lifecycle ordinal rather than
+    // resurrecting this drained episode at its old position.
+    let before_timeout = start + runtime.retransmit_interval();
+    assert!(matches!(
+        runtime
+            .step_and_take_scheduler_ownership_for_test(before_timeout)
+            .expect("service pre-fence retransmission"),
+        RuntimeStep::Advanced(_)
+    ));
+
+    let proposal = signed_runtime_proposal(&context, &keys, 0xE1);
+    runtime
+        .enqueue_network(proposal)
+        .expect("enqueue authenticated proposal");
+    let proposal_effects = match runtime
+        .step_and_take_scheduler_ownership_for_test(before_timeout)
+        .expect("dispatch authenticated proposal")
+    {
+        RuntimeStep::Advanced(effects) => effects,
+        RuntimeStep::Idle => panic!("proposal dispatch unexpectedly idle"),
+    };
+    let (tag, manifest) = match proposal_effects.as_slice() {
+        [
+            AdapterEffect::FetchBody {
+                tag,
+                manifest: Some(manifest),
+                ..
+            },
+        ] => (*tag, manifest.clone()),
+        effects => panic!("unexpected proposal effects: {effects:?}"),
+    };
+
+    runtime
+        .enqueue_body_available(tag, manifest.clone())
+        .expect("enqueue reconstructed body");
+    assert!(matches!(
+        runtime
+            .step_and_take_scheduler_ownership_for_test(before_timeout)
+            .expect("dispatch reconstructed body"),
+        RuntimeStep::Advanced(ref effects)
+            if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
+    ));
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    runtime
+        .enqueue_body_stored(tag, manifest.round, manifest.subject, durable.clone())
+        .expect("enqueue durable-body completion");
+    assert!(matches!(
+        runtime
+            .step_and_take_scheduler_ownership_for_test(before_timeout)
+            .expect("dispatch durable-body completion"),
+        RuntimeStep::Advanced(ref effects)
+            if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
+    ));
+    runtime
+        .enqueue_validation_succeeded(
+            tag,
+            manifest.round,
+            manifest.subject,
+            ValidatedBodyReceipt::for_test(durable),
+        )
+        .expect("enqueue validated-body completion");
+    let validation_step = runtime
+        .step(before_timeout)
+        .expect("dispatch validated-body completion");
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("validation macro-step retains exact scheduler ownership");
+    let RuntimeStep::Advanced(validation_effects) = validation_step else {
+        panic!("validation dispatch unexpectedly idled")
+    };
+    let prepare_effect_ownership = runtime
+        .take_effect_ownership(validation_effects.len())
+        .expect("Prepare signature request retains its lifecycle owner");
+    let (prepare_sign_tag, prepare_signature_preimage) = match validation_effects.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            },
+        ] if vote.phase == wire::GlobalPhase::Prepare
+            && vote.round == manifest.round
+            && vote.subject == manifest.subject =>
+        {
+            (*tag, vote.signature_preimage())
+        }
+        effects => panic!("unexpected validation effects: {effects:?}"),
+    };
+    assert_eq!(prepare_effect_ownership.len(), 1);
+    runtime
+        .set_external_lifecycle_owners(vec![prepare_effect_ownership[0].owner().clone()])
+        .expect("publish the pending Prepare signer owner");
+
+    // The second periodic episode is still before the absolute deadline,
+    // but it is frozen only at this serialized runner entry. The pending
+    // Prepare signer already owns an older lifecycle position, so the new
+    // episode waits without entering the adapter or creating fence debt.
+    let second_retransmission = before_timeout + runtime.retransmit_interval();
+    assert!(second_retransmission < start + runtime.round_timeout());
+    assert!(matches!(
+        runtime
+            .step_and_take_scheduler_ownership_for_test(second_retransmission)
+            .expect("freeze the pre-deadline second retransmission"),
+        RuntimeStep::Idle
+    ));
+    assert!(
+        runtime
+            .driver()
+            .all_deferred_admission_ordinals()
+            .is_empty(),
+        "a younger periodic owner cannot enter the adapter ahead of the signer"
+    );
+    assert!(
+        runtime.retransmit_owner.is_some(),
+        "the fresh periodic episode remains frozen at its later lifecycle position"
+    );
+
+    let prepare_signature = Signature::new(keys[0].private_key(), &prepare_signature_preimage)
+        .payload()
+        .to_vec();
+    runtime
+        .enqueue_signature_with_owner(
+            prepare_sign_tag,
+            prepare_signature,
+            &prepare_effect_ownership[0],
+        )
+        .expect("enqueue exact Prepare signature completion");
+    runtime
+        .set_external_lifecycle_owners(Vec::new())
+        .expect("retire the pending Prepare signer owner after completion enqueue");
+    assert_eq!(runtime.queued_commands(), 1);
+
+    let prepare_broadcast = runtime
+        .step(second_retransmission)
+        .expect("owned Prepare completion precedes the younger retransmission");
+    let prepare_completion = runtime
+        .take_last_scheduler_ownership()
+        .expect("Prepare completion retains exact scheduler ownership");
+    assert_eq!(prepare_completion.selected, RuntimeSelectedOwnerKind::Fifo);
+    assert!(!prepare_completion.fence_completion_bypass);
+    assert!(
+        prepare_completion
+            .fence_predecessor_lifecycle_ordinal
+            .is_none()
+    );
+    assert!(prepare_completion.validate_exact().is_ok());
+    let RuntimeStep::Advanced(prepare_broadcasts) = prepare_broadcast else {
+        panic!("Prepare completion unexpectedly idled")
+    };
+    assert!(matches!(
+        prepare_broadcasts.as_slice(),
+        [AdapterEffect::Broadcast(message)]
+            if matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::Vote(vote)
+                    if vote.phase == wire::GlobalPhase::Prepare
+                        && vote.round == manifest.round
+                        && vote.subject == manifest.subject
+            )
+    ));
+    runtime
+        .take_effect_ownership(prepare_broadcasts.len())
+        .expect("test executor consumes Prepare broadcast ownership");
+    assert!(
+        runtime.retransmit_owner.is_some(),
+        "the younger periodic episode remains frozen until its own turn"
+    );
+    assert_eq!(runtime.queued_commands(), 0);
+
+    // Once the older completion drains, the retained fresh episode runs
+    // and rebroadcasts the newly published Prepare vote.
+    let retransmit_retry = runtime
+        .step_and_take_scheduler_ownership_for_test(second_retransmission)
+        .expect("service younger pre-deadline retransmission episode");
+    assert!(matches!(
+        retransmit_retry,
+        RuntimeStep::Advanced(ref effects)
+            if effects.iter().any(|effect| matches!(
+                effect,
+                AdapterEffect::Broadcast(message)
+                    if matches!(
+                        &message.payload,
+                        wire::ConsensusMessageV2Payload::Vote(vote)
+                            if vote.phase == wire::GlobalPhase::Prepare
+                                && vote.round == manifest.round
+                    )
+            ))
+    ));
+    assert_eq!(
+        prepare_completion.validate_exact(),
+        Ok(()),
+        "immutable completion evidence remains valid after the younger owner runs"
+    );
+    assert!(
+        runtime
+            .driver()
+            .all_deferred_admission_ordinals()
+            .is_empty()
+    );
+    assert!(runtime.deferred_lifecycle_ownership.is_empty());
+    assert!(runtime.retransmit_owner.is_none());
+
+    // Absolute timeout remains one-shot after the pre-deadline episode
+    // drains. Its signing lifecycle likewise predates the next periodic
+    // episode.
+    let deadline = start + runtime.round_timeout();
+    let timeout_macro_step = runtime
+        .step(deadline)
+        .expect("deliver the absolute timeout through the real adapter");
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("timeout macro-step retains exact scheduler ownership");
+    let RuntimeStep::Advanced(timeout_effects) = timeout_macro_step else {
+        panic!("absolute timeout unexpectedly idled")
+    };
+    let timeout_effect_ownership = runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("timeout signature request retains its lifecycle owner");
+    let (timeout_sign_tag, timeout_signature_preimage) = match timeout_effects.as_slice() {
+        [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::TimeoutVote(vote),
+            },
+        ] if vote.round == manifest.round => (*tag, vote.signature_preimage()),
+        effects => panic!("unexpected timeout effects: {effects:?}"),
+    };
+    assert_eq!(timeout_effect_ownership.len(), 1);
+    runtime
+        .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
+        .expect("publish the pending TimeoutVote signer owner");
+
+    // A fresh retransmission episode becomes due while TimeoutVote signing
+    // is active. Its new ordinal follows the signer, so it remains at the
+    // runtime boundary instead of entering the adapter as Busy debt.
+    let post_timeout_retransmission = deadline + runtime.retransmit_interval();
+    assert!(matches!(
+        runtime
+            .step_and_take_scheduler_ownership_for_test(post_timeout_retransmission)
+            .expect("freeze post-timeout retransmission behind signing"),
+        RuntimeStep::Idle
+    ));
+    assert!(
+        runtime.retransmit_owner.is_some(),
+        "post-timeout retransmission retains its fresh runtime owner while blocked"
+    );
+    assert!(
+        runtime
+            .driver()
+            .all_deferred_admission_ordinals()
+            .is_empty()
+    );
+
+    let timeout_signature = Signature::new(keys[0].private_key(), &timeout_signature_preimage)
+        .payload()
+        .to_vec();
+    runtime
+        .enqueue_signature_with_owner(
+            timeout_sign_tag,
+            timeout_signature,
+            &timeout_effect_ownership[0],
+        )
+        .expect("enqueue exact TimeoutVote signature completion");
+    runtime
+        .set_external_lifecycle_owners(Vec::new())
+        .expect("retire the pending TimeoutVote signer owner after completion enqueue");
+    let first_timeout_vote = runtime
+        .step(post_timeout_retransmission)
+        .expect("owned TimeoutVote completion precedes the younger retransmission");
+    let timeout_completion = runtime
+        .take_last_scheduler_ownership()
+        .expect("TimeoutVote completion retains exact scheduler ownership");
+    assert_eq!(timeout_completion.selected, RuntimeSelectedOwnerKind::Fifo);
+    assert!(!timeout_completion.fence_completion_bypass);
+    assert!(
+        timeout_completion
+            .fence_predecessor_lifecycle_ordinal
+            .is_none()
+    );
+    assert!(timeout_completion.validate_exact().is_ok());
+    let RuntimeStep::Advanced(first_timeout_vote_effects) = first_timeout_vote else {
+        panic!("TimeoutVote completion unexpectedly idled")
+    };
+    assert!(first_timeout_vote_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(message)
+            if matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::TimeoutVote(vote)
+                    if vote.round == manifest.round
+            )
+    )));
+    runtime
+        .take_effect_ownership(first_timeout_vote_effects.len())
+        .expect("test executor consumes first TimeoutVote ownership");
+    assert!(
+        runtime.retransmit_owner.is_some(),
+        "the younger post-timeout episode remains frozen until its own turn"
+    );
+
+    // Treat the first TimeoutVote broadcast as lost. The retained younger
+    // periodic episode now owns the next serialized turn and rebroadcasts
+    // the published vote.
+    let timeout_vote_retry = runtime
+        .step_and_take_scheduler_ownership_for_test(post_timeout_retransmission)
+        .expect("rebroadcast a lost first TimeoutVote");
+    assert!(matches!(
+        timeout_vote_retry,
+        RuntimeStep::Advanced(ref effects)
+            if effects.iter().any(|effect| matches!(
+                effect,
+                AdapterEffect::Broadcast(message)
+                    if matches!(
+                        &message.payload,
+                        wire::ConsensusMessageV2Payload::TimeoutVote(vote)
+                            if vote.round == manifest.round
+                    )
+            ))
+    ));
+    assert_eq!(runtime.queued_commands(), 0);
+    assert!(
+        runtime
+            .driver()
+            .all_deferred_admission_ordinals()
+            .is_empty()
+    );
+    assert!(runtime.deferred_lifecycle_ownership.is_empty());
+    assert!(runtime.retransmit_owner.is_none());
+
+    // A later periodic tick remains armed after the one-shot timeout and
+    // continues broadcasting the published TimeoutVote.
+    let later_post_timeout_tick = post_timeout_retransmission + runtime.retransmit_interval();
+    let later_retry = runtime
+        .step(later_post_timeout_tick)
+        .expect("service a later post-timeout periodic tick");
+    let later_retry_owner = runtime
+        .take_last_scheduler_ownership()
+        .expect("later periodic tick retains scheduler ownership");
+    assert_eq!(
+        later_retry_owner.selected,
+        RuntimeSelectedOwnerKind::PeriodicTimer
+    );
+    assert!(later_retry_owner.validate_exact().is_ok());
+    let RuntimeStep::Advanced(later_retry_effects) = later_retry else {
+        panic!("later post-timeout periodic tick unexpectedly idled")
+    };
+    assert!(later_retry_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::Broadcast(message)
+            if matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::TimeoutVote(vote)
+                    if vote.round == manifest.round
+            )
+    )));
+    runtime
+        .take_effect_ownership(later_retry_effects.len())
+        .expect("test executor consumes later TimeoutVote retry ownership");
+    assert_eq!(runtime.queued_commands(), 0);
+    assert!(
+        runtime
+            .driver()
+            .all_deferred_admission_ordinals()
+            .is_empty()
+    );
+    assert!(runtime.deferred_lifecycle_ownership.is_empty());
+}
+
+#[test]
+fn round_timeout_grows_linearly_by_view_without_wrapping() {
+    let base = Duration::from_secs(10);
+    assert_eq!(round_timeout_for_view(base, 0), base);
+    assert_eq!(round_timeout_for_view(base, 1), Duration::from_secs(20));
+    assert_eq!(round_timeout_for_view(base, 7), Duration::from_secs(80));
+    assert_eq!(
+        round_timeout_for_view(Duration::new(1, 500_000_000), 1),
+        Duration::from_secs(3),
+    );
+
+    assert_eq!(
+        round_timeout_for_view(Duration::from_secs(1), u64::MAX - 1),
+        Duration::from_secs(u64::MAX)
+    );
+    assert_eq!(
+        round_timeout_for_view(Duration::from_secs(1), u64::MAX),
+        Duration::MAX
+    );
+    assert_eq!(round_timeout_for_view(Duration::MAX, 1), Duration::MAX);
+}
+
+#[test]
+fn recovered_nonzero_view_uses_scaled_timeout_from_live_arm() {
+    let constructed_at = Instant::now();
+    let armed_at = constructed_at + Duration::from_secs(500);
+    let recovered = tag(4);
+    let (mut runtime, _) = SerializedV2Runtime::with_driver(
+        FakeDriver::new(recovered),
+        constructed_at,
+        Duration::from_secs(10),
+        RuntimeQueueConfig::new(8, 2, 2),
+        Vec::new(),
+    )
+    .expect("open recovered runtime");
+
+    runtime
+        .arm_live_clocks(armed_at)
+        .expect("arm after recovered startup");
+    assert_eq!(runtime.round_timeout(), Duration::from_secs(50));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(49));
+    assert!(runtime.driver.timeouts.is_empty());
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(50));
+    assert_eq!(runtime.driver.timeouts, vec![recovered]);
+}
+
+#[test]
+fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
+    let start = Instant::now();
+    let initial = tag(0);
+    let mut runtime = runtime(
+        FakeDriver::new(initial),
+        start,
+        RuntimeQueueConfig::new(5, 2, 1),
+    );
+    assert_eq!(runtime.remaining_completion_capacity(), 4);
+
+    enqueue_fake(
+        &mut runtime,
+        initial,
+        CommandClass::Normal,
+        FakeCommand::record(1),
+    )
+    .unwrap();
+    assert_eq!(runtime.remaining_completion_capacity(), 3);
+    assert_eq!(
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Normal,
+            FakeCommand::record(99)
+        ),
+        Err(EnqueueError::ReservedCapacity)
+    );
+    for value in [2, 3] {
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Progress,
+            FakeCommand::record(value),
+        )
+        .expect("each configured progress slot remains reserved");
+    }
+    assert_eq!(runtime.remaining_completion_capacity(), 1);
+    enqueue_fake(
+        &mut runtime,
+        initial,
+        CommandClass::Completion,
+        FakeCommand::record(4),
+    )
+    .expect("reserved completion slot");
+    assert_eq!(runtime.remaining_completion_capacity(), 0);
+    assert_eq!(runtime.queued_commands(), 4);
+    assert_eq!(
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Completion,
+            FakeCommand::record(5)
+        ),
+        Err(EnqueueError::Full)
+    );
+
+    for offset in 0..4 {
+        let _ = runtime
+            .step_and_take_scheduler_ownership_for_test(start + Duration::from_millis(offset));
+    }
+    assert_eq!(
+        runtime.driver.delivered,
+        vec![(initial, 1), (initial, 2), (initial, 3), (initial, 4)],
+        "class reserves protect admission capacity but cannot overtake an older lifecycle"
+    );
+}
+
+#[test]
 fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     let start = Instant::now();
     let owner_tag = tag(0);
@@ -1211,6 +1711,29 @@ fn checked_admission_reservation_rejection_preserves_and_reuses_the_owner() {
 }
 
 #[test]
+fn restored_high_watermark_exhaustion_fails_without_erasing_the_source() {
+    let source = RuntimeLifecycleOrdinalSource::after_high_watermark(u128::MAX - 1);
+
+    assert!(source.advance_past(u128::MAX).is_err());
+    assert_eq!(
+        source
+            .next_ordinal_for_test()
+            .expect("inspect source after rejected restored high-watermark"),
+        Some(u128::MAX),
+        "a rejected restored high-watermark must not turn exhaustion into an empty source"
+    );
+
+    let already_exhausted = RuntimeLifecycleOrdinalSource::after_high_watermark(u128::MAX);
+    assert!(already_exhausted.advance_past(0).is_err());
+    assert_eq!(
+        already_exhausted
+            .next_ordinal_for_test()
+            .expect("inspect an already exhausted restored source"),
+        None
+    );
+}
+
+#[test]
 fn checked_ingress_rejection_preserves_dormant_owner_until_exact_retry() {
     let owner_tag = tag(0);
     let lifecycle_key = Hash::new(b"checked rejection dormant owner");
@@ -1340,5 +1863,112 @@ fn admission_ordinal_exhaustion_fails_runtime_closed() {
             .expect("inspect source after exhausted FIFO admission"),
         source_before_rejection,
         "failed FIFO admission cannot advance either ordinal representation"
+    );
+}
+
+#[test]
+fn causal_lifecycle_key_ignores_only_process_generation() {
+    let first_tag = EventTag::new(9, 4, Generation::new(1));
+    let replay_tag = EventTag::new(9, 4, Generation::new(7));
+    let different_view = EventTag::new(9, 5, Generation::new(7));
+    let command = FakeCommand::record(0xA5);
+
+    let first =
+        RuntimeCandidateCausalOrigin::mint(first_tag, CommandClass::Progress, &command, None);
+    let replay =
+        RuntimeCandidateCausalOrigin::mint(replay_tag, CommandClass::Progress, &command, None);
+    let other_view =
+        RuntimeCandidateCausalOrigin::mint(different_view, CommandClass::Progress, &command, None);
+
+    assert!(first.same_lifecycle(&replay));
+    assert_eq!(first.lifecycle_key, replay.lifecycle_key);
+    assert_ne!(
+        first.projection_hash, replay.projection_hash,
+        "the full diagnostic carrier still records process generation"
+    );
+    assert!(!first.same_lifecycle(&other_view));
+    assert_ne!(first.lifecycle_key, other_view.lifecycle_key);
+}
+
+#[test]
+fn aggregate_certificate_causal_roots_ignore_signer_carrier_replacement() {
+    let (context, keys) = authenticated_runtime_context();
+    let owner_tag = tag(0);
+    let source_a = PeerId::new(keys[0].public_key().clone());
+    let source_b = PeerId::new(keys[1].public_key().clone());
+    let tagged_origin = |message: wire::ConsensusMessageV2, source: PeerId| {
+        let ownership = RuntimeIngressOwnershipEvidence::from_fair_ingress(
+            &message,
+            fair_runtime_ownership(&message, source.clone(), source),
+        )
+        .expect("fair ingress yields exact runtime ownership");
+        let authenticated = AuthenticatedConsensusMessage::for_test(message);
+        assert_eq!(
+            authenticated.exact_runtime_command_identity(),
+            AdapterCommand::Authenticated(authenticated.clone()).exact_runtime_command_identity(),
+            "the authenticated token and adapter wrapper share one exact identity"
+        );
+        TaggedCommand::with_ingress_ownership(
+            owner_tag,
+            CommandClass::Progress,
+            authenticated,
+            Instant::now(),
+            ownership,
+        )
+        .causal_origin
+    };
+
+    let qc_a = signed_runtime_quorum_certificate(&context, &keys, 0xD1);
+    let mut qc_b = qc_a.clone();
+    qc_b.signers.rotate_left(1);
+    qc_b.aggregate_signature = vec![0xB2; qc_b.aggregate_signature.len()];
+    let qc_origin_a = tagged_origin(
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(qc_a)),
+        source_a.clone(),
+    );
+    let qc_origin_b = tagged_origin(
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(qc_b)),
+        source_b.clone(),
+    );
+    assert!(qc_origin_a.same_lifecycle(&qc_origin_b));
+
+    let tc_a = signed_runtime_timeout_certificate(&context, &keys);
+    let mut tc_b = tc_a.clone();
+    tc_b.groups[0].signers.rotate_left(1);
+    tc_b.groups[0].aggregate_signature = vec![0xC3; tc_b.groups[0].aggregate_signature.len()];
+    let tc_message_a = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(tc_a.clone()),
+    );
+    let tc_message_b =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(tc_b));
+    let exact_tc_a = AdapterCommand::Authenticated(AuthenticatedConsensusMessage::for_test(
+        tc_message_a.clone(),
+    ))
+    .exact_runtime_command_identity()
+    .digest();
+    let exact_tc_b = AdapterCommand::Authenticated(AuthenticatedConsensusMessage::for_test(
+        tc_message_b.clone(),
+    ))
+    .exact_runtime_command_identity()
+    .digest();
+    assert_ne!(
+        exact_tc_a, exact_tc_b,
+        "deep command identity still distinguishes replaceable certificate carriers"
+    );
+    let tc_origin_a = tagged_origin(tc_message_a, source_a);
+    let tc_origin_b = tagged_origin(tc_message_b, source_b.clone());
+    assert!(tc_origin_a.same_lifecycle(&tc_origin_b));
+
+    let mut other_round = tc_a;
+    other_round.round.view = other_round.round.view.saturating_add(1);
+    let other_round_origin = tagged_origin(
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+            other_round,
+        )),
+        source_b,
+    );
+    assert!(
+        !tc_origin_a.same_lifecycle(&other_round_origin),
+        "transition-relevant certified round cannot collide with carrier normalization"
     );
 }

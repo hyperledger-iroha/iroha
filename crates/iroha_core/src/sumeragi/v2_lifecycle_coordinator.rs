@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "v2_lifecycle_authority.rs"]
 mod authority;
-/// Inert coordinator cuts for adjacent direct body-pipeline transitions.
+/// Sealed coordinator cuts for adjacent direct body-pipeline transitions.
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod body_pipeline_transition;
@@ -73,6 +73,12 @@ pub(in crate::sumeragi) use launch::{
     LaunchedProductionLifecycleV1, ProductionLifecycleLaunchErrorV1,
     ProductionLifecycleLaunchInputsV1, ProductionRecoveredDecisionApplyCompletionErrorV1,
     ProductionRecoveredDecisionApplyCompletionV1, ProductionRecoveredDecisionApplyRetryV1,
+    ProductionRecoveredDecisionFetchStoreSettlementFailureV1,
+    ProductionRecoveredDecisionFetchStoreSettlementV1,
+    ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1,
+    ProductionRecoveredLifecycleSignBroadcastPreparationV1,
+    ProductionRecoveredLifecycleSignBroadcastSettlementV1,
+    ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1,
     ProductionV2CompletionObserverActivationPermitV1, RetainedRecoveredDecisionApplyDeferredV1,
 };
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
@@ -89,6 +95,16 @@ pub(in crate::sumeragi) use ledger::{
 pub(crate) fn run_complete_tip_retirement_release_regressions() {
     ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work();
     ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner();
+}
+#[cfg(all(test, feature = "bls"))]
+/// Build one exact retired CompleteTip/H+1 pair for runner restart tests.
+pub(crate) fn complete_tip_restart_activation_fixture() -> (
+    std::sync::Arc<crate::kura::Kura>,
+    std::path::PathBuf,
+    iroha_data_model::block::consensus_v2::HeightContext,
+    RetiredRecoveredCompleteTipActivationAuthorityV1,
+) {
+    ledger::tests::durable_ready_fetch_recovery::complete_tip_restart_activation_fixture()
 }
 #[cfg(test)]
 pub(in crate::sumeragi) use ledger::LifecycleLedgerStoreV1;
@@ -116,6 +132,7 @@ pub(in crate::sumeragi) use replay_authority::{
     InvalidBodyReportReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
     LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     LocalValidateReplayEvidenceV1, RecoveredDecisionApplyReplayLineageV1,
+    RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
     RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
     RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
 };
@@ -131,6 +148,12 @@ pub(crate) use scheduler_inputs::{
 };
 pub(in crate::sumeragi) use scheduler_inputs::{
     ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
+    ProductionRecoveredDecisionFetchDispatchErrorV1, ProductionRecoveredDecisionFetchDispatchV1,
+    ProductionRecoveredDecisionFetchPersistenceErrorV1,
+    ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
+    ProductionRecoveredLifecycleSignDispatchV1,
+    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+    ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
 };
 #[cfg(test)]
 use schema::MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
@@ -163,12 +186,23 @@ pub(crate) use selector::{
 };
 pub(in crate::sumeragi) use selector::{
     CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
+    RecoveredDecisionFetchBodyPersistenceCompletionV1, RecoveredDecisionFetchBodyPersistenceIdV1,
+    RecoveredDecisionFetchBodyPersistencePreparationErrorV1,
+    RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchExactDequeueErrorV1,
 };
 pub(in crate::sumeragi) use wal_recovery::{
     AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
     AuthenticatedRecoveredWalVoteProjection, RecoveredDecisionApplyPendingLineageV1,
+    RecoveredDecisionFetchStoreAdapterAuthorityV1, RecoveredDecisionFetchStoreProjectionV1,
+};
+pub(in crate::sumeragi) use wal_recovery::{
+    RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    RecoveredLifecycleSignedBroadcastOutputAuthorityV1,
 };
 pub(in crate::sumeragi) use work_registry::RecoveredDecisionApplyRegistryProjectionPermit;
+#[cfg(test)]
+pub(in crate::sumeragi) use work_registry::RecoveredLifecycleSignClassV1;
 pub(crate) use work_registry::{
     AuthenticatedRecoveredWalValidateLifecycleRepair,
     DurableAuthenticatedRecoveredWalValidateLifecycleRepair, ExactStoreRecoveredWalPersistError,
@@ -187,9 +221,12 @@ pub(in crate::sumeragi) use work_registry::{
     PreparedLiveValidateSignRegistryWork,
 };
 pub(in crate::sumeragi) use work_registry::{
-    PreparedRecoveredDecisionApplyDispatch, ReadyValidateSignPredecessorAuthority,
+    PreparedRecoveredDecisionApplyDispatch, PreparedRecoveredDecisionFetchDispatchV1,
+    PreparedRecoveredLifecycleSignDispatch, ReadyValidateSignPredecessorAuthority,
     RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
-    RecoveredDecisionApplyDispatchKeyV1,
+    RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchDispatchIdentityV1,
+    RecoveredDecisionFetchDispatchKeyV1, RecoveredLifecycleSignDispatchIdentityV1,
+    RecoveredLifecycleSignDispatchKeyV1,
 };
 
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
@@ -1029,6 +1066,95 @@ impl LifecycleCoordinator {
         }
     }
 
+    /// Restore one volatile claim which never crossed an executor boundary.
+    ///
+    /// This narrow rollback is used only while a service reservation still
+    /// owns capacity and before registry/worker commit. It does not rewind the
+    /// monotone lease source. Durable or externally visible work must use a
+    /// typed settlement transaction instead.
+    fn rollback_unpublished_turn(&mut self, lease: &TurnLease) -> bool {
+        if self.fault.is_some() || self.active_lease.as_ref() != Some(lease) {
+            return false;
+        }
+        let Some(record) = self.records.get_mut(&lease.ordinal) else {
+            return false;
+        };
+        if record.state != LifecycleState::Claimed(lease.id)
+            || record.owner != lease.owner
+            || record.key != lease.key
+            || record.work_class != lease.work_class
+            || record.stage != lease.stage
+            || record.physical_slots != lease.physical_slots
+            || lease.output_reservation.is_some()
+            || self.ready_index.contains(&lease.ordinal)
+        {
+            return false;
+        }
+        record.state = LifecycleState::Ready;
+        let inserted = self.ready_index.insert(lease.ordinal);
+        assert!(
+            inserted,
+            "an unpublished lifecycle rollback must restore one absent Ready index"
+        );
+        self.active_lease = None;
+        true
+    }
+
+    /// Restore one unpublished claim carrying an exact output overlay.
+    ///
+    /// The overlay is not durable occupancy: `plan_turn` only projects it over
+    /// `capacity_used`. Removing it therefore leaves usage unchanged, but
+    /// advances that class's generation so an already-observed capacity wait
+    /// cannot sleep through the newly available slot.
+    fn rollback_unpublished_reserved_turn(
+        &mut self,
+        lease: &TurnLease,
+        expected_class: CapacityClass,
+    ) -> bool {
+        if self.fault.is_some() || self.active_lease.as_ref() != Some(lease) {
+            return false;
+        }
+        let Some(reservation) = lease.output_reservation() else {
+            return false;
+        };
+        if reservation.class() != expected_class
+            || reservation.wait_token().observed_generation()
+                != self.capacity_generation[&expected_class]
+            || self.capacity_used[&expected_class]
+                .checked_add(1)
+                .is_none_or(|reserved| reserved > self.capacity_geometry.limit(expected_class))
+        {
+            return false;
+        }
+        let Some(record) = self.records.get_mut(&lease.ordinal) else {
+            return false;
+        };
+        if record.state != LifecycleState::Claimed(lease.id)
+            || record.owner != lease.owner
+            || record.key != lease.key
+            || record.work_class != lease.work_class
+            || record.stage != lease.stage
+            || record.physical_slots != lease.physical_slots
+            || self.ready_index.contains(&lease.ordinal)
+        {
+            return false;
+        }
+        let Some(next_generation) = self.capacity_generation[&expected_class].checked_add(1) else {
+            self.fault = Some(CoordinatorFault::CapacityAccounting);
+            return false;
+        };
+        record.state = LifecycleState::Ready;
+        let inserted = self.ready_index.insert(lease.ordinal);
+        assert!(
+            inserted,
+            "an unpublished reserved rollback must restore one absent Ready index"
+        );
+        self.active_lease = None;
+        self.capacity_generation
+            .insert(expected_class, next_generation);
+        true
+    }
+
     /// Rebuild records after seeding the ordinal high-water mark.
     fn reconcile_restart(&mut self, snapshot: RecoverySnapshot) {
         let pristine = self.fault.is_none()
@@ -1806,7 +1932,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_registry_factory_rejects_unsupported_ready_work_without_mutation() {
+    fn direct_registry_factory_rejects_unsealed_fetch_ready_work_without_mutation() {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         let registry = LifecycleWorkRegistryHolder::empty();
         let (_, ordinal, _) = admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
@@ -1820,10 +1946,7 @@ mod tests {
 
         assert_eq!(
             coordinator.direct_registry_scheduler_inputs_for_test(&registry),
-            Err(ProductionSchedulerInputsError::UnsupportedReadyCarrier {
-                ordinal,
-                work_class: LifecycleWorkClass::Fetch,
-            })
+            Err(ProductionSchedulerInputsError::InvalidRecoveredDecisionFetchCarrier { ordinal })
         );
         assert_eq!(format!("{coordinator:?}"), before);
     }
@@ -1883,7 +2006,7 @@ mod tests {
             scheduler
                 .matches("AuthenticatedSchedulerInputsFactory::new()")
                 .count(),
-            3
+            8
         );
         assert!(schema.contains("_factory: &AuthenticatedSchedulerInputsFactory"));
         assert!(schema.contains("_factory: AuthenticatedSchedulerInputsFactory"));
@@ -2379,6 +2502,64 @@ mod tests {
             panic!("expected executable turn, found {plan:?}");
         };
         lease
+    }
+
+    #[test]
+    fn unpublished_turn_rollback_restores_ready_and_clears_the_active_lease() {
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        let (_, ordinal, _) = admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            91,
+            LifecycleWorkClass::SignTimeout,
+            LifecyclePhase::Timeout,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        ))));
+        let lease = execute(plan_turn(&mut coordinator, []));
+
+        assert_eq!(lease.ordinal(), ordinal);
+        assert!(matches!(
+            coordinator.records[&ordinal].state,
+            LifecycleState::Claimed(id) if id == lease.id()
+        ));
+        assert!(!coordinator.ready_index.contains(&ordinal));
+        assert!(coordinator.rollback_unpublished_turn(&lease));
+        assert_eq!(coordinator.records[&ordinal].state, LifecycleState::Ready);
+        assert!(coordinator.ready_index.contains(&ordinal));
+        assert!(coordinator.active_lease.is_none());
+        assert!(
+            !coordinator.rollback_unpublished_turn(&lease),
+            "one unpublished claim can roll back at most once"
+        );
+    }
+
+    #[test]
+    fn unpublished_reserved_turn_rollback_releases_overlay_and_wakes_capacity() {
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        let (_, ordinal, _) = admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            92,
+            LifecycleWorkClass::SignTimeout,
+            LifecyclePhase::Timeout,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        ))));
+        let mut lease = execute(plan_turn(&mut coordinator, []));
+        let generation = coordinator.capacity_generation[&CapacityClass::Consensus];
+        lease.output_reservation = Some(LeaseCapacityReservation::new(
+            CapacityClass::Consensus,
+            generation,
+        ));
+        coordinator.active_lease = Some(lease.clone());
+
+        assert!(coordinator.rollback_unpublished_reserved_turn(&lease, CapacityClass::Consensus));
+        assert_eq!(coordinator.records[&ordinal].state, LifecycleState::Ready);
+        assert!(coordinator.ready_index.contains(&ordinal));
+        assert!(coordinator.active_lease.is_none());
+        assert_eq!(
+            coordinator.capacity_generation[&CapacityClass::Consensus],
+            generation + 1
+        );
+        assert_eq!(coordinator.capacity_used[&CapacityClass::Consensus], 0);
+        assert!(!coordinator.rollback_unpublished_reserved_turn(&lease, CapacityClass::Consensus));
     }
 
     fn completed_serve(response_seed: u8) -> TurnOutcome {

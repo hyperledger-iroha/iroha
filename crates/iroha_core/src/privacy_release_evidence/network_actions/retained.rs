@@ -30,6 +30,7 @@ use iroha_data_model::{
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
 };
 use rand_core_06::{CryptoRng, Error as RngError06, RngCore};
+use zeroize::Zeroizing;
 
 use super::{
     PrivacyReleaseTransactionContextV1, network_seed_v1, signed_payload_v1, statement_context_v1,
@@ -1081,12 +1082,15 @@ pub fn build_privacy_release_fcmp_network_action_v1(
     // (zero T blinding). Reconstructing the wallet note here is independently
     // checked against the public tuple and opening; fixture drift therefore
     // fails closed before encryption or proof allocation.
-    let output_note = FcmpWalletNoteV1::new(
+    let spend_x = Zeroizing::new(fcmp_scalar_v1(43));
+    let output_y = Zeroizing::new([0_u8; 32]);
+    let commitment_mask = output_openings[0].commitment_mask();
+    let output_note = FcmpWalletNoteV1::new_borrowed(
         output_openings[0].output(),
-        fcmp_scalar_v1(43),
-        [0; 32],
+        &spend_x,
+        &output_y,
         output_openings[0].amount(),
-        output_openings[0].commitment_mask(),
+        &commitment_mask,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let recipient_secret = network_seed_v1(fixture_seed, b"fcmp-recipient", 0);

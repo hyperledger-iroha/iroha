@@ -1048,6 +1048,8 @@ fn sidecar_receipts_use_a_separate_bounded_control_queue() {
     assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
 }
 
+include!("v2_worker_recovered_lifecycle_output_cases.rs");
+
 #[test]
 fn actor_backpressure_cannot_change_returned_payload_identity() {
     let (service, _) = fixture();
@@ -2022,6 +2024,309 @@ fn routing_vote(service: &ProductionV2Services, view: u64, phase: wire::GlobalPh
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
+    use super::super::v2_lifecycle_coordinator::{
+        RecoveredLifecycleSignClassV1, RecoveredLifecycleSignDispatchIdentityV1,
+    };
+
+    let (mut service, keys) = fixture_with_block_payload();
+    let directory = TempDir::new().expect("temporary recovered Proposal output store");
+    let body_store = V2BodyStore::open(directory.path(), service.context.clone())
+        .expect("open exact recovered Proposal output store");
+    let body_store_identity = body_store.instance_identity();
+    let output_guard = ConsensusOutputGuard::isolated();
+    let (_, payload, mut proposal) = proposal_body_and_payload(&service.context, &keys);
+    let tag = service.active_tag;
+    let request = super::super::v2::SignRequest::Proposal(proposal.clone());
+    let dispatch_key = RecoveredLifecycleSignDispatchIdentityV1::for_test(
+        91,
+        tag,
+        &request,
+        RecoveredLifecycleSignClassV1::ControlProposal,
+    )
+    .expect("mint exact recovered Proposal dispatch identity")
+    .key();
+    let proposer = usize::try_from(proposal.proposer).expect("fixture proposer index");
+    proposal.signature =
+        Signature::new(keys[proposer].private_key(), &proposal.signature_preimage())
+            .payload()
+            .to_vec();
+    set_local_validator(&mut service, &keys, proposal.proposer);
+    let service_context = service.context.clone();
+    let service_io = install_lifecycle_planner_io_for_validator_for_test(
+        &mut service,
+        service_context.clone(),
+        proposal.proposer,
+        Arc::clone(&output_guard),
+        body_store,
+        body_store_identity.clone(),
+        1,
+    );
+    install_local_signer_for_test(&mut service, &keys[proposer]);
+    service
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install adversarial one-unit output corridor");
+
+    let authority_context = service_context;
+    let authority = |identity: V2BodyStoreInstanceIdentity, guard: Arc<ConsensusOutputGuard>| {
+        super::super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::for_test(
+            &authority_context,
+            dispatch_key,
+            tag,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+                proposal.clone(),
+            )),
+            payload.clone(),
+            identity,
+            guard,
+        )
+        .expect("fixture Proposal output authority is structurally exact")
+    };
+
+    let foreign_directory = TempDir::new().expect("temporary foreign Proposal output store");
+    let foreign_identity = V2BodyStore::open(foreign_directory.path(), service.context.clone())
+        .expect("open foreign Proposal output store")
+        .instance_identity();
+    assert!(
+        service
+            .capture_recovered_lifecycle_proposal_exact_output(authority(
+                foreign_identity,
+                Arc::clone(&output_guard),
+            ))
+            .is_err(),
+        "a same-context Proposal cannot cross a foreign body-store owner"
+    );
+    let foreign_guard = ConsensusOutputGuard::isolated();
+    assert!(
+        service
+            .capture_recovered_lifecycle_proposal_exact_output(authority(
+                body_store_identity.clone(),
+                foreign_guard,
+            ))
+            .is_err(),
+        "a same-store Proposal cannot cross a foreign output guard"
+    );
+
+    service.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 1,
+        })
+    });
+    let blocking_vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
+    assert_eq!(
+        service
+            .broadcast_consensus(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(blocking_vote),
+            ))
+            .expect("retain one exact blocking owner"),
+        ConsensusBroadcastDisposition::ExactServiceAccepted
+    );
+    let before = {
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect the exact blocking owner");
+        (
+            pending.fanouts.len(),
+            pending.source_fifo_owners.clone(),
+            pending.reservation_owner_counts.clone(),
+            pending.ownership_units,
+            pending.shared_ownership_units,
+            pending.next_fanout_fifo_id,
+        )
+    };
+    let expected_batch_first_fifo = before.5;
+    let retry_authority = match service
+        .capture_recovered_lifecycle_proposal_exact_output(authority(
+            body_store_identity.clone(),
+            Arc::clone(&output_guard),
+        ))
+        .expect("capacity pressure is a typed Proposal retry")
+    {
+        RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority) => authority,
+        RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(_) => {
+            panic!("aggregate Proposal demand must not fit behind the blocking owner")
+        }
+    };
+    let after = {
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect unchanged pressured corridor");
+        (
+            pending.fanouts.len(),
+            pending.source_fifo_owners.clone(),
+            pending.reservation_owner_counts.clone(),
+            pending.ownership_units,
+            pending.shared_ownership_units,
+            pending.next_fanout_fifo_id,
+        )
+    };
+    assert_eq!(
+        after, before,
+        "capacity failure cannot install either fanout"
+    );
+    assert!(service.fast_path_proposals.is_empty());
+    assert!(!service.output_guard.restart_required());
+
+    service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("drain the exact blocking owner")
+    );
+    let retry_authority = match service
+        .capture_recovered_lifecycle_proposal_exact_output(retry_authority)
+        .expect("the unchanged Proposal authority reserves after capacity recovers")
+    {
+        RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(reservation) => {
+            reservation.abort_before_publication()
+        }
+        RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(_) => {
+            panic!("empty corridor must reserve the aggregate Proposal output")
+        }
+    };
+    {
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("typed abort leaves the corridor empty");
+        assert!(pending.fanouts.is_empty());
+        assert!(pending.source_fifo_owners.is_empty());
+        assert!(pending.reservation_owner_counts.is_empty());
+    }
+    match service
+        .capture_recovered_lifecycle_proposal_exact_output(retry_authority)
+        .expect("retry the exact authority after typed abort")
+    {
+        RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(reservation) => {
+            reservation.commit_after_publication();
+        }
+        RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(_) => {
+            panic!("empty corridor must retain the complete Proposal batch")
+        }
+    }
+    {
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect committed atomic Proposal batch");
+        let expected_peers = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
+        assert_eq!(pending.fanouts.len(), 2);
+        assert!(matches!(
+            &pending.fanouts[0].rollover_claim,
+            ExactOutputRolloverClaim::GlobalV2(_)
+        ));
+        assert!(matches!(
+            &pending.fanouts[1].rollover_claim,
+            ExactOutputRolloverClaim::PayloadChunks { .. }
+        ));
+        assert_eq!(
+            pending
+                .fanouts
+                .iter()
+                .map(|fanout| fanout.fifo_id)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(expected_batch_first_fifo),
+                expected_batch_first_fifo.checked_add(1),
+            ],
+            "the inseparable control/chunk pair owns adjacent FIFO identities"
+        );
+        for fanout in &pending.fanouts {
+            assert_eq!(
+                fanout.peers.iter().cloned().collect::<BTreeSet<_>>(),
+                expected_peers,
+                "restart Proposal dissemination targets every remote voter"
+            );
+        }
+        let control = &pending.fanouts[0];
+        let chunks = &pending.fanouts[1];
+        let [NetworkMessage::SumeragiBlock(control)] = control.messages.as_slice() else {
+            panic!("the first fanout must retain one Proposal control")
+        };
+        assert!(matches!(
+            control.as_message(),
+            BlockMessage::V2(message)
+                if message.payload
+                    == wire::ConsensusMessageV2Payload::Proposal(proposal.clone())
+        ));
+        let manifest = payload.manifest();
+        let signer = &service.context.roster[proposer].validator;
+        let mut observed_chunk_indices = BTreeSet::new();
+        for encoded in &chunks.messages {
+            let NetworkMessage::SumeragiBlock(envelope) = encoded else {
+                panic!("the second fanout must retain only payload chunks")
+            };
+            let BlockMessage::V2(message) = envelope.as_message() else {
+                panic!("the recovered Proposal chunk changed protocol lane")
+            };
+            let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
+                panic!("the recovered Proposal chunk fanout mixed message classes")
+            };
+            chunk
+                .validate(&service.context, manifest)
+                .expect("the retained chunk matches its canonical manifest");
+            let signature = Signature::try_from_bytes(&chunk.signature)
+                .expect("the retained chunk signature is canonical");
+            signature
+                .verify(
+                    signer.public_key(),
+                    &chunk
+                        .signature_preimage(&service.context, manifest)
+                        .expect("the retained chunk has a canonical signature preimage"),
+                )
+                .expect("the retained chunk is signed by the recovered proposer");
+            assert!(observed_chunk_indices.insert(chunk.index));
+        }
+        assert_eq!(
+            observed_chunk_indices.len(),
+            manifest.chunk_hashes.len(),
+            "the exact batch retains every canonical chunk once"
+        );
+        assert_eq!(
+            pending.ownership_units,
+            pending.reservation_owner_counts.values().sum::<usize>()
+        );
+        assert!(!pending.source_fifo_owners.is_empty());
+    }
+    assert!(
+        service.fast_path_proposals.is_empty(),
+        "recovered restart dissemination deliberately targets all voters without mutating live fast-path state"
+    );
+    service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("drain both committed Proposal fanouts")
+    );
+    let retirement_authority = match service
+        .capture_recovered_lifecycle_proposal_exact_output(authority(
+            body_store_identity,
+            Arc::clone(&output_guard),
+        ))
+        .expect("reserve one final exact Proposal before Decision")
+    {
+        RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(reservation) => {
+            reservation.abort_before_publication()
+        }
+        RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(_) => {
+            panic!("empty corridor must reserve the pre-Decision Proposal")
+        }
+    };
+    service
+        .retire_candidate_work_after_decision(proposal.round, proposal.subject)
+        .expect("retire Proposal work at the durable Decision boundary");
+    assert!(
+        service
+            .capture_recovered_lifecycle_proposal_exact_output(retirement_authority)
+            .is_err(),
+        "a pre-Decision Proposal authority cannot cross candidate retirement"
+    );
+    assert!(!service.output_guard.restart_required());
+    service_io.detach(&mut service);
+}
+
+#[test]
 fn prepare_and_commit_votes_reach_every_remote_voter_across_views() {
     let (mut service, _) = fixture();
     let observations = install_consensus_route_observer(&mut service);
@@ -2194,6 +2499,24 @@ fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
         ConsensusBroadcastDisposition::SourceRetained,
         "a full same-class corridor must not masquerade as Proposal acceptance"
     );
+    {
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect atomic Proposal rejection");
+        assert_eq!(
+            pending.fanouts.len(),
+            1,
+            "capacity pressure must retain only the pre-existing owner"
+        );
+        assert!(pending.fanouts.iter().all(|fanout| !matches!(
+            &fanout.rollover_claim,
+            ExactOutputRolloverClaim::PayloadChunks { .. }
+        )));
+    }
+    assert!(
+        !service.fast_path_proposals.contains(&proposal.round),
+        "failed aggregate admission cannot consume the first-send marker"
+    );
     assert!(!service.output_guard.restart_required());
 
     service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
@@ -2213,6 +2536,7 @@ fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
             .has_pending_exact_output()
             .expect("accepted retransmission drains immediately")
     );
+    assert!(service.fast_path_proposals.contains(&proposal.round));
     assert!(!service.output_guard.restart_required());
 }
 

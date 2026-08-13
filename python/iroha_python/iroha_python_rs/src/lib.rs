@@ -9,6 +9,7 @@ mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
+mod sorafs_orderbook_submission;
 mod zk_vk_draft;
 
 use core::{
@@ -141,7 +142,6 @@ use iroha_data_model::{
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
         TransactionBuilder as ModelTransactionBuilder, TransactionEntrypoint, TransactionPayload,
-        TransactionSubmissionReceipt,
         error::TransactionRejectionReason,
         executable::{
             ContractArgumentRecord, ContractInvocation, MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
@@ -5000,16 +5000,6 @@ mod sorafs_reference_validation_py_tests {
         assert_eq!(negative.status, "Error");
         assert_eq!(negative.code, "SFS-GOV-006");
     }
-}
-#[pyfunction]
-#[pyo3(name = "decode_transaction_receipt_json")]
-fn decode_transaction_receipt_json_py(receipt_bytes: &[u8]) -> PyResult<String> {
-    let receipt: TransactionSubmissionReceipt =
-        decode_from_bytes(receipt_bytes).map_err(|err| {
-            PyValueError::new_err(format!("failed to decode transaction receipt: {err}"))
-        })?;
-    json::to_json(&receipt)
-        .map_err(|err| PyValueError::new_err(format!("failed to serialize receipt: {err}")))
 }
 fn confidential_vk_registration_payload_py(
     py: Python<'_>,
@@ -14694,7 +14684,15 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        decode_transaction_receipt_json_py,
+        sorafs_orderbook_submission::decode_transaction_receipt_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_orderbook_submission::inspect_sorafs_orderbook_submission_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_orderbook_submission::verify_sorafs_orderbook_submission_receipt_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

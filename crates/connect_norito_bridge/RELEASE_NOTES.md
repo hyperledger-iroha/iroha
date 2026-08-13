@@ -41,6 +41,12 @@ surface.
   - SHA-256: 316fe22a83f217180700e1aa8b98c00d001d8009dfbdf465717794878c75441c
 
 Instructions:
-1. Upload one of the archives to the release host.
-2. Update `Package.swift.template` `<URL>` + `<CHECKSUM>` and `NoritoBridge.podspec.template` `<ZIP_URL>`.
-3. Commit/publish templates for consumers.
+1. Package the authenticated archive with
+   `scripts/package_mobile_sdk_artifacts.sh --apple`; do not reuse the historical
+   hashes above.
+2. Publish the generated canonical
+   `NoritoBridge-v<version>.xcframework.zip`. The package owner invokes
+   `scripts/render_norito_bridge_podspec.py` to compute its exact SHA-256 and
+   create `NoritoBridge-<version>.podspec`; do not hand-edit template tokens.
+3. Publish the generated binary spec before the same-version `IrohaSwift` source
+   spec and retain the signed artifact/provenance inventory.

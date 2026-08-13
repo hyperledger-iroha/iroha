@@ -671,6 +671,235 @@ impl Drop for TotalDiskUsageMutation<'_> {
     }
 }
 
+/// Move-only ownership of the exact opened safety-WAL directory for one live Kura.
+///
+/// Only [`Kura`] can mint this authority. Production consensus consumes it
+/// directly, so opened ancestry cannot be reconstructed from a caller path.
+#[derive(Debug)]
+#[must_use = "the Kura-bound safety-WAL directory authority must open one WAL"]
+pub(crate) struct KuraSafetyWalDirectoryAuthority {
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    kura_identity: KuraInstanceIdentity,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    directory: BoundProgressDirectory,
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    _unsupported: (),
+}
+
+impl KuraSafetyWalDirectoryAuthority {
+    /// Confirm that this authority was minted by the exact supplied live Kura.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn matches_kura(&self, kura: &Kura) -> bool {
+        self.kura_identity.matches(kura)
+    }
+
+    /// Consume the authority only when its identity still names this live Kura.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn into_opened_directory_for(
+        self,
+        kura: &Kura,
+    ) -> Option<(PathBuf, std::fs::File)> {
+        self.kura_identity
+            .matches(kura)
+            .then_some((self.directory.expected_path, self.directory.file))
+    }
+}
+
+impl Kura {
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_safety_wal_store_root_directory(
+        store_root: &Path,
+        store_root_lock_file: &std::fs::File,
+    ) -> Result<BoundProgressDirectory> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let lock_path = store_root.join(STORE_ROOT_LOCK_FILE_NAME);
+        let lock_before = store_root_lock_file
+            .metadata()
+            .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        let root = Self::open_bound_progress_directory(store_root, store_root)?;
+        let entry_before = rustix::fs::statat(
+            &root.file,
+            STORE_ROOT_LOCK_FILE_NAME,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        let linked_lock = std::fs::File::from(
+            rustix::fs::openat(
+                &root.file,
+                STORE_ROOT_LOCK_FILE_NAME,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, lock_path.clone()))?,
+        );
+        let linked_metadata = linked_lock
+            .metadata()
+            .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        let entry_after = rustix::fs::statat(
+            &root.file,
+            STORE_ROOT_LOCK_FILE_NAME,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        let lock_after = store_root_lock_file
+            .metadata()
+            .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        if rustix::fs::FileType::from_raw_mode(entry_before.st_mode)
+            != rustix::fs::FileType::RegularFile
+            || entry_before.st_nlink as u64 != 1
+            || entry_before.st_dev as u64 != linked_metadata.dev()
+            || entry_before.st_ino as u64 != linked_metadata.ino()
+            || entry_after.st_dev as u64 != linked_metadata.dev()
+            || entry_after.st_ino as u64 != linked_metadata.ino()
+            || !Self::sidecar_file_metadata_unchanged(&lock_before, &linked_metadata)
+            || !Self::sidecar_file_metadata_unchanged(&lock_before, &lock_after)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened Kura store root does not retain its exact locked identity",
+                ),
+                lock_path,
+            ));
+        }
+        Ok(root)
+    }
+
+    /// Mint one opened `sumeragi_v2/wal` directory owner from this live Kura root.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn mint_safety_wal_directory_authority(
+        &self,
+    ) -> Result<KuraSafetyWalDirectoryAuthority> {
+        if !self.instance_identity().matches(self)
+            || !self.bound_safety_wal_directory_unchanged(&self.store_root_directory)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened Kura store-root identity changed before safety-WAL binding",
+                ),
+                self.store_root.clone(),
+            ));
+        }
+        let sumeragi_root = self.open_or_create_safety_wal_child_directory(
+            &self.store_root_directory,
+            std::ffi::OsStr::new("sumeragi_v2"),
+        )?;
+        let wal_directory = self.open_or_create_safety_wal_child_directory(
+            &sumeragi_root,
+            std::ffi::OsStr::new("wal"),
+        )?;
+        if !self.bound_safety_wal_directory_unchanged(&wal_directory) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened safety-WAL directory changed before authority mint",
+                ),
+                wal_directory.expected_path,
+            ));
+        }
+        Ok(KuraSafetyWalDirectoryAuthority {
+            kura_identity: self.instance_identity(),
+            directory: wal_directory,
+        })
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_or_create_safety_wal_child_directory(
+        &self,
+        parent: &BoundProgressDirectory,
+        name: &std::ffi::OsStr,
+    ) -> Result<BoundProgressDirectory> {
+        let expected_path = parent.expected_path.join(name);
+        if !self.bound_safety_wal_directory_unchanged(parent) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "safety-WAL parent directory changed before child binding",
+                ),
+                parent.expected_path.clone(),
+            ));
+        }
+        match rustix::fs::mkdirat(&parent.file, name, rustix::fs::Mode::RWXU) {
+            Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+            Err(error) => return Err(Error::IO(std::io::Error::from(error), expected_path)),
+        }
+        let child = Self::open_bound_progress_child_directory(
+            &self.store_root,
+            parent,
+            &expected_path,
+        )?;
+        if !self.bound_safety_wal_directory_unchanged(parent) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "safety-WAL parent directory changed while opening its child",
+                ),
+                parent.expected_path.clone(),
+            ));
+        }
+        parent
+            .file
+            .sync_all()
+            .map_err(|error| Error::IO(error, parent.expected_path.clone()))?;
+        Ok(child)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn bound_safety_wal_directory_unchanged(&self, directory: &BoundProgressDirectory) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let Ok(opened) = directory.file.metadata() else {
+            return false;
+        };
+        if !opened.is_dir()
+            || !Self::sidecar_directory_binding_unchanged(&directory.metadata, &opened)
+        {
+            return false;
+        }
+        if directory.entry_name.is_none() {
+            let Ok(linked) = std::fs::symlink_metadata(&self.store_root) else {
+                return false;
+            };
+            return !linked.file_type().is_symlink()
+                && linked.is_dir()
+                && linked.dev() == opened.dev()
+                && linked.ino() == opened.ino();
+        }
+        let Ok(canonical) = std::fs::canonicalize(&directory.expected_path) else {
+            return false;
+        };
+        canonical == directory.canonical_path
+            && canonical.starts_with(&self.store_root_directory.canonical_path)
+            && std::fs::symlink_metadata(&directory.expected_path).is_ok_and(|linked| {
+                !linked.file_type().is_symlink()
+                    && linked.is_dir()
+                    && linked.dev() == opened.dev()
+                    && linked.ino() == opened.ino()
+            })
+    }
+
+    /// Reject production WAL minting without descriptor-relative ancestry.
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    pub(crate) fn mint_safety_wal_directory_authority(
+        &self,
+    ) -> Result<KuraSafetyWalDirectoryAuthority> {
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "descriptor-relative safety-WAL storage is unavailable",
+            ),
+            self.sumeragi_v2_storage_root().join("wal"),
+        ))
+    }
+}
+
 /// Private durable finality envelope paired by height with a retained block record.
 ///
 /// The companion retained record stores independent hashes of the canonical

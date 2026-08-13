@@ -60,14 +60,15 @@ use super::{
         ProductionRecoveredSuccessorTraceProjection,
         ProductionSuccessorPredecessorBindingProjection, ProductionSuccessorSnapshotProjection,
         ProductionSuccessorStartupLifecycleProjection, SUCCESSOR_AUTHORITY_APPLIED,
-        SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP, SUCCESSOR_LIFECYCLE_BEGIN,
-        SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED, SUCCESSOR_STAGE_COMPLETE,
-        SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
+        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+        SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED,
+        SUCCESSOR_STAGE_COMPLETE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
         check_production_applied_successor_transition,
         check_production_recovered_successor_transition,
         check_production_successor_startup_lifecycle_transition,
     },
     v2_effects::{EffectExecutorStatus, PendingKuraApplyRecoveryStage},
+    v2_lifecycle_coordinator::RetiredRecoveredCompleteTipActivationAuthorityV1,
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
         SnapshotSuccessorActivationAuthority, successor_context_refinement_projection,
@@ -907,6 +908,10 @@ pub(crate) enum V2SuccessorActivationError {
     /// Primitive successor fields failed the shared production/Verus decision kernel.
     #[error("Sumeragi v2 successor activation failed the production refinement kernel")]
     RefinementRejected,
+    /// The retired CompleteTip token no longer authenticates the canonical H+1
+    /// ledger frame and prepared status together.
+    #[error("retired CompleteTip authority does not authenticate the prepared successor")]
+    RecoveredCompleteTipAuthorityMismatch,
 }
 
 const fn successor_stage_projection(stage: SumeragiV2LocalWorkStage) -> u8 {
@@ -1151,9 +1156,9 @@ fn activate_v2_successor_height_at(
     Ok(())
 }
 
-// Snapshot bootstrap is the sole caller of this projection-shaped helper.
-// CompleteTip has no status bridge until the canonical successor lifecycle
-// owner consumes its post-retirement token.
+// Both recovered startup variants enter this projection-shaped helper only
+// through their distinct consuming authorities. CompleteTip additionally
+// reauthenticates its Kura-derived successor ledger immediately beforehand.
 fn publish_recovered_v2_successor_height_at(
     authority_kind: u8,
     predecessor: ProductionDurablePredecessorIdentityProjection,
@@ -1220,6 +1225,43 @@ pub(crate) fn activate_v2_successor_height(
     successor: SumeragiV2Status,
 ) -> Result<(), V2SuccessorActivationError> {
     activate_v2_successor_height_at(expected_predecessor, authority, successor, Instant::now())
+}
+
+fn activate_recovered_complete_tip_v2_height_at(
+    authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
+    successor: SumeragiV2Status,
+    now: Instant,
+) -> Result<(), V2SuccessorActivationError> {
+    if !authority.authorizes_successor_status(&successor) {
+        return Err(V2SuccessorActivationError::RecoveredCompleteTipAuthorityMismatch);
+    }
+    let predecessor = authority.predecessor().refinement_projection();
+    let expected_successor_context_id = successor.height_context_id;
+    let publication = publish_recovered_v2_successor_height_at(
+        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+        predecessor,
+        CanonicalIdentityProjection::zero(),
+        0,
+        CanonicalIdentityProjection::zero(),
+        expected_successor_context_id,
+        successor,
+        now,
+    );
+    drop(authority);
+    publication
+}
+
+/// Consume one retired canonical CompleteTip authority to publish its exact H+1 status.
+///
+/// The runner reaches this bridge only after the successor runtime has armed
+/// its clocks and authenticated ingress is open. The token reopens and compares
+/// its retained successor ledger before the existing checked recovered-status
+/// transition can publish anything.
+pub(crate) fn activate_recovered_complete_tip_v2_height(
+    authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
+    successor: SumeragiV2Status,
+) -> Result<(), V2SuccessorActivationError> {
+    activate_recovered_complete_tip_v2_height_at(authority, successor, Instant::now())
 }
 
 fn activate_snapshot_bootstrap_v2_height_at(

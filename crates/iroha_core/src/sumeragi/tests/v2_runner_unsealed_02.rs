@@ -910,6 +910,168 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         "unretired CompleteTip recovery must leave ingress closed"
     );
     super::super::status::clear_v2_status();
+
+    #[cfg(feature = "bls")]
+    {
+        let successor_status = |context: &wire::HeightContext| {
+            let mut status = runner_status(context);
+            status.liveness.generation = context.height;
+            status.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
+                generation: status.liveness.generation,
+                round: wire::ConsensusRound {
+                    context_id: status.height_context_id,
+                    height: status.height,
+                    view: status.view,
+                },
+                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+                age_ms: 0,
+            });
+            status
+        };
+
+        let (_kura, _predecessor_root, exact_context, retirement) =
+            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+        let activation = PendingSuccessorActivation::RecoveredCompleteTip {
+            authority: retirement,
+        };
+        activation
+            .preflight_recovered_startup()
+            .expect("exact retired CompleteTip reauthenticates its H+1 ledger");
+        let exact_ready = AtomicBool::new(false);
+        let exact_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
+        exact_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure exact restart ingress");
+        let exact_output_guard = ConsensusOutputGuard::isolated();
+        open_ingress_for_active_height(
+            exact_output_guard.as_ref(),
+            &exact_ready,
+            &exact_ingress,
+            Some((activation, successor_status(&exact_context))),
+        )
+        .expect("exact retired CompleteTip publishes its authenticated successor");
+        assert!(exact_ready.load(Ordering::Acquire));
+        assert!(!exact_output_guard.restart_required());
+        let published = super::super::status::v2_status()
+            .expect("exact CompleteTip restart publishes H+1 status");
+        assert_eq!(published.height_context_id, exact_context.id());
+        assert_eq!(published.height, exact_context.height);
+        assert_eq!(published.last_committed_height + 1, published.height);
+        close_ingress_for_rollover(&exact_ready, &exact_ingress);
+        super::super::status::clear_v2_status();
+
+        let (drift_kura, _predecessor_root, drift_context, retirement) =
+            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+        let successor_ledger = drift_kura
+            .sumeragi_v2_storage_root()
+            .join("lifecycle-v1")
+            .join(hex::encode(drift_context.id().0.as_ref()))
+            .join("lifecycle-ledger-v1.norito");
+        std::fs::write(&successor_ledger, b"replaced successor frame")
+            .expect("replace the successor frame after retirement authentication");
+        let drift_activation = PendingSuccessorActivation::RecoveredCompleteTip {
+            authority: retirement,
+        };
+        assert!(matches!(
+            drift_activation.preflight_recovered_startup(),
+            Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid { .. })
+        ));
+        let drift_ready = AtomicBool::new(false);
+        let drift_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
+        drift_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure drifted restart ingress");
+        let drift_output_guard = ConsensusOutputGuard::isolated();
+        assert!(matches!(
+            open_ingress_for_active_height(
+                drift_output_guard.as_ref(),
+                &drift_ready,
+                &drift_ingress,
+                Some((drift_activation, successor_status(&drift_context))),
+            ),
+            Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid { .. })
+        ));
+        assert!(!drift_ready.load(Ordering::Acquire));
+        assert!(drift_output_guard.restart_required());
+        assert!(drift_output_guard.acquire().is_none());
+        assert!(super::super::status::v2_status().is_none());
+
+        let (predecessor_kura, predecessor_root, predecessor_context, retirement) =
+            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+        let predecessor_ledger = predecessor_root.join("lifecycle-ledger-v1.norito");
+        std::fs::write(&predecessor_ledger, b"replaced predecessor frame")
+            .expect("replace the predecessor frame after retirement authentication");
+        let predecessor_activation = PendingSuccessorActivation::RecoveredCompleteTip {
+            authority: retirement,
+        };
+        assert!(matches!(
+            predecessor_activation.preflight_recovered_startup(),
+            Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid { .. })
+        ));
+        let predecessor_ready = AtomicBool::new(false);
+        let predecessor_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
+        predecessor_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure predecessor-drift restart ingress");
+        let predecessor_output_guard = ConsensusOutputGuard::isolated();
+        assert!(matches!(
+            open_ingress_for_active_height(
+                predecessor_output_guard.as_ref(),
+                &predecessor_ready,
+                &predecessor_ingress,
+                Some((
+                    predecessor_activation,
+                    successor_status(&predecessor_context),
+                )),
+            ),
+            Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid { .. })
+        ));
+        assert!(!predecessor_ready.load(Ordering::Acquire));
+        assert!(predecessor_output_guard.restart_required());
+        assert!(predecessor_output_guard.acquire().is_none());
+        assert!(super::super::status::v2_status().is_none());
+        drop(predecessor_kura);
+
+        let (_foreign_kura, _predecessor_root, foreign_context, retirement) =
+            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+        let mut foreign_status = successor_status(&foreign_context);
+        let foreign_context_id =
+            wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(
+                Hash::new(b"foreign CompleteTip restart successor"),
+            ));
+        foreign_status.height_context_id = foreign_context_id;
+        foreign_status
+            .liveness
+            .last_progress
+            .as_mut()
+            .expect("successor activation marker")
+            .round
+            .context_id = foreign_context_id;
+        let foreign_ready = AtomicBool::new(false);
+        let foreign_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
+        foreign_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure foreign-context restart ingress");
+        let foreign_output_guard = ConsensusOutputGuard::isolated();
+        assert!(matches!(
+            open_ingress_for_active_height(
+                foreign_output_guard.as_ref(),
+                &foreign_ready,
+                &foreign_ingress,
+                Some((
+                    PendingSuccessorActivation::RecoveredCompleteTip {
+                        authority: retirement,
+                    },
+                    foreign_status,
+                )),
+            ),
+            Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid { .. })
+        ));
+        assert!(!foreign_ready.load(Ordering::Acquire));
+        assert!(foreign_output_guard.restart_required());
+        assert!(foreign_output_guard.acquire().is_none());
+        assert!(super::super::status::v2_status().is_none());
+    }
 }
 
 #[test]

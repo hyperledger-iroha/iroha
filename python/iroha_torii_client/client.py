@@ -98,6 +98,14 @@ from .native_amx import (
     validate_bls_normal_validator_set,
 )
 from .norito_frame import validate_norito_frame
+from .orderbook_submission import (
+    ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+    SorafsOrderbookSubmissionAmbiguousError,
+    prepare_orderbook_submission,
+    validate_fixed_request_headers,
+    validate_response_headers,
+    verify_receipt,
+)
 from .offline_models import (
     KagemushaArtifactBindingV4Json,
     OfflineAssetScale,
@@ -10357,13 +10365,18 @@ class ToriiClient(
         signed_transaction: Any,
         *,
         headers: Optional[Mapping[str, str]] = None,
+        expected_network_id: Any = None,
+        expected_receipt_signer: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Submit a caller-signed native transaction containing one order ISI."""
 
         return self._submit_sorafs_orderbook_transaction(
             "/v1/sorafs/orderbook/orders",
             signed_transaction,
+            route="order",
             headers=headers,
+            expected_network_id=expected_network_id,
+            expected_receipt_signer=expected_receipt_signer,
             context="submit_sorafs_orderbook_order",
         )
 
@@ -10372,13 +10385,18 @@ class ToriiClient(
         signed_transaction: Any,
         *,
         headers: Optional[Mapping[str, str]] = None,
+        expected_network_id: Any = None,
+        expected_receipt_signer: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Submit a caller-signed native transaction containing one cancel ISI."""
 
         return self._submit_sorafs_orderbook_transaction(
             "/v1/sorafs/orderbook/cancel",
             signed_transaction,
+            route="cancel",
             headers=headers,
+            expected_network_id=expected_network_id,
+            expected_receipt_signer=expected_receipt_signer,
             context="submit_sorafs_orderbook_cancel",
         )
 
@@ -10387,13 +10405,18 @@ class ToriiClient(
         signed_transaction: Any,
         *,
         headers: Optional[Mapping[str, str]] = None,
+        expected_network_id: Any = None,
+        expected_receipt_signer: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Submit a caller-signed native transaction containing one receipt ISI."""
 
         return self._submit_sorafs_orderbook_transaction(
             "/v1/sorafs/orderbook/receipts",
             signed_transaction,
+            route="receipt",
             headers=headers,
+            expected_network_id=expected_network_id,
+            expected_receipt_signer=expected_receipt_signer,
             context="submit_sorafs_orderbook_receipt",
         )
 
@@ -10402,29 +10425,67 @@ class ToriiClient(
         path: str,
         signed_transaction: Any,
         *,
+        route: str,
         headers: Optional[Mapping[str, str]],
+        expected_network_id: Any,
+        expected_receipt_signer: Optional[str],
         context: str,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        body = self._sorafs_orderbook_transaction_bytes(
-            signed_transaction,
-            f"{context}.signed_transaction",
+        native = self._sorafs_orderbook_native_verifier()
+        body, identity = prepare_orderbook_submission(
+            native=native,
+            route=route,
+            signed_transaction=signed_transaction,
+            expected_network_id=expected_network_id,
+            expected_receipt_signer=expected_receipt_signer,
+            context=context,
         )
-        response = self._request(
-            "POST",
-            path,
-            headers=self._sorafs_orderbook_submit_headers(
-                headers=headers,
+        request_headers = validate_fixed_request_headers(headers, context=context)
+        request_headers.update(
+            {
+                "Accept": "application/x-norito",
+                "Accept-Encoding": "identity",
+                "Content-Type": "application/x-norito",
+            }
+        )
+        request_options: Dict[str, Any] = {
+            "headers": request_headers,
+            "data": body,
+            "stream": True,
+            "allow_retry": False,
+            "allow_redirects": False,
+        }
+        if timeout is not None:
+            request_options["timeout"] = timeout
+        try:
+            response = self._request("POST", path, **request_options)
+            self._expect_status(
+                response,
+                {202},
+                maximum_body_bytes=0,
                 context=context,
-            ),
-            data=body,
+            )
+            validate_response_headers(response, identity, context)
+            receipt = _read_bounded_sccp_response_body(
+                response, ORDERBOOK_RECEIPT_MAX_BYTES_V1, context
+            )
+        except Exception as error:
+            if "response" in locals():
+                response.close()
+            raise SorafsOrderbookSubmissionAmbiguousError(route, identity) from error
+        return verify_receipt(
+            native=native,
+            receipt_norito=receipt,
+            identity=identity,
+            expected_receipt_signer=expected_receipt_signer,
+            context=context,
         )
-        self._expect_status(response, {202})
-        response_payload = self._maybe_json(response)
-        if response_payload is None:
-            raise RuntimeError(f"{context} endpoint returned no payload")
-        return self._parse_sorafs_orderbook_submission_receipt(
-            response_payload,
-            context=f"{context} response",
+
+    def _sorafs_orderbook_native_verifier(self) -> Any:
+        raise RuntimeError(
+            "SoraFS orderbook submission requires an injected native verifier; "
+            "use iroha_python.client.ToriiClient"
         )
 
     def list_sorafs_orderbook_events(

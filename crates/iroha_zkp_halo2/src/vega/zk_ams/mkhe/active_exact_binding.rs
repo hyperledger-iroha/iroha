@@ -74,8 +74,16 @@ use crate::vega::{
 
 use super::{
     BgvProfile, MKHE_VERSION_V1, PlaintextModulus, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
-    active::ZkAmsMkheGovernedActiveRosterV1, cpk_relation::VerifiedZkAmsMkheCpkBindingSourceV1,
-    manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
+    active::ZkAmsMkheGovernedActiveRosterV1,
+    cpk_relation::VerifiedZkAmsMkheCpkBindingSourceV1,
+    direct_collective_eval_ceremony::{
+        ZkAmsMkheDirectCeremonyContextV1, ZkAmsMkheDirectCeremonyRoundV1,
+    },
+    direct_rkg_ephemeral_membership::{
+        VerifiedRkgEphemeralMembershipSourceV1, ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
+    },
+    manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
+    wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
 
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
@@ -508,22 +516,24 @@ impl PersistentWitnessConsumerV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ExactMembershipVerificationReceiptV1 {
     role: PersistentWitnessRoleV1,
+    source_context_digest: [u8; 32],
+    source_statement_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
     commitments: [Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
     commitment_set_digest: [u8; 32],
     membership_proof_digest: [u8; 32],
     verifier_transcript_digest: [u8; 32],
-    relation_verification_digest: [u8; 32],
+    source_verification_digest: [u8; 32],
 }
 
 /// Opaque proof-verified capability for one persistent witness commitment.
 ///
 /// There is no decoder and no visible constructor.  Consumers can inspect an
-/// identity only after `validate_for` has checked the complete CPK source
-/// context and the requested role.  The identity deliberately excludes the
-/// randomized membership-proof transcript and consumer purpose: it identifies
-/// the source commitment itself and therefore remains stable across CPK, every
-/// evaluated-key digit, every Galois key, and decryption.
+/// identity only after role-specific validation has checked the complete
+/// source context. The identity excludes randomized membership-proof and
+/// consumer-purpose metadata. A secret-epoch identity therefore remains
+/// stable across every consumer; an RKG-ephemeral identity additionally binds
+/// the verifier-certified direct context and wrapper statement.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct VerifiedPersistentWitnessBindingV1 {
     version: u8,
@@ -538,12 +548,14 @@ pub(super) struct VerifiedPersistentWitnessBindingV1 {
     cpk_share_digest: [u8; 32],
     role: PersistentWitnessRoleV1,
     record_index: u32,
+    source_context_digest: [u8; 32],
+    source_statement_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
     commitments: [Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
     commitment_set_digest: [u8; 32],
     membership_proof_digest: [u8; 32],
     verifier_transcript_digest: [u8; 32],
-    cpk_relation_verification_digest: [u8; 32],
+    source_verification_digest: [u8; 32],
     consumer_mask: u8,
     identity_digest: [u8; 32],
     verification_digest: [u8; 32],
@@ -570,12 +582,14 @@ impl VerifiedPersistentWitnessBindingV1 {
             cpk_share_digest: self.cpk_share_digest,
             role: self.role,
             record_index: self.record_index,
+            source_context_digest: self.source_context_digest,
+            source_statement_digest: self.source_statement_digest,
             generator_basis_digest: self.generator_basis_digest,
             commitments: self.commitments,
             commitment_set_digest: self.commitment_set_digest,
             membership_proof_digest: self.membership_proof_digest,
             verifier_transcript_digest: self.verifier_transcript_digest,
-            cpk_relation_verification_digest: self.cpk_relation_verification_digest,
+            source_verification_digest: self.source_verification_digest,
             consumer_mask: self.consumer_mask,
             identity_digest: self.identity_digest,
             verification_digest: self.verification_digest,
@@ -625,12 +639,14 @@ impl VerifiedPersistentWitnessBindingV1 {
             cpk_share_digest,
             role: receipt.role,
             record_index,
+            source_context_digest: receipt.source_context_digest,
+            source_statement_digest: receipt.source_statement_digest,
             generator_basis_digest: receipt.generator_basis_digest,
             commitments: receipt.commitments,
             commitment_set_digest: receipt.commitment_set_digest,
             membership_proof_digest: receipt.membership_proof_digest,
             verifier_transcript_digest: receipt.verifier_transcript_digest,
-            cpk_relation_verification_digest: receipt.relation_verification_digest,
+            source_verification_digest: receipt.source_verification_digest,
             consumer_mask,
             identity_digest: [0; 32],
             verification_digest: [0; 32],
@@ -669,6 +685,18 @@ impl VerifiedPersistentWitnessBindingV1 {
         self.commitment_set_digest
     }
 
+    /// Direct-ceremony context certified by the role-specific membership
+    /// wrapper. Secret-epoch bindings deliberately retain the all-zero value.
+    pub(super) const fn source_context_digest(&self) -> [u8; 32] {
+        self.source_context_digest
+    }
+
+    /// Canonical wrapper statement certified by the exact verifier. This is
+    /// nonzero only for an RKG-ephemeral binding.
+    pub(super) const fn source_statement_digest(&self) -> [u8; 32] {
+        self.source_statement_digest
+    }
+
     pub(super) const fn commitments(&self) -> &[Point; PERSISTENT_COMMITMENT_CHUNKS_V1] {
         &self.commitments
     }
@@ -697,9 +725,11 @@ impl VerifiedPersistentWitnessBindingV1 {
             || self.cpk_share_digest != cpk_share_digest
             || self.role != PersistentWitnessRoleV1::SecretEpoch
             || self.record_index != 0
+            || self.source_context_digest != [0; 32]
+            || self.source_statement_digest != [0; 32]
             || self.consumer_mask != SECRET_REQUIRED_CONSUMERS_V1
             || self.consumer_mask & required_consumer.mask() == 0
-            || self.cpk_relation_verification_digest == [0; 32]
+            || self.source_verification_digest == [0; 32]
             || self.identity_digest == [0; 32]
             || self.identity_digest != verified_binding_identity_digest(self)?
             || self.verification_digest == [0; 32]
@@ -736,6 +766,8 @@ impl VerifiedPersistentWitnessBindingV1 {
             || self.cpk_share_digest != cpk_share_digest
             || self.role != PersistentWitnessRoleV1::RkgEphemeral
             || self.record_index == 0
+            || self.source_context_digest == [0; 32]
+            || self.source_statement_digest == [0; 32]
             || self.consumer_mask != EPHEMERAL_REQUIRED_CONSUMERS_V1
             || self.consumer_mask & required_consumer.mask() == 0
             || self.identity_digest == [0; 32]
@@ -941,6 +973,63 @@ impl VerifiedPersistentWitnessBindingSetV1 {
         ))
     }
 
+    /// Validate one retained RKG-ephemeral binding at its exact direct context.
+    ///
+    /// The caller receives no security-certificate or CPK-share digest. Those
+    /// provenance axes stay inside this verified set and are checked here
+    /// together with the role-separated two-round consumer mask.
+    pub(super) fn validate_rkg_ephemeral_binding_for_direct_context(
+        &self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        context: &ZkAmsMkheDirectCeremonyContextV1,
+        party_index: usize,
+        binding: &VerifiedPersistentWitnessBindingV1,
+        round: ZkAmsMkheDirectCeremonyRoundV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        context.validate_rkg_ephemeral_membership_axes(roster, self)?;
+        if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+            return Err(ZkAmsMkheErrorV1::InvalidPartySet);
+        }
+        let consumer = match round {
+            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne => {
+                PersistentRkgEphemeralConsumerV1::RoundOne
+            }
+            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo => {
+                PersistentRkgEphemeralConsumerV1::RoundTwo
+            }
+            ZkAmsMkheDirectCeremonyRoundV1::RkgNormalize
+            | ZkAmsMkheDirectCeremonyRoundV1::Galois => {
+                return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+            }
+        };
+        binding.validate_ephemeral_for(
+            roster,
+            self.cpk_transcript_digest,
+            party_index,
+            self.cpk_share_digests[party_index],
+            consumer,
+        )?;
+        let expected_context =
+            ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
+                roster,
+                self,
+                context,
+                party_index,
+                binding.record_index,
+            )?;
+        if binding.security_certificate_digest != self.security_certificate_digest
+            || binding.generator_basis_digest != self.generator_basis_digests[party_index]
+            || binding.identity_digest == self.identity_digests[party_index]
+            || binding.commitment_set_digest == self.commitment_set_digests[party_index]
+            || binding.source_context_digest != context.digest()
+            || binding.source_context_digest != expected_context.direct_context_digest()
+            || binding.source_statement_digest != expected_context.statement_digest()
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Ok(())
+    }
+
     /// Bind one party's actual persistent commitment points to one exact
     /// direct-ceremony relation.  A lineage digest is never accepted here.
     pub(super) fn bind_direct_relation_use(
@@ -969,6 +1058,7 @@ impl VerifiedPersistentWitnessBindingSetV1 {
                 if binding.identity_digest == self.identity_digests[party_index]
                     || binding.generator_basis_digest != self.generator_basis_digests[party_index]
                     || binding.commitment_set_digest == self.commitment_set_digests[party_index]
+                    || binding.source_context_digest != selector.context_digest
                 {
                     return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
                 }
@@ -989,6 +1079,11 @@ impl VerifiedPersistentWitnessBindingSetV1 {
             ephemeral_identity_digest: ephemeral.map_or([0; 32], |binding| binding.identity_digest),
             ephemeral_commitment_set_digest: ephemeral
                 .map_or([0; 32], |binding| binding.commitment_set_digest),
+            ephemeral_source_context_digest: ephemeral
+                .map_or([0; 32], |binding| binding.source_context_digest),
+            ephemeral_source_statement_digest: ephemeral
+                .map_or([0; 32], |binding| binding.source_statement_digest),
+            ephemeral_record_index: ephemeral.map_or(0, |binding| binding.record_index),
             ephemeral_commitments: ephemeral.map(|binding| binding.commitments),
             selector,
             use_digest: [0; 32],
@@ -1152,6 +1247,9 @@ pub(super) struct VerifiedPersistentWitnessDirectRelationUseV1 {
     secret_commitments: [Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
     ephemeral_identity_digest: [u8; 32],
     ephemeral_commitment_set_digest: [u8; 32],
+    ephemeral_source_context_digest: [u8; 32],
+    ephemeral_source_statement_digest: [u8; 32],
+    ephemeral_record_index: u32,
     ephemeral_commitments: Option<[Point; PERSISTENT_COMMITMENT_CHUNKS_V1]>,
     selector: PersistentDirectRelationUseSelectorV1,
     use_digest: [u8; 32],
@@ -1173,6 +1271,11 @@ impl VerifiedPersistentWitnessDirectRelationUseV1 {
             || ephemeral_required != self.ephemeral_commitments.is_some()
             || ephemeral_required != (self.ephemeral_identity_digest != [0; 32])
             || ephemeral_required != (self.ephemeral_commitment_set_digest != [0; 32])
+            || ephemeral_required != (self.ephemeral_source_context_digest != [0; 32])
+            || ephemeral_required != (self.ephemeral_source_statement_digest != [0; 32])
+            || ephemeral_required != (self.ephemeral_record_index != 0)
+            || (ephemeral_required
+                && self.ephemeral_source_context_digest != self.selector.context_digest)
             || self.use_digest != persistent_direct_relation_use_digest(self)?
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -1366,12 +1469,68 @@ pub(super) fn mint_collective_secret_binding_from_verified_cpk_v1(
         0,
         ExactMembershipVerificationReceiptV1 {
             role: PersistentWitnessRoleV1::SecretEpoch,
+            source_context_digest: [0; 32],
+            source_statement_digest: [0; 32],
             generator_basis_digest: source.generator_basis_digest(),
             commitments: *source.commitments(),
             commitment_set_digest: source.commitment_set_digest(),
             membership_proof_digest: source.membership_proof_digest(),
             verifier_transcript_digest: source.verifier_transcript_digest(),
-            relation_verification_digest: source.relation_verification_digest(),
+            source_verification_digest: source.relation_verification_digest(),
+        },
+    )
+}
+
+/// Mint one move-only RKG-ephemeral binding from exact verifier authority.
+///
+/// Security-certificate and CPK-share provenance are inherited from the
+/// opaque collective-secret binding set. The caller cannot supply either
+/// digest, and the consumed membership source must match the complete direct
+/// context, party, digit, nonzero record, and secret-lineage identity.
+pub(super) fn mint_rkg_ephemeral_binding_from_verified_membership_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    bindings: &VerifiedPersistentWitnessBindingSetV1,
+    direct_context: &ZkAmsMkheDirectCeremonyContextV1,
+    party_index: usize,
+    record_index: u32,
+    source: VerifiedRkgEphemeralMembershipSourceV1,
+) -> Result<VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
+    roster.validate()?;
+    bindings.validate_for_consumer(roster, PersistentWitnessConsumerV1::RkgRoundOne)?;
+    direct_context.validate_rkg_ephemeral_membership_axes(roster, bindings)?;
+    if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 || record_index == 0 {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let expected_context =
+        ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
+            roster,
+            bindings,
+            direct_context,
+            party_index,
+            record_index,
+        )?;
+    source.validate_against(expected_context)?;
+    let source_context_digest = expected_context.direct_context_digest();
+    let source_statement_digest = expected_context.statement_digest();
+    let commitment_set_digest =
+        persistent_commitment_set_digest(source.generator_basis_digest(), source.commitments())?;
+    VerifiedPersistentWitnessBindingV1::from_verified_membership(
+        roster,
+        bindings.security_certificate_digest,
+        bindings.cpk_transcript_digest,
+        party_index,
+        bindings.cpk_share_digests[party_index],
+        record_index,
+        ExactMembershipVerificationReceiptV1 {
+            role: PersistentWitnessRoleV1::RkgEphemeral,
+            source_context_digest,
+            source_statement_digest,
+            generator_basis_digest: source.generator_basis_digest(),
+            commitments: *source.commitments(),
+            commitment_set_digest,
+            membership_proof_digest: source.membership_proof_digest(),
+            verifier_transcript_digest: source.verifier_transcript_digest(),
+            source_verification_digest: source.source_verification_digest(),
         },
     )
 }
@@ -1402,7 +1561,7 @@ pub(super) fn mint_test_state_owned_collective_secret_binding_v1(
     frame.extend_from_slice(&commitment_set_digest);
     let membership_proof_digest = keccak256(&[frame.as_slice(), b".membership"].concat());
     let verifier_transcript_digest = keccak256(&[frame.as_slice(), b".transcript"].concat());
-    let relation_verification_digest = keccak256(&[frame.as_slice(), b".relation"].concat());
+    let source_verification_digest = keccak256(&[frame.as_slice(), b".relation"].concat());
     VerifiedPersistentWitnessBindingV1::from_verified_membership(
         roster,
         security_certificate_digest,
@@ -1412,12 +1571,14 @@ pub(super) fn mint_test_state_owned_collective_secret_binding_v1(
         0,
         ExactMembershipVerificationReceiptV1 {
             role: PersistentWitnessRoleV1::SecretEpoch,
+            source_context_digest: [0; 32],
+            source_statement_digest: [0; 32],
             generator_basis_digest: ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
             commitments,
             commitment_set_digest,
             membership_proof_digest,
             verifier_transcript_digest,
-            relation_verification_digest,
+            source_verification_digest,
         },
     )
 }
@@ -1425,9 +1586,18 @@ pub(super) fn mint_test_state_owned_collective_secret_binding_v1(
 fn validate_membership_receipt(
     receipt: &ExactMembershipVerificationReceiptV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    if receipt.membership_proof_digest == [0; 32]
+    let source_wrapper_is_valid = match receipt.role {
+        PersistentWitnessRoleV1::SecretEpoch => {
+            receipt.source_context_digest == [0; 32] && receipt.source_statement_digest == [0; 32]
+        }
+        PersistentWitnessRoleV1::RkgEphemeral => {
+            receipt.source_context_digest != [0; 32] && receipt.source_statement_digest != [0; 32]
+        }
+    };
+    if !source_wrapper_is_valid
+        || receipt.membership_proof_digest == [0; 32]
         || receipt.verifier_transcript_digest == [0; 32]
-        || receipt.relation_verification_digest == [0; 32]
+        || receipt.source_verification_digest == [0; 32]
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -1503,6 +1673,10 @@ fn verified_binding_identity_digest(
     hash.update(&binding.cpk_share_digest);
     hash.update(&[binding.role as u8]);
     hash.update(&binding.record_index.to_be_bytes());
+    if binding.role == PersistentWitnessRoleV1::RkgEphemeral {
+        hash.update(&binding.source_context_digest);
+        hash.update(&binding.source_statement_digest);
+    }
     hash.update(&binding.generator_basis_digest);
     hash.update(&binding.commitment_set_digest);
     Ok(hash.finalize())
@@ -1513,7 +1687,7 @@ fn verified_binding_verification_digest(
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     if binding.membership_proof_digest == [0; 32]
         || binding.verifier_transcript_digest == [0; 32]
-        || binding.cpk_relation_verification_digest == [0; 32]
+        || binding.source_verification_digest == [0; 32]
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -1522,7 +1696,11 @@ fn verified_binding_verification_digest(
     hash.update(&verified_binding_identity_digest(binding)?);
     hash.update(&binding.membership_proof_digest);
     hash.update(&binding.verifier_transcript_digest);
-    hash.update(&binding.cpk_relation_verification_digest);
+    hash.update(&binding.source_verification_digest);
+    if binding.role == PersistentWitnessRoleV1::RkgEphemeral {
+        hash.update(&binding.source_context_digest);
+        hash.update(&binding.source_statement_digest);
+    }
     hash.update(&[binding.consumer_mask]);
     Ok(hash.finalize())
 }
@@ -1570,6 +1748,9 @@ fn persistent_direct_relation_use_digest(
     hash.update(&capability.secret_commitment_set_digest);
     hash.update(&capability.ephemeral_identity_digest);
     hash.update(&capability.ephemeral_commitment_set_digest);
+    hash.update(&capability.ephemeral_source_context_digest);
+    hash.update(&capability.ephemeral_source_statement_digest);
+    hash.update(&capability.ephemeral_record_index.to_be_bytes());
     hash.update(&[capability.selector.relation as u8]);
     hash.update(&capability.selector.context_digest);
     hash.update(&capability.selector.prior_round_digest);
@@ -2271,12 +2452,14 @@ mod tests {
         relation_frame.push(proof_variant);
         ExactMembershipVerificationReceiptV1 {
             role: PersistentWitnessRoleV1::SecretEpoch,
+            source_context_digest: [0; 32],
+            source_statement_digest: [0; 32],
             generator_basis_digest,
             commitments,
             commitment_set_digest,
             membership_proof_digest: keccak256(&proof_frame),
             verifier_transcript_digest: keccak256(&transcript_frame),
-            relation_verification_digest: keccak256(&relation_frame),
+            source_verification_digest: keccak256(&relation_frame),
         }
     }
 
@@ -2300,6 +2483,37 @@ mod tests {
         .unwrap()
     }
 
+    fn legacy_secret_binding_digests(
+        binding: &VerifiedPersistentWitnessBindingV1,
+    ) -> ([u8; 32], [u8; 32]) {
+        let mut identity = Keccak256::new();
+        identity.update(PERSISTENT_IDENTITY_DOMAIN_V1);
+        identity.update(&[binding.version]);
+        identity.update(&binding.profile_digest);
+        identity.update(&binding.security_certificate_digest);
+        identity.update(&binding.roster_digest);
+        identity.update(&binding.key_material_digest);
+        identity.update(&binding.epoch.to_be_bytes());
+        identity.update(&binding.cpk_transcript_digest);
+        identity.update(&[binding.party_index]);
+        identity.update(&binding.party.to_bytes());
+        identity.update(&binding.cpk_share_digest);
+        identity.update(&[binding.role as u8]);
+        identity.update(&binding.record_index.to_be_bytes());
+        identity.update(&binding.generator_basis_digest);
+        identity.update(&binding.commitment_set_digest);
+        let identity = identity.finalize();
+
+        let mut verification = Keccak256::new();
+        verification.update(PERSISTENT_VERIFICATION_DOMAIN_V1);
+        verification.update(&identity);
+        verification.update(&binding.membership_proof_digest);
+        verification.update(&binding.verifier_transcript_digest);
+        verification.update(&binding.source_verification_digest);
+        verification.update(&[binding.consumer_mask]);
+        (identity, verification.finalize())
+    }
+
     fn verified_ephemeral_binding_fixture(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         cpk_transcript_digest: [u8; 32],
@@ -2307,9 +2521,13 @@ mod tests {
         cpk_share_digest: [u8; 32],
         basis_label: &[u8],
         record_index: u32,
+        source_context_digest: [u8; 32],
+        source_statement_digest: [u8; 32],
     ) -> VerifiedPersistentWitnessBindingV1 {
         let mut receipt = membership_receipt_fixture(basis_label, 9);
         receipt.role = PersistentWitnessRoleV1::RkgEphemeral;
+        receipt.source_context_digest = source_context_digest;
+        receipt.source_statement_digest = source_statement_digest;
         let mut commitment_label = basis_label.to_vec();
         commitment_label.extend_from_slice(b"-rkg-u");
         receipt.commitments =
@@ -2622,6 +2840,11 @@ mod tests {
         let share = keccak256(b"exact-binding-cpk-share-0");
         let label = b"exact-binding-party-0";
         let binding = verified_binding_fixture(&roster, transcript, 0, share, label, 1);
+        let legacy_digests = legacy_secret_binding_digests(&binding);
+        assert_eq!(binding.source_context_digest(), [0; 32]);
+        assert_eq!(binding.source_statement_digest(), [0; 32]);
+        assert_eq!(binding.identity_digest(), legacy_digests.0);
+        assert_eq!(binding.verification_digest, legacy_digests.1);
         for consumer in [
             PersistentWitnessConsumerV1::CollectivePublicKey,
             PersistentWitnessConsumerV1::RkgRoundOne,
@@ -2641,7 +2864,7 @@ mod tests {
         assert_eq!(binding.identity_digest(), reproved.identity_digest());
         assert_ne!(binding.verification_digest, reproved.verification_digest);
 
-        for mutation in 0..20 {
+        for mutation in 0..22 {
             let mut forged = verified_binding_fixture(&roster, transcript, 0, share, label, 1);
             match mutation {
                 0 => forged.version ^= 1,
@@ -2665,8 +2888,10 @@ mod tests {
                 15 => forged.membership_proof_digest[0] ^= 1,
                 16 => forged.verifier_transcript_digest[0] ^= 1,
                 17 => forged.consumer_mask ^= SECRET_CONSUMER_DECRYPTION_V1,
-                18 => forged.cpk_relation_verification_digest[0] ^= 1,
+                18 => forged.source_verification_digest[0] ^= 1,
                 19 => forged.identity_digest[0] ^= 1,
+                20 => forged.source_context_digest[0] ^= 1,
+                21 => forged.source_statement_digest[0] ^= 1,
                 _ => unreachable!(),
             }
             assert_eq!(
@@ -2868,8 +3093,25 @@ mod tests {
             collective_key
         );
         assert_eq!(direct_context.secret_lineage_root(), set.set_root());
-        let ephemeral =
-            verified_ephemeral_binding_fixture(&roster, transcript, 0, shares[0], &labels[0], 19);
+        let wrapper_context =
+            ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
+                &roster,
+                &set,
+                &direct_context,
+                0,
+                19,
+            )
+            .unwrap();
+        let ephemeral = verified_ephemeral_binding_fixture(
+            &roster,
+            transcript,
+            0,
+            shares[0],
+            &labels[0],
+            19,
+            wrapper_context.direct_context_digest(),
+            wrapper_context.statement_digest(),
+        );
         for consumer in [
             PersistentRkgEphemeralConsumerV1::RoundOne,
             PersistentRkgEphemeralConsumerV1::RoundTwo,
@@ -2878,11 +3120,105 @@ mod tests {
                 .validate_ephemeral_for(&roster, transcript, 0, shares[0], consumer)
                 .unwrap();
         }
+        for round in [
+            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
+            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo,
+        ] {
+            set.validate_rkg_ephemeral_binding_for_direct_context(
+                &roster,
+                &direct_context,
+                0,
+                &ephemeral,
+                round,
+            )
+            .unwrap();
+        }
+
+        let other_digit_context = super::super::direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1::from_verified_binding_set(
+            &roster,
+            &set,
+            super::super::direct_collective_eval_ceremony::ZkAmsMkheDirectEvaluatedKeyTargetV1::Relinearization,
+            4,
+        )
+        .unwrap();
+        assert_ne!(other_digit_context.digest(), direct_context.digest());
+        assert_eq!(
+            set.validate_rkg_ephemeral_binding_for_direct_context(
+                &roster,
+                &other_digit_context,
+                0,
+                &ephemeral,
+                ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
+            ),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        );
+
+        let mut altered_record = verified_ephemeral_binding_fixture(
+            &roster,
+            transcript,
+            0,
+            shares[0],
+            &labels[0],
+            19,
+            wrapper_context.direct_context_digest(),
+            wrapper_context.statement_digest(),
+        );
+        altered_record.record_index = 20;
+        altered_record.identity_digest = verified_binding_identity_digest(&altered_record).unwrap();
+        altered_record.verification_digest =
+            verified_binding_verification_digest(&altered_record).unwrap();
+        altered_record
+            .validate_ephemeral_for(
+                &roster,
+                transcript,
+                0,
+                shares[0],
+                PersistentRkgEphemeralConsumerV1::RoundOne,
+            )
+            .unwrap();
+        assert_eq!(
+            set.validate_rkg_ephemeral_binding_for_direct_context(
+                &roster,
+                &direct_context,
+                0,
+                &altered_record,
+                ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
+            ),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        );
+
+        let other_wrapper_context =
+            ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
+                &roster,
+                &set,
+                &other_digit_context,
+                0,
+                19,
+            )
+            .unwrap();
+        let context_specific = verified_ephemeral_binding_fixture(
+            &roster,
+            transcript,
+            0,
+            shares[0],
+            &labels[0],
+            19,
+            other_wrapper_context.direct_context_digest(),
+            other_wrapper_context.statement_digest(),
+        );
+        assert_ne!(
+            ephemeral.identity_digest(),
+            context_specific.identity_digest()
+        );
+        assert_ne!(
+            ephemeral.verification_digest,
+            context_specific.verification_digest
+        );
 
         let digest = |label: &[u8]| keccak256(label);
         let rkg_one = PersistentDirectRelationUseSelectorV1::new(
             PersistentDirectRelationV1::RkgRoundOne,
-            digest(b"direct-context"),
+            direct_context.digest(),
             digest(b"direct-prior-one"),
             0,
             3,
@@ -2895,6 +3231,12 @@ mod tests {
             digest(b"direct-rkg-one-proof-commitments"),
         )
         .unwrap();
+        let mut wrong_context_selector = rkg_one;
+        wrong_context_selector.context_digest = other_digit_context.digest();
+        assert_eq!(
+            set.bind_direct_relation_use(&roster, 0, Some(&ephemeral), wrong_context_selector,),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        );
         let capability = set
             .bind_direct_relation_use(&roster, 0, Some(&ephemeral), rkg_one)
             .unwrap();
@@ -2913,13 +3255,22 @@ mod tests {
             Some(ephemeral.commitments())
         );
         assert_eq!(
+            capability.ephemeral_source_context_digest,
+            wrapper_context.direct_context_digest()
+        );
+        assert_eq!(
+            capability.ephemeral_source_statement_digest,
+            wrapper_context.statement_digest()
+        );
+        assert_eq!(capability.ephemeral_record_index, 19);
+        assert_eq!(
             verify_and_consume_direct_relation_use_v1(capability, &[0xff; 64]),
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
         );
 
         let rkg_two = PersistentDirectRelationUseSelectorV1::new(
             PersistentDirectRelationV1::RkgRoundTwo,
-            digest(b"direct-context"),
+            direct_context.digest(),
             digest(b"direct-prior-two"),
             0,
             3,
@@ -3002,7 +3353,7 @@ mod tests {
         let transcript = keccak256(b"exact-binding-mint-transcript");
         let share = keccak256(b"exact-binding-mint-share");
         let mut membership_only = membership_receipt_fixture(b"membership-only", 1);
-        membership_only.relation_verification_digest = [0; 32];
+        membership_only.source_verification_digest = [0; 32];
         assert_eq!(
             VerifiedPersistentWitnessBindingV1::from_verified_membership(
                 &roster,

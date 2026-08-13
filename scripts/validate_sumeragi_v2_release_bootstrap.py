@@ -17,13 +17,14 @@ from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import selectors
 import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import time
 from typing import Any, Iterable
 
@@ -44,7 +45,6 @@ _IDENTITY_KEYS = {
 _MARKER_KEYS = {
     "schema_version",
     "trust_boundary",
-    "candidate_root",
     "candidate_identity",
     "candidate_identity_sha256",
     "trusted_inputs",
@@ -63,6 +63,7 @@ _TRUSTED_INPUT_KEYS = {
     "receipt_validator",
     "receipt_validator_support",
     "runtime_helper",
+    "sdk_dependency_bundle_manifest",
     "revocation",
     "runner_tool_manifest",
     "ssh_keygen",
@@ -74,14 +75,32 @@ _TRUSTED_ARCHIVE_NAMES = {
     "git": "git",
     "identity_verifier": "verify-identity.py",
     "manifest_helper": "compute-manifest.py",
-    "python": "python3",
+    "python": (
+        "python-runtime/bin/python3"
+        if (
+            sys.platform == "darwin"
+            and isinstance(sysconfig.get_config_var("PYTHONFRAMEWORK"), str)
+            and bool(sysconfig.get_config_var("PYTHONFRAMEWORK"))
+        )
+        else "python3"
+    ),
     "receipt_validator": "validate-receipt.py",
     "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
     "runtime_helper": "copy-release-runtime.py",
+    "sdk_dependency_bundle_manifest": "sdk-dependency-bundle-manifest.json",
     "revocation": "bootstrap-revocation",
     "runner_tool_manifest": "runner-tool-manifest.json",
     "ssh_keygen": "ssh-keygen",
 }
+_RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
+    "write_sumeragi_v2_release_receipt_corridor_log.py": (
+        "bc6c901f9e011b38ba49392e99457bfd21eb365c8744c144887907229a2ee117"
+    ),
+    "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
+        "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+    ),
+}
+_FRAMEWORK_PYTHON = _TRUSTED_ARCHIVE_NAMES["python"] != "python3"
 _EXECUTABLE_INPUTS = {"bash", "git", "python", "ssh_keygen"}
 _IDENTITY_ARCHIVE_NAMES = {
     "cargo_lock": "identity-Cargo.lock",
@@ -92,6 +111,17 @@ _IDENTITY_ARCHIVE_NAMES = {
     "ssh_revocation": "identity-revocation",
     "verify_transcript": "identity-transcript.json",
 }
+_IDENTITY_ARCHIVE_IDS = {
+    "cargo_lock": "release-identity.cargo-lock.v1",
+    "git": "release-identity.git.v1",
+    "raw_commit": "release-identity.raw-commit.v1",
+    "ssh_allowed_signers": "release-identity.ssh-allowed-signers.v1",
+    "ssh_keygen": "release-identity.ssh-keygen.v1",
+    "ssh_revocation": "release-identity.ssh-revocation.v1",
+    "verify_transcript": "release-identity.verify-transcript.v1",
+}
+_IDENTITY_ATTESTATION_FORMAT = "iroha-sumeragi-v2-release-identity-attestation"
+_IDENTITY_TRANSCRIPT_FORMAT = "iroha-sumeragi-v2-release-identity-transcript"
 _IDENTITY_RECORD_NAMES = {
     "identity_attestation": "identity-attestation.json",
     "identity_transcript": "identity-transcript.json",
@@ -102,9 +132,12 @@ _TOOL_MODE = 0o500
 _DIRECTORY_MODE = 0o700
 _MAX_IDENTITY_BYTES = 64 * 1024
 _MAX_HELPER_BYTES = 16 * 1024 * 1024
+_MAX_SDK_MANIFEST_BYTES = 256 * 1024 * 1024
 _MAX_POLICY_BYTES = 16 * 1024 * 1024
 _MAX_EVIDENCE_BYTES = 128 * 1024 * 1024
 _MAX_TOOL_BYTES = 512 * 1024 * 1024
+_MAX_FRAMEWORK_RUNTIME_BYTES = 4 * 1024 * 1024 * 1024
+_MAX_FRAMEWORK_RUNTIME_MEMBERS = 250_000
 _MAX_HELPER_OUTPUT_BYTES = 16 * 1024 * 1024
 _COMMAND_TIMEOUT_SECONDS = 120
 _RUNNER_EXTRA_ENV = {
@@ -112,6 +145,7 @@ _RUNNER_EXTRA_ENV = {
     "CARGO_NET_GIT_FETCH_WITH_CLI",
     "CARGO_NET_OFFLINE",
     "IROHA_RELEASE_CANCEL_REQUEST_PATH",
+    "IROHA_RELEASE_INVOCATION_ROOT",
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
     "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
     "IROHA_RELEASE_SCALING_IROHAD_SHA256",
@@ -207,18 +241,19 @@ class AliasSnapshot:
 
 
 def _runner_alias(path: Path, target: Path, label: str) -> AliasSnapshot:
+    relative_target = os.path.relpath(target, path.parent)
     metadata = path.lstat()
     if (
         not stat.S_ISLNK(metadata.st_mode)
         or metadata.st_uid != os.getuid()
         or metadata.st_nlink != 1
-        or os.readlink(path) != str(target)
+        or os.readlink(path) != relative_target
         or path.resolve(strict=True) != target
     ):
         raise ValidationError(f"{label} is not an exact protected alias")
     return AliasSnapshot(
         path=path,
-        target=str(target),
+        target=relative_target,
         device=metadata.st_dev,
         inode=metadata.st_ino,
         uid=metadata.st_uid,
@@ -568,69 +603,649 @@ def _artifact_limit(label: str) -> int:
         return _MAX_TOOL_BYTES
     if label in {"allowed_signers", "revocation"}:
         return _MAX_POLICY_BYTES
+    if label == "sdk_dependency_bundle_manifest":
+        return _MAX_SDK_MANIFEST_BYTES
     return _MAX_HELPER_BYTES
+
+
+def _framework_runtime_projection(
+    records: Any, label: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(records, list):
+        raise ValidationError(f"{label} records are not a list")
+    projected: list[dict[str, Any]] = []
+    for value in records:
+        if not isinstance(value, dict):
+            raise ValidationError(f"{label} member is malformed")
+        kind = value.get("kind")
+        source_keys = {
+            "directory": {"path", "kind", "device", "inode", "mode"},
+            "file": {
+                "path",
+                "kind",
+                "device",
+                "inode",
+                "mode",
+                "size",
+                "sha256",
+            },
+            "symlink": {"path", "kind", "mode", "target"},
+        }.get(kind)
+        sanitized_keys = {
+            "directory": {"path", "kind", "mode"},
+            "file": {"path", "kind", "mode", "size", "sha256"},
+            "symlink": {"path", "kind", "mode", "target"},
+        }.get(kind)
+        keys = set(value)
+        if source_keys is not None and keys == source_keys:
+            value = {key: value[key] for key in sanitized_keys or ()}
+            keys = set(value)
+        if sanitized_keys is None or keys != sanitized_keys:
+            raise ValidationError(f"{label} member schema is not exact")
+        path = value.get("path")
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or PurePosixPath(path).as_posix() != path
+            or ".." in PurePosixPath(path).parts
+            or not isinstance(value.get("mode"), str)
+            or _MODE_RE.fullmatch(value["mode"]) is None
+        ):
+            raise ValidationError(f"{label} member path or mode is unsafe")
+        if kind == "file":
+            if (
+                type(value["size"]) is not int
+                or value["size"] < 0
+                or _DIGEST_RE.fullmatch(
+                    _string(value["sha256"], f"{label} file digest")
+                )
+                is None
+            ):
+                raise ValidationError(f"{label} file metadata is invalid")
+        elif kind == "symlink" and (
+            not isinstance(value["target"], str) or not value["target"]
+        ):
+            raise ValidationError(f"{label} symlink target is invalid")
+        projected.append(dict(value))
+    projected.sort(key=lambda record: record["path"])
+    if len(projected) > _MAX_FRAMEWORK_RUNTIME_MEMBERS or len({
+        record["path"] for record in projected
+    }) != len(projected):
+        raise ValidationError(f"{label} member inventory is not unique and bounded")
+    return projected
+
+
+def _validate_framework_python_runtime(
+    value: Any, evidence: DirectorySnapshot,
+) -> tuple[Snapshot, DirectorySnapshot]:
+    """Independently authenticate every archived framework-Python member."""
+
+    runtime = _exact_dict(
+        value,
+        {
+            "format",
+            "schema_version",
+            "archive_root",
+            "root_mode",
+            "executable",
+            "inventory",
+            "record_count",
+            "file_bytes",
+            "records",
+        },
+        "framework Python runtime",
+    )
+    stdlib_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    if (
+        runtime["format"] != "iroha-sumeragi-v2-framework-python-runtime"
+        or _strict_int(
+            runtime["schema_version"], "framework Python runtime schema"
+        )
+        != 1
+        or runtime["archive_root"] != "python-runtime"
+        or runtime["root_mode"] != "0500"
+        or runtime["executable"] != "bin/python3"
+    ):
+        raise ValidationError("framework Python runtime binding is not exact")
+    inventory_record = _exact_dict(
+        runtime["inventory"],
+        {"archive_name", "mode", "sha256", "size_bytes"},
+        "framework Python runtime inventory record",
+    )
+    if (
+        inventory_record["archive_name"] != "python-runtime-input.json"
+        or _mode(
+            inventory_record["mode"],
+            "framework Python runtime inventory mode",
+        )
+        != _DATA_MODE
+    ):
+        raise ValidationError("framework Python runtime inventory binding is wrong")
+    inventory = _read_at(
+        evidence,
+        "python-runtime-input.json",
+        "framework Python runtime inventory",
+        maximum_bytes=_MAX_EVIDENCE_BYTES,
+        expected_mode=_DATA_MODE,
+    )
+    if (
+        inventory.sha256
+        != _digest(
+            inventory_record["sha256"],
+            "framework Python runtime inventory digest",
+        )
+        or len(inventory.data)
+        != _strict_int(
+            inventory_record["size_bytes"],
+            "framework Python runtime inventory size",
+        )
+    ):
+        raise ValidationError(
+            "framework Python runtime inventory bytes do not match the marker"
+        )
+    private_inventory = _parse_canonical(
+        inventory, "framework Python runtime inventory",
+    )
+    inventory_keys = {
+        "format",
+        "schema_version",
+        "runtime_root",
+        "record_count",
+        "file_bytes",
+        "records",
+        "source_disclosure",
+        "input_record_count",
+        "input_file_bytes",
+        "input_records",
+    }
+    runtime_path = evidence.path / "python-runtime"
+    if (
+        set(private_inventory) != inventory_keys
+        or private_inventory["format"]
+        != "iroha-sumeragi-v2-private-framework-python-runtime"
+        or _strict_int(
+            private_inventory["schema_version"],
+            "private framework Python runtime schema",
+        )
+        != 1
+        or private_inventory["runtime_root"] != str(runtime_path)
+        or private_inventory["source_disclosure"] != "withheld"
+        or not isinstance(private_inventory["input_records"], list)
+    ):
+        raise ValidationError(
+            "private framework Python runtime inventory contract is wrong"
+        )
+    expected_records = _framework_runtime_projection(
+        runtime["records"], "framework Python runtime",
+    )
+    private_records = _framework_runtime_projection(
+        private_inventory["records"], "private framework Python runtime",
+    )
+    if expected_records != private_records:
+        raise ValidationError(
+            "framework Python marker does not bind the private member inventory"
+        )
+    expected_count = _strict_int(
+        runtime["record_count"], "framework Python runtime record count",
+    )
+    expected_bytes = _strict_int(
+        runtime["file_bytes"], "framework Python runtime file bytes",
+    )
+    if (
+        expected_count != len(expected_records)
+        or expected_count
+        != _strict_int(
+            private_inventory["record_count"],
+            "private framework Python runtime record count",
+        )
+        or expected_bytes
+        != sum(
+            record["size"]
+            for record in expected_records
+            if record["kind"] == "file"
+        )
+        or expected_bytes
+        != _strict_int(
+            private_inventory["file_bytes"],
+            "private framework Python runtime file bytes",
+        )
+        or expected_bytes > _MAX_FRAMEWORK_RUNTIME_BYTES
+    ):
+        raise ValidationError(
+            "framework Python runtime member accounting is not exact"
+        )
+
+    directory = _open_directory(
+        runtime_path,
+        "framework Python runtime",
+        expected_mode=0o500,
+    )
+    observed: list[dict[str, Any]] = []
+    total_bytes = 0
+
+    def walk(
+        descriptor: int,
+        relative: str,
+        directory_identity: tuple[int, ...],
+    ) -> None:
+        nonlocal total_bytes
+        try:
+            names = tuple(sorted(os.listdir(descriptor)))
+        except OSError as error:
+            raise ValidationError(
+                f"framework Python runtime directory is unreadable: {relative or '.'}"
+            ) from error
+        if len(observed) + len(names) > _MAX_FRAMEWORK_RUNTIME_MEMBERS:
+            raise ValidationError(
+                "framework Python runtime contains too many members"
+            )
+        for name in names:
+            path = name if not relative else f"{relative}/{name}"
+            if (
+                not name
+                or name in {".", ".."}
+                or "/" in name
+                or "\0" in name
+            ):
+                raise ValidationError(
+                    "framework Python runtime has an unsafe member name"
+                )
+            metadata = os.stat(
+                name, dir_fd=descriptor, follow_symlinks=False,
+            )
+            mode = f"{stat.S_IMODE(metadata.st_mode):04o}"
+            if metadata.st_uid != os.getuid():
+                raise ValidationError(
+                    f"framework Python runtime member has the wrong owner: {path}"
+                )
+            if stat.S_ISDIR(metadata.st_mode):
+                child = os.open(
+                    name,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=descriptor,
+                )
+                opened = os.fstat(child)
+                identity = (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_uid,
+                    stat.S_IMODE(opened.st_mode),
+                    opened.st_mtime_ns,
+                    opened.st_ctime_ns,
+                )
+                if (
+                    not stat.S_ISDIR(opened.st_mode)
+                    or identity
+                    != (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                        metadata.st_uid,
+                        stat.S_IMODE(metadata.st_mode),
+                        metadata.st_mtime_ns,
+                        metadata.st_ctime_ns,
+                    )
+                ):
+                    os.close(child)
+                    raise ValidationError(
+                        f"framework Python runtime directory changed: {path}"
+                    )
+                observed.append(
+                    {"path": path, "kind": "directory", "mode": mode}
+                )
+                try:
+                    walk(child, path, identity)
+                finally:
+                    os.close(child)
+                after = os.stat(
+                    name, dir_fd=descriptor, follow_symlinks=False,
+                )
+                if (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_uid,
+                    stat.S_IMODE(after.st_mode),
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                ) != identity:
+                    raise ValidationError(
+                        f"framework Python runtime directory changed: {path}"
+                    )
+            elif stat.S_ISREG(metadata.st_mode):
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= os.O_NOFOLLOW
+                child = os.open(name, flags, dir_fd=descriptor)
+                digest = hashlib.sha256()
+                size = 0
+                try:
+                    opened = os.fstat(child)
+                    if (
+                        not stat.S_ISREG(opened.st_mode)
+                        or opened.st_uid != os.getuid()
+                        or opened.st_nlink != 1
+                        or (
+                            opened.st_dev,
+                            opened.st_ino,
+                            opened.st_size,
+                            opened.st_mtime_ns,
+                            opened.st_ctime_ns,
+                            stat.S_IMODE(opened.st_mode),
+                        )
+                        != (
+                            metadata.st_dev,
+                            metadata.st_ino,
+                            metadata.st_size,
+                            metadata.st_mtime_ns,
+                            metadata.st_ctime_ns,
+                            stat.S_IMODE(metadata.st_mode),
+                        )
+                    ):
+                        raise ValidationError(
+                            f"framework Python runtime file changed: {path}"
+                        )
+                    while True:
+                        block = os.read(child, 1024 * 1024)
+                        if not block:
+                            break
+                        digest.update(block)
+                        size += len(block)
+                        if (
+                            size > _MAX_TOOL_BYTES
+                            or total_bytes + size
+                            > _MAX_FRAMEWORK_RUNTIME_BYTES
+                        ):
+                            raise ValidationError(
+                                "framework Python runtime exceeds its byte bound"
+                            )
+                    after = os.fstat(child)
+                    if (
+                        size != opened.st_size
+                        or (
+                            after.st_dev,
+                            after.st_ino,
+                            after.st_size,
+                            after.st_mtime_ns,
+                            after.st_ctime_ns,
+                            stat.S_IMODE(after.st_mode),
+                        )
+                        != (
+                            opened.st_dev,
+                            opened.st_ino,
+                            opened.st_size,
+                            opened.st_mtime_ns,
+                            opened.st_ctime_ns,
+                            stat.S_IMODE(opened.st_mode),
+                        )
+                    ):
+                        raise ValidationError(
+                            f"framework Python runtime file changed: {path}"
+                        )
+                finally:
+                    os.close(child)
+                total_bytes += size
+                observed.append({
+                    "path": path,
+                    "kind": "file",
+                    "mode": mode,
+                    "size": size,
+                    "sha256": digest.hexdigest(),
+                })
+            elif stat.S_ISLNK(metadata.st_mode):
+                target = os.readlink(name, dir_fd=descriptor)
+                after = os.stat(
+                    name, dir_fd=descriptor, follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISLNK(after.st_mode)
+                    or (
+                        after.st_dev,
+                        after.st_ino,
+                        after.st_uid,
+                        after.st_mtime_ns,
+                        after.st_ctime_ns,
+                    )
+                    != (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                        metadata.st_uid,
+                        metadata.st_mtime_ns,
+                        metadata.st_ctime_ns,
+                    )
+                    or os.readlink(name, dir_fd=descriptor) != target
+                ):
+                    raise ValidationError(
+                        f"framework Python runtime symlink changed: {path}"
+                    )
+                observed.append({
+                    "path": path,
+                    "kind": "symlink",
+                    "mode": mode,
+                    "target": target,
+                })
+            else:
+                raise ValidationError(
+                    f"framework Python runtime contains a special member: {path}"
+                )
+        current = os.fstat(descriptor)
+        current_identity = (
+            current.st_dev,
+            current.st_ino,
+            current.st_uid,
+            stat.S_IMODE(current.st_mode),
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        )
+        if current_identity != directory_identity:
+            raise ValidationError(
+                f"framework Python runtime directory changed: {relative or '.'}"
+            )
+
+    try:
+        root_metadata = os.fstat(directory.descriptor)
+        walk(
+            directory.descriptor,
+            "",
+            (
+                root_metadata.st_dev,
+                root_metadata.st_ino,
+                root_metadata.st_uid,
+                stat.S_IMODE(root_metadata.st_mode),
+                root_metadata.st_mtime_ns,
+                root_metadata.st_ctime_ns,
+            ),
+        )
+        observed.sort(key=lambda record: record["path"])
+        if observed != expected_records or total_bytes != expected_bytes:
+            raise ValidationError(
+                "framework Python runtime members differ from the marker"
+            )
+        by_path = {record["path"]: record for record in observed}
+        required = {
+            "bin": "directory",
+            "bin/python3": "file",
+            "Python3": "file",
+            "Resources": "directory",
+            "Resources/Python.app/Contents/MacOS/Python": "file",
+            "lib": "directory",
+            f"lib/{stdlib_name}": "directory",
+            f"lib/{stdlib_name}/lib-dynload": "directory",
+        }
+        if (
+            {PurePosixPath(path).parts[0] for path in by_path}
+            != {"bin", "Python3", "Resources", "lib"}
+            or any(
+                not isinstance(by_path.get(path), dict)
+                or by_path[path]["kind"] != kind
+                for path, kind in required.items()
+            )
+        ):
+            raise ValidationError(
+                "framework Python runtime indispensable layout is incomplete"
+            )
+        for path, record in by_path.items():
+            if record["kind"] != "symlink":
+                continue
+            target = PurePosixPath(record["target"])
+            if target.is_absolute():
+                raise ValidationError(
+                    f"framework Python runtime symlink is absolute: {path}"
+                )
+            parts = list(PurePosixPath(path).parts[:-1])
+            for part in target.parts:
+                if part in {"", "."}:
+                    continue
+                if part == "..":
+                    if not parts:
+                        raise ValidationError(
+                            f"framework Python runtime symlink escapes: {path}"
+                        )
+                    parts.pop()
+                else:
+                    parts.append(part)
+            if not parts or parts[0] not in {"Python3", "Resources", "lib"}:
+                raise ValidationError(
+                    f"framework Python runtime symlink leaves its closure: {path}"
+                )
+            for index in range(1, len(parts) + 1):
+                target_path = "/".join(parts[:index])
+                target_record = by_path.get(target_path)
+                if (
+                    not isinstance(target_record, dict)
+                    or (
+                        index < len(parts)
+                        and target_record["kind"] != "directory"
+                    )
+                    or (
+                        index == len(parts)
+                        and target_record["kind"] not in {"directory", "file"}
+                    )
+                ):
+                    raise ValidationError(
+                        f"framework Python runtime symlink target is not exact: {path}"
+                    )
+    except BaseException:
+        os.close(directory.descriptor)
+        raise
+    return inventory, directory
 
 
 def _trusted_inputs(
     value: Any,
     evidence: DirectorySnapshot,
     candidate: Path,
-) -> tuple[dict[str, Snapshot], list[Snapshot]]:
+) -> tuple[
+    dict[str, Snapshot],
+    list[Snapshot],
+    DirectorySnapshot | None,
+]:
     records = _exact_dict(value, _TRUSTED_INPUT_KEYS, "trusted_inputs")
     archives: dict[str, Snapshot] = {}
     sources: list[Snapshot] = []
-    record_keys = {
-        "archive_name",
-        "archive_mode",
-        "observed_sha256",
-        "protected_sha256",
-        "size_bytes",
-        "source_mode",
-        "source_path",
+    base_record_keys = {
+        "archive_id", "archive_name", "mode", "sha256", "size_bytes",
     }
+    framework_directory: DirectorySnapshot | None = None
+    framework_inventory: Snapshot | None = None
     for label in sorted(records):
-        record = _exact_dict(records[label], record_keys, f"trusted input {label}")
+        record_keys = base_record_keys
+        if label == "python" and _FRAMEWORK_PYTHON:
+            record_keys = record_keys | {"runtime"}
+        if label == "receipt_validator" and "components" in records[label]:
+            record_keys = record_keys | {"components"}
+        record = _exact_dict(
+            records[label], record_keys, f"trusted input {label}",
+        )
+        if record["archive_id"] != f"release-bootstrap.{label.replace('_', '-')}.v1":
+            raise ValidationError(f"trusted input {label} has the wrong archive id")
         if record["archive_name"] != _TRUSTED_ARCHIVE_NAMES[label]:
             raise ValidationError(f"trusted input {label} has the wrong archive alias")
         expected_mode = _TOOL_MODE if label in _EXECUTABLE_INPUTS else _DATA_MODE
-        if _mode(record["archive_mode"], f"trusted input {label} archive mode") != expected_mode:
+        if _mode(record["mode"], f"trusted input {label} archive mode") != expected_mode:
             raise ValidationError(f"trusted input {label} has the wrong archive mode")
-        source_mode = _mode(record["source_mode"], f"trusted input {label} source mode")
-        if label in _EXECUTABLE_INPUTS and source_mode & 0o111 == 0:
-            raise ValidationError(f"trusted executable source {label} is not executable")
         size = _strict_int(record["size_bytes"], f"trusted input {label} size")
-        observed = _digest(record["observed_sha256"], f"trusted input {label} digest")
-        protected = _digest(record["protected_sha256"], f"trusted input {label} protected digest")
-        if observed != protected:
-            raise ValidationError(f"trusted input {label} digests disagree")
-        archive = _read_at(
-            evidence,
-            _TRUSTED_ARCHIVE_NAMES[label],
-            f"archived trusted input {label}",
-            maximum_bytes=_artifact_limit(label),
-            expected_mode=expected_mode,
+        digest = _digest(record["sha256"], f"trusted input {label} digest")
+        archive_name = _TRUSTED_ARCHIVE_NAMES[label]
+        archive = (
+            _read_path(
+                evidence.path / archive_name,
+                f"archived trusted input {label}",
+                maximum_bytes=_artifact_limit(label),
+                expected_mode=expected_mode,
+            )
+            if "/" in archive_name
+            else _read_at(
+                evidence,
+                archive_name,
+                f"archived trusted input {label}",
+                maximum_bytes=_artifact_limit(label),
+                expected_mode=expected_mode,
+            )
         )
-        if len(archive.data) != size or archive.sha256 != observed:
+        if len(archive.data) != size or archive.sha256 != digest:
             raise ValidationError(f"archived trusted input {label} does not match its marker")
-        source_path = _canonical_existing(
-            Path(_string(record["source_path"], f"trusted input {label} source path")),
-            f"trusted input {label} source path",
-        )
-        if _inside(source_path, candidate) or _inside(source_path, evidence.path):
-            raise ValidationError(f"trusted input {label} source entered an untrusted root")
-        source = _read_path(
-            source_path,
-            f"trusted input {label} source",
-            maximum_bytes=_artifact_limit(label),
-            expected_mode=source_mode,
-            allowed_uids=frozenset({0, os.getuid()}),
-            expected_links=None,
-        )
-        if len(source.data) != size or source.sha256 != protected:
-            raise ValidationError(f"trusted input {label} source changed after bootstrap")
+        if label == "python" and _FRAMEWORK_PYTHON:
+            framework_inventory, framework_directory = (
+                _validate_framework_python_runtime(record["runtime"], evidence)
+            )
+        if label == "receipt_validator" and "components" in record:
+            components = _exact_dict(
+                record["components"],
+                set(_RECEIPT_VALIDATOR_COMPONENT_SHA256),
+                "receipt validator components",
+            )
+            for name, expected_digest in sorted(
+                _RECEIPT_VALIDATOR_COMPONENT_SHA256.items()
+            ):
+                component_record = _exact_dict(
+                    components[name],
+                    {"archive_id", "archive_name", "mode", "sha256", "size_bytes"},
+                    f"receipt validator component {name}",
+                )
+                if (
+                    component_record["archive_id"]
+                    != "release-bootstrap.receipt-validator-component.v1:" + name
+                    or component_record["archive_name"] != name
+                    or _mode(
+                        component_record["mode"],
+                        f"receipt validator component {name} mode",
+                    )
+                    != _DATA_MODE
+                    or _digest(
+                        component_record["sha256"],
+                        f"receipt validator component {name} digest",
+                    )
+                    != expected_digest
+                ):
+                    raise ValidationError(
+                        f"receipt validator component {name} binding is wrong"
+                    )
+                component = _read_at(
+                    evidence,
+                    name,
+                    f"receipt validator component {name}",
+                    maximum_bytes=_MAX_HELPER_BYTES,
+                    expected_mode=_DATA_MODE,
+                )
+                if (
+                    component.sha256 != expected_digest
+                    or len(component.data)
+                    != _strict_int(
+                        component_record["size_bytes"],
+                        f"receipt validator component {name} size",
+                    )
+                ):
+                    raise ValidationError(
+                        f"receipt validator component {name} bytes are wrong"
+                    )
+                archives["receipt_validator_component:" + name] = component
         archives[label] = archive
-        sources.append(source)
-    return archives, sources
+    if framework_inventory is not None:
+        archives["python_runtime_inventory"] = framework_inventory
+    return archives, sources, framework_directory
 
 
 def _identity_records(
@@ -801,7 +1416,7 @@ def _validate_raw_commit(raw: bytes, identity: dict[str, Any]) -> None:
         raise ValidationError("identity raw commit bytes do not reproduce HEAD")
 
 
-def _validate_identity_semantics(
+def _validate_legacy_identity_semantics(
     snapshots: dict[str, Snapshot],
     identity: dict[str, Any],
     identity_bytes: bytes,
@@ -944,6 +1559,183 @@ def _validate_identity_semantics(
         or "valid-before=" in folded_policy
     ):
         raise ValidationError("allowed-signers policy is not accepted first-release policy")
+    return fingerprint
+
+
+def _validate_identity_semantics(
+    snapshots: dict[str, Snapshot],
+    identity: dict[str, Any],
+    identity_bytes: bytes,
+    trusted: dict[str, Snapshot],
+) -> str:
+    """Authenticate the path-free identity documents and their archived bytes."""
+
+    attestation = _parse_canonical(
+        snapshots["identity_attestation"], "identity attestation"
+    )
+    transcript = _parse_canonical(
+        snapshots["identity_transcript"], "identity transcript"
+    )
+    _exact_dict(
+        attestation,
+        {"format", "schema_version", "candidate", "archives"},
+        "identity attestation",
+    )
+    if (
+        attestation["format"] != _IDENTITY_ATTESTATION_FORMAT
+        or _strict_int(
+            attestation["schema_version"], "identity attestation schema"
+        )
+        != 3
+    ):
+        raise ValidationError("identity attestation must use sanitized schema 3")
+    candidate = _exact_dict(
+        attestation["candidate"],
+        {
+            "commit_oid",
+            "tree_oid",
+            "source_manifest_sha256",
+            "cargo_lock_sha256",
+            "release_identity_sha256",
+        },
+        "identity attestation candidate",
+    )
+    if candidate != {
+        "commit_oid": identity["head_commit"],
+        "tree_oid": identity["head_tree"],
+        "source_manifest_sha256": identity[
+            "workspace_source_manifest_sha256"
+        ],
+        "cargo_lock_sha256": identity["cargo_lock_sha256"],
+        "release_identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
+    }:
+        raise ValidationError("identity attestation does not bind the candidate")
+
+    archives = _exact_dict(
+        attestation["archives"],
+        set(_IDENTITY_ARCHIVE_IDS),
+        "identity attestation archives",
+    )
+    for label in sorted(archives):
+        record = _exact_dict(
+            archives[label],
+            {"archive_id", "mode", "sha256", "size_bytes"},
+            f"identity archive {label}",
+        )
+        snapshot = snapshots[label]
+        expected_mode = _TOOL_MODE if label in {"git", "ssh_keygen"} else _DATA_MODE
+        if (
+            record["archive_id"] != _IDENTITY_ARCHIVE_IDS[label]
+            or _mode(record["mode"], f"identity archive {label} mode")
+            != expected_mode
+            or _digest(record["sha256"], f"identity archive {label} digest")
+            != snapshot.sha256
+            or _strict_int(record["size_bytes"], f"identity archive {label} size")
+            != len(snapshot.data)
+        ):
+            raise ValidationError(
+                f"identity archive {label} does not match authenticated bytes"
+            )
+    for label, trusted_label in (
+        ("git", "git"),
+        ("ssh_keygen", "ssh_keygen"),
+        ("ssh_allowed_signers", "allowed_signers"),
+        ("ssh_revocation", "revocation"),
+    ):
+        if snapshots[label].data != trusted[trusted_label].data:
+            raise ValidationError(
+                f"identity archive {label} differs from its protected input"
+            )
+    if snapshots["cargo_lock"].sha256 != identity["cargo_lock_sha256"]:
+        raise ValidationError("identity Cargo.lock archive has the wrong digest")
+    if archives["verify_transcript"]["sha256"] != snapshots[
+        "identity_transcript"
+    ].sha256:
+        raise ValidationError("identity transcript archive binding is inconsistent")
+
+    _exact_dict(
+        transcript,
+        {
+            "format",
+            "schema_version",
+            "archive_ids",
+            "candidate_commit_oid",
+            "operations",
+        },
+        "identity transcript",
+    )
+    if (
+        transcript["format"] != _IDENTITY_TRANSCRIPT_FORMAT
+        or _strict_int(transcript["schema_version"], "identity transcript schema")
+        != 3
+        or transcript["archive_ids"] != _IDENTITY_ARCHIVE_IDS
+        or transcript["candidate_commit_oid"] != identity["head_commit"]
+    ):
+        raise ValidationError("identity transcript binding is not exact")
+    operations = _exact_dict(
+        transcript["operations"],
+        {"show_signature_metadata", "verify_commit", "ssh_keygen_usage"},
+        "identity transcript operations",
+    )
+    expected_operations = {
+        "show_signature_metadata": ("git.show-signature-metadata.ssh.v1", 0),
+        "verify_commit": ("git.verify-commit.ssh.v1", 0),
+        "ssh_keygen_usage": ("ssh-keygen.usage-probe.v1", 1),
+    }
+    for label, (operation_id, expected_status) in expected_operations.items():
+        record = _exact_dict(
+            operations[label],
+            {
+                "operation_id",
+                "exit_status",
+                "stdout_sha256",
+                "stdout_size_bytes",
+                "stderr_sha256",
+                "stderr_size_bytes",
+            },
+            f"identity transcript operation {label}",
+        )
+        if (
+            record["operation_id"] != operation_id
+            or _strict_int(record["exit_status"], f"{label} exit status")
+            != expected_status
+        ):
+            raise ValidationError(f"identity transcript operation {label} is not exact")
+        for stream in ("stdout", "stderr"):
+            _digest(record[f"{stream}_sha256"], f"{label} {stream} digest")
+            size = _strict_int(
+                record[f"{stream}_size_bytes"], f"{label} {stream} size"
+            )
+            if size < 0 or size > _MAX_HELPER_OUTPUT_BYTES:
+                raise ValidationError(
+                    f"identity transcript operation {label} has invalid output size"
+                )
+
+    _validate_raw_commit(snapshots["raw_commit"].data, identity)
+    try:
+        policy_text = snapshots["ssh_allowed_signers"].data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValidationError("allowed-signers policy is not UTF-8") from error
+    active_policy = [
+        line for line in policy_text.splitlines() if line and not line.startswith("#")
+    ]
+    folded_policy = "\n".join(active_policy).casefold()
+    if (
+        not policy_text.endswith("\n")
+        or "\r" in policy_text
+        or "\0" in policy_text
+        or len(active_policy) != 1
+        or "cert-authority" in folded_policy
+        or "-cert-v01@openssh.com" in folded_policy
+        or "valid-after=" in folded_policy
+        or "valid-before=" in folded_policy
+    ):
+        raise ValidationError("allowed-signers policy is not accepted first-release policy")
+    fingerprint = os.environ.get(
+        "SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT"
+    )
+    if not isinstance(fingerprint, str) or _FINGERPRINT_RE.fullmatch(fingerprint) is None:
+        raise ValidationError("protected signer fingerprint is absent or malformed")
     return fingerprint
 
 
@@ -1090,14 +1882,15 @@ def _runner_contract(
     candidate: Path,
     runner_argument: Path,
     archives: dict[str, Snapshot],
+    checkpoint: str,
 ) -> tuple[Snapshot, dict[str, str], Path, list[AliasSnapshot], list[Snapshot]]:
     keys = {
-        "argv",
+        "archive_id",
+        "invocation",
         "closed_path_resolution",
-        "environment_without_self_digest",
+        "environment_sha256",
         "mode",
         "output",
-        "path",
         "self_digest_environment_variables",
         "sha256",
         "size_bytes",
@@ -1106,9 +1899,9 @@ def _runner_contract(
     }
     runner = _exact_dict(value, keys, "runner contract")
     expected_runner = candidate / "scripts" / "run_sumeragi_v2_release_gates.sh"
-    runner_path = _canonical_existing(Path(_string(runner["path"], "runner path")), "runner path")
     runner_argument = _canonical_existing(runner_argument, "current runner path")
-    if runner_path != expected_runner or runner_argument != runner_path:
+    runner_path = _canonical_existing(expected_runner, "candidate runner path")
+    if runner_argument != runner_path:
         raise ValidationError("current runner path does not match the bootstrap candidate runner")
     runner_mode = _mode(runner["mode"], "runner mode")
     snapshot = _read_path(
@@ -1122,27 +1915,40 @@ def _runner_contract(
         or len(snapshot.data) != _strict_int(runner["size_bytes"], "runner size")
     ):
         raise ValidationError("current runner bytes do not match the bootstrap marker")
-    expected_argv = [str(archives["bash"].path), str(runner_path), "--release"]
-    if runner["argv"] != expected_argv:
+    if runner["archive_id"] != "release-candidate.runner.v1" or runner["invocation"] != {
+        "profile": "release",
+        "operation_id": "sumeragi-v2.release.v1",
+        "arguments": ["--release"],
+        "bash_archive_id": "release-bootstrap.bash.v1",
+    }:
         raise ValidationError("bootstrap runner argv is not the exact release invocation")
     resolutions = _exact_dict(
         runner["closed_path_resolution"], {"bash", "git", "python3"}, "closed PATH resolutions"
     )
     expected_resolutions = {
-        "bash": str(archives["bash"].path),
-        "git": str(archives["git"].path),
-        "python3": str(archives["python"].path),
+        "bash": "release-bootstrap.bash.v1",
+        "git": "release-bootstrap.git.v1",
+        "python3": "release-bootstrap.python.v1",
     }
     if resolutions != expected_resolutions:
         raise ValidationError("closed PATH resolutions do not bind the trusted aliases")
     output = _exact_dict(
         runner["output"],
-        {"stderr_path", "stdout_path", "active_mode", "sealed_mode"},
+        {
+            "stderr_archive_id",
+            "stderr_name",
+            "stdout_archive_id",
+            "stdout_name",
+            "active_mode",
+            "sealed_mode",
+        },
         "runner output contract",
     )
     if output != {
-        "stderr_path": str(evidence.path / "runner-stderr.log"),
-        "stdout_path": str(evidence.path / "runner-stdout.log"),
+        "stderr_archive_id": "release-bootstrap.runner-stderr.v1",
+        "stderr_name": "runner-stderr.log",
+        "stdout_archive_id": "release-bootstrap.runner-stdout.v1",
+        "stdout_name": "runner-stdout.log",
         "active_mode": "0600",
         "sealed_mode": "0400",
     }:
@@ -1157,10 +1963,9 @@ def _runner_contract(
         ):
             raise ValidationError("active runner log metadata is not exact")
 
-    tool_directory_path = _canonical_existing(
-        Path(_string(runner["tool_directory"], "runner tool directory")),
-        "runner tool directory",
-    )
+    if runner["tool_directory"] != "runner-bin":
+        raise ValidationError("runner tool directory identifier is not exact")
+    tool_directory_path = evidence.path / "runner-bin"
     if tool_directory_path != evidence.path / "runner-bin":
         raise ValidationError("runner tool directory is not the private archive")
     tool_directory = _open_directory(
@@ -1170,6 +1975,12 @@ def _runner_contract(
     )
     tool_aliases: list[AliasSnapshot] = []
     tool_sources: list[Snapshot] = []
+    tool_archive_path = evidence.path / "runner-tools"
+    tool_archive_directory = _open_directory(
+        tool_archive_path,
+        "runner tool archive directory",
+        expected_mode=_DIRECTORY_MODE,
+    )
     try:
         manifest_snapshot = archives["runner_tool_manifest"]
         manifest = _exact_dict(
@@ -1189,7 +2000,8 @@ def _runner_contract(
         ):
             raise ValidationError("runner tool inventory is not exact")
         observed_names = set(os.listdir(tool_directory.descriptor))
-        if observed_names != set(manifest_tools):
+        archive_names = set(os.listdir(tool_archive_directory.descriptor))
+        if observed_names != set(manifest_tools) or archive_names != set(manifest_tools):
             raise ValidationError("runner tool directory inventory is not exact")
         for name in sorted(manifest_tools):
             if (
@@ -1203,56 +2015,32 @@ def _runner_contract(
             marker_record = _exact_dict(
                 runner_tools[name],
                 {
+                    "archive_id",
                     "alias_name",
-                    "alias_path",
+                    "archive_name",
+                    "mode",
                     "sha256",
                     "size_bytes",
-                    "source_mode",
-                    "source_path",
                 },
                 f"runner tool {name}",
             )
-            source_path = _canonical_existing(
-                Path(_string(marker_record["source_path"], f"runner tool {name} path")),
-                f"runner tool {name} path",
-            )
-            if (
-                manifest_record.get("path") != str(source_path)
-                or _inside(source_path, candidate)
-                or _inside(source_path, evidence.path)
-            ):
-                raise ValidationError(f"runner tool {name} source is outside its policy")
-            source_mode = _mode(
-                marker_record["source_mode"], f"runner tool {name} source mode"
-            )
-            source = _read_path(
-                source_path,
-                f"runner tool source {name}",
+            source = _read_at(
+                tool_archive_directory,
+                name,
+                f"archived runner tool {name}",
                 maximum_bytes=_MAX_TOOL_BYTES,
-                expected_mode=source_mode,
-                allowed_uids=frozenset({0, os.getuid()}),
-                expected_links=None,
+                expected_mode=_TOOL_MODE,
             )
             alias_path = tool_directory_path / name
             if (
                 marker_record["alias_name"] != name
-                or marker_record["alias_path"] != str(alias_path)
+                or marker_record["archive_id"] != f"release-runner-tool.{name}.v1"
+                or marker_record["archive_name"] != f"runner-tools/{name}"
             ):
                 raise ValidationError(f"runner tool {name} alias record is wrong")
             alias = _runner_alias(
                 alias_path, source.path, f"runner tool alias {name}"
             )
-            if source.mode & 0o022:
-                raise ValidationError(f"runner tool {name} source is writable")
-            for ancestor in (source.path.parent, *source.path.parent.parents):
-                metadata = ancestor.lstat()
-                if (
-                    stat.S_ISLNK(metadata.st_mode)
-                    or not stat.S_ISDIR(metadata.st_mode)
-                    or metadata.st_uid not in {0, os.getuid()}
-                    or stat.S_IMODE(metadata.st_mode) & 0o022
-                ):
-                    raise ValidationError(f"runner tool {name} has an unsafe ancestor")
             expected_digest = _digest(
                 manifest_record.get("sha256"), f"runner tool {name} manifest digest"
             )
@@ -1261,11 +2049,11 @@ def _runner_contract(
                 or marker_record
                 != {
                     "alias_name": name,
-                    "alias_path": str(alias_path),
+                    "archive_id": f"release-runner-tool.{name}.v1",
+                    "archive_name": f"runner-tools/{name}",
+                    "mode": "0500",
                     "sha256": source.sha256,
                     "size_bytes": len(source.data),
-                    "source_mode": f"{source.mode:04o}",
-                    "source_path": str(source.path),
                 }
             ):
                 raise ValidationError(f"runner tool {name} integrity record is wrong")
@@ -1273,9 +2061,19 @@ def _runner_contract(
             tool_sources.append(source)
     finally:
         os.close(tool_directory.descriptor)
+        os.close(tool_archive_directory.descriptor)
     if runner["self_digest_environment_variables"] != _SELF_DIGEST_VARIABLES:
         raise ValidationError("runner self-digest variables have the wrong exact contract")
-    environment = runner["environment_without_self_digest"]
+    environment = {
+        key: item
+        for key, item in os.environ.items()
+        if key not in _SELF_DIGEST_VARIABLES
+        and (
+            key in set(_BASE_ENVIRONMENT) | {"HOME", "PATH", "TMPDIR"} | _RUNNER_EXTRA_ENV
+            or key.startswith("SUMERAGI_V2_RELEASE_")
+            or key.startswith("IROHA_RELEASE_")
+        )
+    }
     if not isinstance(environment, dict) or not all(
         isinstance(key, str)
         and _ENV_NAME_RE.fullmatch(key) is not None
@@ -1284,6 +2082,13 @@ def _runner_contract(
         for key, item in environment.items()
     ):
         raise ValidationError("runner closed environment is malformed")
+    environment_digest = _digest(
+        runner["environment_sha256"], "runner environment digest"
+    )
+    if checkpoint == "entry" and hashlib.sha256(
+        _canonical_json(environment)
+    ).hexdigest() != environment_digest:
+        raise ValidationError("runner closed environment digest is not exact")
     return snapshot, environment, tool_directory_path, tool_aliases, tool_sources
 
 
@@ -1302,7 +2107,15 @@ def _environment_contract(
     expected.update(
         {
             "HOME": str(evidence.path / "home"),
-            "PATH": os.pathsep.join([str(evidence.path), str(tool_directory)]),
+            "PATH": os.pathsep.join([
+                str(evidence.path),
+                *(
+                    [str(archives["python"].path.parent)]
+                    if _FRAMEWORK_PYTHON
+                    else []
+                ),
+                str(tool_directory),
+            ]),
             "TMPDIR": str(evidence.path / "tmp"),
         }
     )
@@ -1331,6 +2144,12 @@ def _environment_contract(
     aliases.update({
         "IROHA_RELEASE_RUNTIME_HELPER": str(archives["runtime_helper"].path),
         "IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": archives["runtime_helper"].sha256,
+        "IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST": str(
+            archives["sdk_dependency_bundle_manifest"].path
+        ),
+        "IROHA_RELEASE_EXPECTED_SDK_DEPENDENCY_BUNDLE_MANIFEST_SHA256": (
+            archives["sdk_dependency_bundle_manifest"].sha256
+        ),
     })
     expected.update(policy)
     expected.update(aliases)
@@ -1380,12 +2199,19 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
         "candidate-identity.json",
         "home",
         "runner-bin",
+        "runner-tools",
         "runner-stderr.log",
         "runner-stdout.log",
         "tmp",
-        *_TRUSTED_ARCHIVE_NAMES.values(),
+        *{
+            name
+            for name in _TRUSTED_ARCHIVE_NAMES.values()
+            if "/" not in name
+        },
         *set(_IDENTITY_RECORD_NAMES.values()),
     }
+    if _FRAMEWORK_PYTHON:
+        required.update({"python-runtime", "python-runtime-input.json"})
     try:
         observed = set(os.listdir(evidence.descriptor))
     except OSError as error:
@@ -1402,7 +2228,7 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
         permitted.update(retained if "release-runner-result.json" in observed else {"release-runner"})
     if observed != permitted:
         raise ValidationError("bootstrap evidence directory has an unexpected top-level inventory")
-    for name in ("home", "tmp", "runner-bin"):
+    for name in ("home", "tmp", "runner-bin", "runner-tools"):
         item = os.stat(name, dir_fd=evidence.descriptor, follow_symlinks=False)
         if (
             not stat.S_ISDIR(item.st_mode)
@@ -1410,6 +2236,20 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
             or stat.S_IMODE(item.st_mode) != _DIRECTORY_MODE
         ):
             raise ValidationError(f"bootstrap {name} directory is not private")
+    if _FRAMEWORK_PYTHON:
+        item = os.stat(
+            "python-runtime",
+            dir_fd=evidence.descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISDIR(item.st_mode)
+            or item.st_uid != os.getuid()
+            or stat.S_IMODE(item.st_mode) != 0o500
+        ):
+            raise ValidationError(
+                "bootstrap framework Python runtime is not protected"
+            )
     for name in ("runner-stdout.log", "runner-stderr.log"):
         item = os.stat(name, dir_fd=evidence.descriptor, follow_symlinks=False)
         if (
@@ -1451,26 +2291,44 @@ def _sealed_release_root(evidence: DirectorySnapshot) -> tuple[Path, Snapshot | 
     value = _exact_dict(
         _parse_canonical(snapshot, "protected outer release result"),
         {
-            "format", "schema_version", "invocation_root", "source_root",
+            "format", "schema_version", "invocation_archive_id",
+            "source_archive_id",
             "source_manifest_sha256", "sealed_identity", "receipt", "inventory",
             "receipt_validation",
         },
         "protected outer release result",
     )
-    if value["format"] != "iroha-sumeragi-v2-retained-release-evidence" or value["schema_version"] != 1:
+    if (
+        value["format"] != "iroha-sumeragi-v2-retained-release-evidence"
+        or value["schema_version"] != 2
+        or value["invocation_archive_id"] != "release-retained.invocation.v1"
+        or value["source_archive_id"] != "release-retained.source.v1"
+    ):
         raise ValidationError("protected outer release result schema is not exact")
-    invocation = _canonical_existing(Path(_string(value["invocation_root"], "retained invocation root")), "retained invocation root")
-    source = _canonical_existing(Path(_string(value["source_root"], "retained source root")), "retained source root")
+    invocation_value = os.environ.get("IROHA_RELEASE_INVOCATION_ROOT")
+    if not isinstance(invocation_value, str) or not invocation_value:
+        raise ValidationError(
+            "path-free retained result lacks private invocation provenance"
+        )
+    invocation = _canonical_existing(
+        Path(invocation_value), "retained invocation root"
+    )
+    source = _canonical_existing(
+        invocation / "source", "retained source root"
+    )
     if source != invocation / "source" or invocation == evidence.path or invocation in evidence.path.parents or evidence.path in invocation.parents:
         raise ValidationError("retained release source is not external and exact")
     _digest(_string(value["source_manifest_sha256"], "retained source digest"), "retained source digest")
-    for field, local_path, name in (
-        ("receipt", invocation / "output" / "release" / "RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json"),
-        ("sealed_identity", invocation / "sealed-identity.json", "sealed-identity.json"),
-        ("inventory", invocation / "retained-evidence-inventory.json", "release-retained-inventory.json"),
-        ("receipt_validation", invocation / "receipt-validation-ack.json", "receipt-validation-ack.json"),
+    for field, local_path, name, archive_id in (
+        ("receipt", invocation / "output" / "release" / "RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json", "release-terminal.receipt.v1"),
+        ("sealed_identity", invocation / "sealed-identity.json", "sealed-identity.json", "release-retained.identity.v1"),
+        ("inventory", invocation / "retained-evidence-inventory.json", "release-retained-inventory.json", "release-retained.inventory.v2"),
+        ("receipt_validation", invocation / "receipt-validation-ack.json", "receipt-validation-ack.json", "release-retained.receipt-validation-ack.v3"),
     ):
-        record = _exact_dict(value[field], {"path", "sha256", "size", "protected_path"}, f"retained {field}")
+        record = _exact_dict(
+            value[field], {"archive_id", "mode", "sha256", "size_bytes"},
+            f"retained {field}",
+        )
         protected = _read_path(evidence.path / name, f"protected retained {field}", maximum_bytes=256 * 1024 * 1024, expected_mode=0o400)
         local = _read_path(
             local_path,
@@ -1479,10 +2337,10 @@ def _sealed_release_root(evidence: DirectorySnapshot) -> tuple[Path, Snapshot | 
             expected_mode=0o400,
         )
         if (
-            Path(_string(record["path"], f"retained {field} path")) != local.path
-            or Path(_string(record["protected_path"], f"retained {field} protected path")) != protected.path
+            record["archive_id"] != archive_id
+            or record["mode"] != "0400"
             or _digest(_string(record["sha256"], f"retained {field} digest"), f"retained {field} digest") != protected.sha256
-            or _strict_int(record["size"], f"retained {field} size") != protected.size
+            or _strict_int(record["size_bytes"], f"retained {field} size") != protected.size
             or local.data != protected.data
         ):
             raise ValidationError(f"protected retained {field} binding changed")
@@ -1519,16 +2377,14 @@ def validate(args: argparse.Namespace) -> None:
         if marker.sha256 != marker_digest:
             raise ValidationError("completion marker does not match its out-of-band digest")
         marker_value = _exact_dict(_parse_canonical(marker, "bootstrap completion marker"), _MARKER_KEYS, "bootstrap completion marker")
-        if _strict_int(marker_value["schema_version"], "bootstrap schema_version") != 1:
-            raise ValidationError("bootstrap completion marker must use schema 1")
+        if _strict_int(marker_value["schema_version"], "bootstrap schema_version") != 2:
+            raise ValidationError("bootstrap completion marker must use schema 2")
         if marker_value["trust_boundary"] != {
             "bootstrap_authentication": "external prerequisite",
             "release_image_and_dynamic_loader": "external prerequisite",
             "same_uid_and_trusted_ancestor_owners": True,
         }:
             raise ValidationError("bootstrap completion marker has the wrong trust boundary")
-        if marker_value["candidate_root"] != str(candidate):
-            raise ValidationError("current candidate root disagrees with the bootstrap marker")
         identity = _load_identity(marker_value["candidate_identity"], "marker candidate identity")
         identity_file = _read_at(
             evidence,
@@ -1541,7 +2397,13 @@ def validate(args: argparse.Namespace) -> None:
             marker_value["candidate_identity_sha256"], "candidate identity digest"
         ):
             raise ValidationError("candidate identity evidence disagrees with the marker")
-        archives, source_snapshots = _trusted_inputs(marker_value["trusted_inputs"], evidence, candidate)
+        (
+            archives,
+            source_snapshots,
+            framework_python_directory,
+        ) = _trusted_inputs(
+            marker_value["trusted_inputs"], evidence, candidate,
+        )
         resolved_python = Path(sys.executable).resolve(strict=True)
         if resolved_python != archives["python"].path:
             raise ValidationError("validator is not running under the archived Python")
@@ -1554,14 +2416,32 @@ def validate(args: argparse.Namespace) -> None:
             runner_tool_aliases,
             runner_tool_sources,
         ) = _runner_contract(
-            marker_value["runner"], evidence, candidate, args.runner, archives
+            marker_value["runner"], evidence, candidate, args.runner, archives,
+            args.checkpoint,
         )
         probes = _exact_dict(marker_value["trusted_execution_probes"], {"bash", "python"}, "trusted execution probes")
+        python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
+        expected_python_stdout = f"{archives['python'].path}\n".encode()
         if probes != {
             "bash": {"argv": [str(archives["bash"].path), "-c", ":"], "exit_status": 0},
             "python": {
-                "argv": [str(archives["python"].path), "-I", "-S", "-c", "raise SystemExit(0)"],
+                "argv": [
+                    str(archives["python"].path),
+                    "-I",
+                    "-S",
+                    "-c",
+                    python_probe_code,
+                ],
+                "expected_executable": (
+                    "python-runtime/bin/python3"
+                    if _FRAMEWORK_PYTHON
+                    else "python3"
+                ),
                 "exit_status": 0,
+                "stdout_sha256": hashlib.sha256(
+                    expected_python_stdout
+                ).hexdigest(),
+                "stdout_size_bytes": len(expected_python_stdout),
             },
         }:
             raise ValidationError("trusted execution probes have the wrong exact contract")
@@ -1647,6 +2527,28 @@ def validate(args: argparse.Namespace) -> None:
                     "sealed runner differs from the authenticated candidate runner"
                 )
         _inventory(evidence, args.checkpoint)
+        if _FRAMEWORK_PYTHON:
+            refreshed_inventory, refreshed_directory = (
+                _validate_framework_python_runtime(
+                    marker_value["trusted_inputs"]["python"]["runtime"],
+                    evidence,
+                )
+            )
+            if (
+                framework_python_directory is None
+                or refreshed_inventory
+                != archives["python_runtime_inventory"]
+            ):
+                os.close(refreshed_directory.descriptor)
+                raise ValidationError(
+                    "framework Python runtime changed during validation"
+                )
+            _revalidate_directory(
+                framework_python_directory,
+                "framework Python runtime",
+            )
+            os.close(framework_python_directory.descriptor)
+            framework_python_directory = refreshed_directory
         unique_records = {snapshot.path: snapshot for snapshot in records.values()}
         all_snapshots = [
             marker,
@@ -1665,9 +2567,7 @@ def validate(args: argparse.Namespace) -> None:
             all_snapshots.append(current_validator)
         if sealed_runner is not None:
             all_snapshots.append(sealed_runner)
-        source_paths = {
-            snapshot.path for snapshot in [*source_snapshots, *runner_tool_sources]
-        }
+        source_paths = {snapshot.path for snapshot in source_snapshots}
         inode_set: set[tuple[int, int]] = set()
         for snapshot in all_snapshots:
             if snapshot.path in source_paths:
@@ -1690,13 +2590,22 @@ def validate(args: argparse.Namespace) -> None:
             )
         for alias in runner_tool_aliases:
             if _runner_alias(
-                alias.path, Path(alias.target), alias.path.name
+                alias.path,
+                (alias.path.parent / alias.target).resolve(strict=True),
+                alias.path.name,
             ) != alias:
                 raise ValidationError("runner tool alias changed during validation")
         _revalidate_directory(candidate_directory, "current candidate root")
         _revalidate_directory(evidence, "bootstrap evidence directory")
+        if framework_python_directory is not None:
+            _revalidate_directory(
+                framework_python_directory,
+                "framework Python runtime",
+            )
         _inventory(evidence, args.checkpoint)
     finally:
+        if "framework_python_directory" in locals() and framework_python_directory is not None:
+            os.close(framework_python_directory.descriptor)
         os.close(evidence.descriptor)
         os.close(candidate_directory.descriptor)
 

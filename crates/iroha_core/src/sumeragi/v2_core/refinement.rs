@@ -6378,6 +6378,47 @@ pub(crate) struct ProductionInFlightFirstReleaseTransitionProjection {
     pub(crate) after: ProductionInFlightFirstReleaseStateProjection,
 }
 
+/// Lossless four-word projection of one 256-bit digest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProductionDigest256Projection {
+    pub(crate) word0: u64,
+    pub(crate) word1: u64,
+    pub(crate) word2: u64,
+    pub(crate) word3: u64,
+}
+
+/// Versioned authentication record for one checked first-release transition.
+///
+/// Production attaches this record after the dependency-free composed checker
+/// accepts the exact projection. The two digests cover the canonical fixed-width
+/// encodings of the complete abstract pre/post states; `source_identity` binds
+/// the checked relation to the reviewed TLA+ action source. Keeping the witness
+/// inside the move-only checked token makes its lifetime end at the same
+/// mutation boundary as the accepted projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProductionInFlightFirstReleaseTransitionWitnessV1 {
+    pub(crate) schema_version: u16,
+    pub(crate) action: u8,
+    pub(crate) actor: u128,
+    pub(crate) target: u128,
+    pub(crate) before_state_digest: ProductionDigest256Projection,
+    pub(crate) after_state_digest: ProductionDigest256Projection,
+    pub(crate) source_identity: ProductionDigest256Projection,
+}
+
+macro_rules! production_in_flight_first_release_witness_binding_body {
+    ($projection:expr, $witness:expr) => {{
+        $witness.schema_version == 1u16
+            && $witness.action == $projection.action
+            && $witness.actor == $projection.actor
+            && $witness.target == $projection.target
+            && $witness.source_identity.word0 == 0x9b9babea9e018b44u64
+            && $witness.source_identity.word1 == 0xfb739f96b2690f17u64
+            && $witness.source_identity.word2 == 0xe1f8d08aa23a38f4u64
+            && $witness.source_identity.word3 == 0x2a16ecef1e858f7du64
+    }};
+}
+
 /// Reverse ownership classification for a terminal Commit or release state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[allow(dead_code)] // Consumed by the verification harness and refinement tests.
@@ -6398,9 +6439,17 @@ pub(crate) struct ProductionInFlightFirstReleaseTerminalOwnerProjection {
 #[derive(Debug, PartialEq, Eq)]
 pub struct CheckedProductionTransition<P> {
     projection: P,
+    first_release_witness: Option<ProductionInFlightFirstReleaseTransitionWitnessV1>,
 }
 
 impl<P> CheckedProductionTransition<P> {
+    const fn unwitnessed(projection: P) -> Self {
+        Self {
+            projection,
+            first_release_witness: None,
+        }
+    }
+
     /// Borrow the exact accepted projection without consuming its authority.
     ///
     /// This supports deterministic composition checks while retaining the
@@ -6408,6 +6457,28 @@ impl<P> CheckedProductionTransition<P> {
     #[must_use]
     pub(crate) const fn accepted_projection(&self) -> &P {
         &self.projection
+    }
+
+    /// Bind the production-authenticated first-release witness to this token.
+    ///
+    /// This is crate-private so only the production wrapper around the shared
+    /// executable checker can attach a witness. Test and Verus instantiations of
+    /// the dependency-free checker deliberately produce an unwitnessed token.
+    #[must_use]
+    pub(super) fn with_first_release_witness(
+        mut self,
+        witness: ProductionInFlightFirstReleaseTransitionWitnessV1,
+    ) -> Self {
+        self.first_release_witness = Some(witness);
+        self
+    }
+
+    /// Borrow the versioned witness attached by the production checker.
+    #[must_use]
+    pub(crate) const fn first_release_witness(
+        &self,
+    ) -> Option<&ProductionInFlightFirstReleaseTransitionWitnessV1> {
+        self.first_release_witness.as_ref()
     }
 
     /// Consume the checked token and recover the exact accepted projection.
@@ -8424,9 +8495,9 @@ pub(crate) fn check_production_enter_view_effective_lock_transition(
     enter_view: EnterViewProjection,
 ) -> Option<CheckedProductionTransition<(EffectiveLockTraceProjection, EnterViewProjection)>> {
     if production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view) {
-        Some(CheckedProductionTransition {
-            projection: (trace, enter_view),
-        })
+        Some(CheckedProductionTransition::unwitnessed((
+            trace, enter_view,
+        )))
     } else {
         None
     }
@@ -8438,7 +8509,7 @@ pub(crate) fn check_production_body_ownership_effective_lock_transition(
     projection: EffectiveLockTraceProjection,
 ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
     if production_body_ownership_preserves_effective_lock_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8450,7 +8521,7 @@ pub(crate) fn check_production_body_capacity_retirement_effective_lock_transitio
     projection: EffectiveLockTraceProjection,
 ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
     if production_body_capacity_retirement_preserves_effective_lock_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8462,7 +8533,7 @@ pub(crate) fn check_production_body_service_effective_lock_transition(
     projection: EffectiveLockTraceProjection,
 ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
     if production_body_service_refines_async_fairness_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8637,6 +8708,15 @@ pub(crate) const fn production_in_flight_first_release_transition_kernel(
     production_in_flight_first_release_transition_body!(projection)
 }
 
+/// Validate the version, exact parameters, and reviewed model-source identity
+/// carried by one first-release transition witness.
+pub(crate) const fn production_in_flight_first_release_witness_binding_kernel(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    witness: ProductionInFlightFirstReleaseTransitionWitnessV1,
+) -> bool {
+    production_in_flight_first_release_witness_binding_body!(projection, witness)
+}
+
 /// Extract the sole terminal economic owner from a valid composed state.
 ///
 /// Commit cleanup leaves the effect owned only by canonical WSV. Ordered and
@@ -8680,7 +8760,7 @@ pub(crate) fn check_production_applied_successor_transition(
     projection: ProductionAppliedSuccessorTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionAppliedSuccessorTraceProjection>> {
     if production_applied_successor_trace_refines_indexed_activation_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8693,7 +8773,7 @@ pub(crate) fn check_production_recovered_successor_transition(
     projection: ProductionRecoveredSuccessorTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionRecoveredSuccessorTraceProjection>> {
     if production_recovered_successor_trace_refines_indexed_activation_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8705,7 +8785,7 @@ pub(crate) fn check_production_successor_startup_lifecycle_transition(
     projection: ProductionSuccessorStartupLifecycleProjection,
 ) -> Option<CheckedProductionTransition<ProductionSuccessorStartupLifecycleProjection>> {
     if production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8717,7 +8797,7 @@ pub(crate) fn check_production_historical_certificate_transition(
     projection: ProductionHistoricalCertificateTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionHistoricalCertificateTraceProjection>> {
     if production_historical_certificate_trace_refines_indexed_async_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8729,7 +8809,7 @@ pub(crate) fn check_production_historical_body_pipeline_transition(
     projection: ProductionHistoricalBodyPipelineTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionHistoricalBodyPipelineTraceProjection>> {
     if production_historical_body_pipeline_trace_refines_indexed_async_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8741,7 +8821,7 @@ pub(crate) fn check_production_durable_intent_transition(
     projection: ProductionDurableIntentTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionDurableIntentTraceProjection>> {
     if production_durable_intent_trace_refines_progress_witness_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8753,7 +8833,7 @@ pub(crate) fn check_production_decision_recovery_transition(
     projection: ProductionDecisionRecoveryTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionDecisionRecoveryTraceProjection>> {
     if production_decision_trace_refines_recovery_witness_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8765,7 +8845,7 @@ pub(crate) fn check_production_scheduler_transition(
     projection: ProductionSchedulerTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionSchedulerTraceProjection>> {
     if production_scheduler_trace_refines_protected_ownership_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8777,7 +8857,7 @@ pub(crate) fn check_production_ingress_transition(
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionIngressIdentityAndClassTraceProjection>> {
     if production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8792,7 +8872,7 @@ pub(crate) fn check_production_ingress_reservation_materialization_transition(
 {
     if production_ingress_reservation_materialization_refines_protected_ownership_kernel(projection)
     {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8805,7 +8885,7 @@ pub(crate) fn check_production_effect_to_candidate_transition(
     projection: ProductionEffectToCandidateTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionEffectToCandidateTraceProjection>> {
     if production_effect_to_candidate_refines_async_ownership_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8818,7 +8898,7 @@ pub(crate) fn check_production_leader_wire_admission_transition(
     projection: ProductionLeaderWireAdmissionTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionLeaderWireAdmissionTraceProjection>> {
     if production_leader_wire_admission_refines_lifecycle_ownership_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8830,7 +8910,7 @@ pub fn check_production_two_stage_relay_retry_transition(
     projection: ProductionTwoStageRelayRetryTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionTwoStageRelayRetryTraceProjection>> {
     if production_two_stage_relay_retry_trace_refines_source_fairness_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8842,7 +8922,7 @@ pub(crate) fn check_production_reliable_flush_worker_transition(
     projection: ProductionReliableFlushTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionReliableFlushTraceProjection>> {
     if production_reliable_flush_trace_refines_outbound_ownership_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8854,7 +8934,7 @@ pub(crate) fn check_production_reliable_flush_application_transition(
     projection: ProductionReliableFlushApplicationProjection,
 ) -> Option<CheckedProductionTransition<ProductionReliableFlushApplicationProjection>> {
     if production_reliable_flush_application_refines_source_lane_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8873,9 +8953,10 @@ pub(crate) fn check_production_reliable_flush_link_transition(
     )>,
 > {
     if production_reliable_flush_two_phase_link_kernel(worker, application) {
-        Some(CheckedProductionTransition {
-            projection: (worker, application),
-        })
+        Some(CheckedProductionTransition::unwitnessed((
+            worker,
+            application,
+        )))
     } else {
         None
     }
@@ -8887,7 +8968,7 @@ pub(crate) fn check_production_application_transition(
     projection: ProductionApplicationTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionApplicationTraceProjection>> {
     if production_application_trace_refines_decision_completion_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8901,7 +8982,7 @@ pub(crate) fn check_production_terminal_application_transition(
     CheckedProductionTransition<ProductionTerminalApplicationWithoutSuccessorActivationProjection>,
 > {
     if production_terminal_application_without_successor_activation_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8913,7 +8994,7 @@ pub(crate) fn check_production_in_flight_reservation_transition(
     projection: ProductionInFlightReservationTransitionProjection,
 ) -> Option<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>> {
     if production_in_flight_reservation_transition_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }
@@ -8926,7 +9007,7 @@ pub(crate) fn check_production_in_flight_first_release_transition(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 ) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
     if production_in_flight_first_release_transition_kernel(projection) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }

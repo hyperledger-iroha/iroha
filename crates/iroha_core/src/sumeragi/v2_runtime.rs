@@ -82,6 +82,7 @@ use super::{
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
         LocalBodyPreIntentReplaySealV1, LocalValidateReplayEvidenceV1,
+        RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
         RecoveredWalVoteReplayEvidenceV1, RemoteProposalFetchReplayEvidenceV1,
     },
 };
@@ -1764,6 +1765,23 @@ fn runtime_effect_identity_hash(effect_kind: u8, semantic_identity: &[u8]) -> ir
     iroha_crypto::Hash::new(projection)
 }
 
+/// Compare one complete adapter effect with a closed lifecycle digest.
+///
+/// This fixed oracle lets a dedicated lifecycle executor reauthenticate an
+/// exact carrier-derived effect without releasing either the runtime's hash or
+/// a generic effect-identity constructor.
+pub(in crate::sumeragi) fn adapter_effect_matches_lifecycle_digest(
+    effect: &AdapterEffect,
+    digest: &[u8; 32],
+) -> bool {
+    runtime_effect_identity_hash(
+        production_adapter_effect_kind(effect),
+        &production_adapter_effect_semantic_identity(effect),
+    )
+    .as_ref()
+        == digest
+}
+
 #[cfg(test)]
 /// Hash one adapter effect through the production semantic-identity projection.
 pub(in crate::sumeragi) fn adapter_effect_identity_for_test(
@@ -2744,6 +2762,16 @@ pub(in crate::sumeragi) struct RecoveredWalCandidateProjectionPermit {
     _linearity: RecoveredWalCandidateProjectionLinearity,
 }
 
+/// Runtime-private one-shot permit for consuming one sealed follow-on WAL Vote.
+///
+/// The recovered seal owns the exact WAL identity, unsigned Sign effect, replay
+/// evidence, and validated body receipt. Only this runtime module can mint the
+/// permit which rejoins those constituents to their reconstructed pending
+/// binding and canonical standalone lifecycle admission.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1 {
+    _linearity: RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1,
+}
+
 /// Runtime-private one-shot permit for a recovered-frame pending owner.
 ///
 /// The constructor stays in this module. The recovered control token consumes
@@ -2802,6 +2830,38 @@ impl RecoveredWalCandidateProjectionPermit {
             _linearity: RecoveredWalCandidateProjectionLinearity,
         }
     }
+}
+
+struct RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1;
+
+impl Drop for RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1,
+        }
+    }
+}
+
+/// Consume one adapter-authenticated follow-on WAL Vote into its complete
+/// replay-authorized standalone Sign projection.
+///
+/// Failure returns the intact affine seal. No effect, pending owner, WAL
+/// identity, body receipt, or candidate constituent crosses this boundary.
+#[allow(clippy::result_large_err)]
+pub(in crate::sumeragi) fn project_recovered_lifecycle_next_wal_vote_candidate(
+    verified: &VerifiedHeightContext,
+    seal: RecoveredLifecycleNextWalVoteSealV1,
+) -> Result<RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1>
+{
+    seal.into_candidate_projection(
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1::new(),
+        RecoveredWalCandidateProjectionPermit::new(),
+        verified,
+    )
 }
 
 /// Consume one adapter-authenticated recovered control token into its exact
@@ -2998,6 +3058,25 @@ impl RecoveredWalVoteSuccessor {
     /// Borrow only the child effect needed by closed registry installation.
     pub(in crate::sumeragi) const fn installed_child_effect(&self) -> &AdapterEffect {
         &self.effect
+    }
+
+    /// Derive the mandatory signed Broadcast binding without releasing the
+    /// recovered vote's pending owner or WAL identity.
+    pub(in crate::sumeragi) fn project_signed_broadcast_successor(
+        &self,
+        broadcast: &AdapterEffect,
+    ) -> Option<PendingRuntimeEffectBinding> {
+        self.pending
+            .project_signed_broadcast_successor(&self.effect, broadcast)
+    }
+
+    /// Recheck one retained signed-Broadcast binding without releasing the vote owner.
+    pub(in crate::sumeragi) fn signed_broadcast_successor_is_exact(
+        &self,
+        broadcast: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.project_signed_broadcast_successor(broadcast).as_ref() == Some(pending)
     }
 }
 
@@ -3245,6 +3324,30 @@ impl PendingRuntimeEffectBinding {
         Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
     }
 
+    /// Mint the unique pending owner of one adapter-sealed recovered phase Vote.
+    ///
+    /// The permit is minted only by the consuming runtime projection. A raw
+    /// locator or decoded replay envelope therefore cannot use this seam to
+    /// manufacture an independently executable Sign owner.
+    pub(in crate::sumeragi) fn from_exact_recovered_next_wal_vote(
+        _permit: &RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        wal_identity: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        if !wal_identity.is_exact()
+            || !matches!(
+                effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Vote(_),
+                    ..
+                }
+            )
+        {
+            return None;
+        }
+        Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
+    }
+
     /// Mint the unique pending owner of one exact Decision-owned Fetch.
     pub(in crate::sumeragi) fn from_exact_recovered_wal_decision_fetch(
         _permit: RecoveredWalDecisionFetchPendingMintPermit,
@@ -3372,6 +3475,87 @@ impl PendingRuntimeEffectBinding {
     /// complete concrete effect.
     pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
         self.validate_exact(effect)
+    }
+
+    /// Project the mandatory signed Broadcast successor of one exact Sign.
+    ///
+    /// The signed wire payload must be byte-for-byte the predecessor request
+    /// with only its signature field filled. Broadcast owns no independent
+    /// candidate statement, but it retains the immutable causal lifecycle key
+    /// so its replay row cannot be substituted by an unrelated signed message.
+    pub(in crate::sumeragi) fn project_signed_broadcast_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::Sign { request, .. } = predecessor else {
+            return None;
+        };
+        let AdapterEffect::Broadcast(message) = successor else {
+            return None;
+        };
+        if !self.validate_exact(predecessor) || message.validate_version().is_err() {
+            return None;
+        }
+        let signed_request_matches = match (request, &message.payload) {
+            (
+                super::v2::SignRequest::Proposal(unsigned),
+                wire::ConsensusMessageV2Payload::Proposal(signed),
+            ) => {
+                let mut projected = signed.clone();
+                let signature_is_present = !projected.signature.is_empty();
+                projected.signature.clear();
+                signature_is_present && &projected == unsigned
+            }
+            (
+                super::v2::SignRequest::Vote(unsigned),
+                wire::ConsensusMessageV2Payload::Vote(signed),
+            ) => {
+                let mut projected = signed.clone();
+                let signature_is_present = !projected.signature.is_empty();
+                projected.signature.clear();
+                signature_is_present && &projected == unsigned
+            }
+            (
+                super::v2::SignRequest::TimeoutVote(unsigned),
+                wire::ConsensusMessageV2Payload::TimeoutVote(signed),
+            ) => {
+                let mut projected = signed.clone();
+                let signature_is_present = !projected.signature.is_empty();
+                projected.signature.clear();
+                signature_is_present && &projected == unsigned
+            }
+            _ => false,
+        };
+        if !signed_request_matches {
+            return None;
+        }
+
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            RUNTIME_CANDIDATE_KIND_NONE,
+            None,
+            None,
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
+            candidate_statement: None,
+            candidate_semantic_identity: None,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
     }
 
     /// Project the exact `StoreBody` successor of one certified Fetch without
@@ -17052,6 +17236,41 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 }
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Freeze the serialized shell around one lifecycle-owned signature.
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
+        &mut self,
+        authority: super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1,
+    ) -> Result<super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'_>, AdapterError>
+    {
+        if self.fail_closed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        self.driver
+            .prepare_recovered_lifecycle_sign_completion(authority)
+    }
+
+    /// Freeze the serialized shell around one recovered Decision Store preview.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_store(
+        &mut self,
+        authority: super::v2_lifecycle_coordinator::RecoveredDecisionFetchStoreAdapterAuthorityV1,
+    ) -> Result<super::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'_>, AdapterError> {
+        if self.fail_closed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::RecoveredDecisionFetchStoreMismatch);
+        }
+        self.driver
+            .prepare_recovered_decision_fetch_store(authority)
+    }
+
     /// Freeze the serialized shell around one registry-owned Apply completion.
     pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(
         &mut self,

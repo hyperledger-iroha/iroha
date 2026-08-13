@@ -50,13 +50,19 @@ COMMON_ROOT_INPUTS = (
     "scripts/run_mobile_hermetic_command.py",
 )
 APPLE_ROOT_INPUTS = (
+    "crates/connect_norito_bridge/NoritoBridge.podspec.template",
+    "crates/connect_norito_bridge/RELEASE_NOTES.md",
+    "IrohaSwift/IrohaSwift.podspec",
     "IrohaSwift/Package.swift",
     "IrohaSwift/Package.resolved",
     "IrohaSwift/Sources/IrohaSwift",
     "IrohaSwift/Sources/IrohaSwiftMobileTransports",
+    "IrohaSwift/VERSION",
     "scripts/archive_norito_xcframework.py",
     "scripts/build_norito_xcframework.sh",
     "scripts/exec_with_file_lock.py",
+    "scripts/package_mobile_sdk_artifacts.sh",
+    "scripts/render_norito_bridge_podspec.py",
     "scripts/update_norito_bridge_swift_pins.py",
     "scripts/validate_norito_bridge_xcframework.py",
 )

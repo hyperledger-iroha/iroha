@@ -3210,7 +3210,9 @@ mod tests {
                 "#[path = \"phase23_rns_link_q_pcs_v2_soundness.rs\"]\nmod v2_soundness;"
             )
         );
-        assert!(v2_soundness.lines().count() <= 1_200);
+        // The private move-only B1--B17 prover prerequisite owns the matching
+        // transcript bridge; it does not widen any verifier or release gate.
+        assert!(v2_soundness.lines().count() <= 1_450);
         assert!(v2_soundness_tests.lines().count() <= 1_200);
         assert!(v2_verifier.lines().count() <= 1_200);
         assert!(v2_verifier_tests.lines().count() <= 1_200);

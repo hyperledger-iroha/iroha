@@ -444,7 +444,15 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
     assert "pgrep" not in policy
     assert "/proc/" not in policy
     assert "process_snapshot" not in policy
-    assert 'if "$IROHA_RELEASE_CARGO_BIN" "$@"; then' in policy
+    scoped_cargo_start = policy.index("_run_cargo_with_scoped_lock() {")
+    scoped_cargo_end = policy.index(
+        "\nrequire_external_private_directory() {", scoped_cargo_start
+    )
+    scoped_cargo = policy[scoped_cargo_start:scoped_cargo_end]
+    assert scoped_cargo.count("_require_cargo_configuration_unchanged") == 3
+    assert 'if "$IROHA_RELEASE_CARGO_BIN" "$@"; then' in scoped_cargo
+    assert "acquire_invocation_cargo_lock || return $?" in scoped_cargo
+    assert "release_invocation_cargo_lock || return $?" in scoped_cargo
     assert (
         '( _run_cargo_with_scoped_lock "$label" "${pinned_arguments[@]}" )'
         in policy

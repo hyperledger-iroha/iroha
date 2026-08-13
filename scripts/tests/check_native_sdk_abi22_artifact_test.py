@@ -72,10 +72,14 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         "scripts/exec_with_file_lock.py",
         "scripts/norito_bridge_source_seal.py",
         "scripts/package_mobile_sdk_artifacts.sh",
+        "scripts/render_norito_bridge_podspec.py",
         "scripts/deploy_localnet.sh",
         "scripts/run_mobile_hermetic_command.py",
         "scripts/tests/deploy_localnet_test.py",
         "scripts/tests/mobile_sdk_python312_contract.sh",
+        "scripts/tests/norito_bridge_source_seal_test.py",
+        "scripts/tests/package_mobile_sdk_artifacts_test.py",
+        "scripts/tests/render_norito_bridge_podspec_test.py",
     },
     "sorafs-orchestrator-sdk.yml": {
         ".cargo/**",
@@ -1447,11 +1451,18 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     )
     assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 5" in kotlin_signer
     assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 5" in java_signer
-    roadmap = read("roadmap.md")
-    normalized_roadmap = " ".join(roadmap.split())
-    assert "`NativeSignerBridge` JNI contract revision 5" in normalized_roadmap
-    assert "`NativeSignerBridge` JNI contract revision 1" not in normalized_roadmap
-    assert "`NativeSignerBridge` JNI contract revision 2" not in normalized_roadmap
+    for relative in (
+        "roadmap.md",
+        "specs/sorafs/v1_closure_ledger.md",
+        "specs/sorafs_reference_sdk_plan.md",
+    ):
+        normalized = " ".join(read(relative).replace("-", " ").split())
+        assert "`NativeSignerBridge` JNI contract revision 5" in normalized
+        for retired_revision in range(1, 5):
+            assert (
+                f"`NativeSignerBridge` JNI contract revision {retired_revision}"
+                not in normalized
+            )
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in kotlin_signer
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in java_signer
     assert (

@@ -505,7 +505,8 @@ fn decode_transaction_receipt_json_roundtrip() {
     };
     let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
     let bytes = to_bytes(&receipt).expect("encode receipt");
-    let decoded = decode_transaction_receipt_json_py(&bytes).expect("decode receipt json");
+    let decoded = sorafs_orderbook_submission::decode_transaction_receipt_json_py(&bytes)
+        .expect("decode receipt json");
     let expected = json::to_json(&receipt).expect("serialize receipt");
     assert_eq!(decoded, expected);
 }

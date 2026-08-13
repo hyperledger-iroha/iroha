@@ -23,7 +23,159 @@ _MAX_CARGO_CACHE_INPUT_FILE_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_CARGO_CACHE_INPUT_TOTAL_BYTES = 64 * 1024 * 1024 * 1024
 _MAX_CARGO_CACHE_DEPTH = 128
 _MAX_CARGO_CACHE_PATH_BYTES = 4096
-_RECEIPT_VALIDATION_OPTION_NAMES_SHA256 = "deea2d469c8fe65392527c24562b64fa728c21f6ee9f679d595e09304e8b56b1"
+_RECEIPT_VALIDATION_OPTION_ORDER = (
+    "--candidate-identity",
+    "--sealed-identity",
+    "--release-root",
+    "--bootstrap-completion",
+    "--bootstrap-evidence-dir",
+    "--bootstrap-identity",
+    "--bootstrap-attestation",
+    "--bootstrap-transcript",
+    "--expected-bootstrap-completion-sha256",
+    "--bootstrap-candidate-root",
+    "--bootstrap-runner",
+    "--signature-attestation",
+    "--signature-transcript",
+    "--signature-raw-commit",
+    "--signature-cargo-lock",
+    "--signature-allowed-signers",
+    "--signature-revocation",
+    "--signature-git",
+    "--signature-ssh-keygen",
+    "--expected-git-sha256",
+    "--expected-ssh-keygen-sha256",
+    "--expected-allowed-signers-sha256",
+    "--expected-revocation-sha256",
+    "--expected-signer-fingerprint",
+    "--corridor-completion",
+    "--formal-completion",
+    "--seed-completion",
+    "--chaos-completion",
+    "--taira-completion",
+    "--g4p-completion",
+    "--g12-seed-completion",
+    "--g12-fault-soak-completion",
+    "--scaling-evidence-manifest",
+    "--sdk-dependency-archive",
+    "--sdk-dependency-input-inventory",
+    "--sdk-dependency-final-work-inventory",
+    "--expected-scaling-trial-harness-sha256",
+    "--expected-scaling-configuration-sha256",
+    "--expected-scaling-irohad-sha256",
+    "--expected-scaling-iroha-cli-sha256",
+    "--repository-root",
+    "--output",
+    "--verify-existing",
+    "--validation-ack",
+    "--source-manifest-sha256",
+)
+_RECEIPT_VALIDATION_PATH_OPTIONS = frozenset(
+    {
+        "--candidate-identity",
+        "--sealed-identity",
+        "--release-root",
+        "--bootstrap-completion",
+        "--bootstrap-evidence-dir",
+        "--bootstrap-identity",
+        "--bootstrap-attestation",
+        "--bootstrap-transcript",
+        "--bootstrap-candidate-root",
+        "--bootstrap-runner",
+        "--signature-attestation",
+        "--signature-transcript",
+        "--signature-raw-commit",
+        "--signature-cargo-lock",
+        "--signature-allowed-signers",
+        "--signature-revocation",
+        "--signature-git",
+        "--signature-ssh-keygen",
+        "--corridor-completion",
+        "--formal-completion",
+        "--seed-completion",
+        "--chaos-completion",
+        "--taira-completion",
+        "--g4p-completion",
+        "--g12-seed-completion",
+        "--g12-fault-soak-completion",
+        "--scaling-evidence-manifest",
+        "--sdk-dependency-archive",
+        "--sdk-dependency-input-inventory",
+        "--sdk-dependency-final-work-inventory",
+        "--repository-root",
+        "--output",
+        "--validation-ack",
+    }
+)
+
+
+def _receipt_validation_invocation_value_sha256(
+    kind: str, value: str | bool,
+) -> str:
+    payload = json.dumps(
+        {"kind": kind, "value": value},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _receipt_validation_invocation_binding(arguments: list[str]) -> dict[str, Any]:
+    """Bind the exact ordered validator invocation without disclosing values."""
+
+    bindings: list[dict[str, str]] = []
+    cursor = 0
+    for expected_name in _RECEIPT_VALIDATION_OPTION_ORDER:
+        if cursor >= len(arguments) or arguments[cursor] != expected_name:
+            raise ReceiptError("receipt validation argument order is not exact")
+        cursor += 1
+        if expected_name == "--verify-existing":
+            kind = "flag"
+            normalized: str | bool = True
+        else:
+            if cursor >= len(arguments):
+                raise ReceiptError("receipt validation argument value is absent")
+            raw_value = arguments[cursor]
+            cursor += 1
+            if expected_name in _RECEIPT_VALIDATION_PATH_OPTIONS:
+                kind = "path"
+                normalized = os.path.abspath(os.path.normpath(raw_value))
+                if raw_value != normalized:
+                    raise ReceiptError(
+                        "receipt validation path argument is not canonical"
+                    )
+            else:
+                kind = "text"
+                normalized = raw_value
+        bindings.append(
+            {
+                "name": expected_name,
+                "value_kind": kind,
+                "normalized_value_sha256": (
+                    _receipt_validation_invocation_value_sha256(kind, normalized)
+                ),
+            }
+        )
+    if cursor != len(arguments):
+        raise ReceiptError("receipt validation invocation has trailing arguments")
+    invocation = {
+        "profile": "release",
+        "operation": "verify-existing-and-ack",
+        "python_flags": ["-I", "-S"],
+        "validator": "protected:validate-receipt.py",
+        "ordered_options": bindings,
+    }
+    payload = json.dumps(
+        invocation,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {
+        **invocation,
+        "invocation_sha256": hashlib.sha256(payload).hexdigest(),
+    }
 
 
 def _cargo_cache_relative_path(value: Any, name: str) -> PurePosixPath:
@@ -584,15 +736,42 @@ def _validate_cargo_cache_input(
             raise ReceiptError("Cargo cache input inventory omits a declared root")
     if input_file_bytes != declared_file_bytes:
         raise ReceiptError("Cargo cache input byte count does not match its records")
+    def sanitized_file(
+        snapshot: EvidenceSnapshot | PathContract, archive_id: str
+    ) -> dict[str, Any]:
+        return {
+            "archive_id": archive_id,
+            "mode": f"{snapshot.mode:04o}",
+            "sha256": snapshot.sha256,
+            "size_bytes": snapshot.size,
+        }
+
     return {
-        "schema_version": 1,
-        "inventory": _snapshot_receipt_artifact(inventory),
-        "final_inventory": _snapshot_receipt_artifact(final_inventory),
-        "runtime_inventory": _snapshot_receipt_artifact(runtime_inventory),
-        "runtime_environment": {name: fields[name] for name in expected_runtime},
-        "runtime_directories": runtime_directories,
+        "schema_version": 2,
+        "inventory": sanitized_file(
+            inventory, "release-cargo-cache.input-inventory.v1"
+        ),
+        "final_inventory": sanitized_file(
+            final_inventory, "release-cargo-cache.final-inventory.v1"
+        ),
+        "runtime_inventory": sanitized_file(
+            runtime_inventory, "release-runtime.inventory.v1"
+        ),
+        "runtime_environment_sha256": hashlib.sha256(
+            _canonical_json({name: fields[name] for name in expected_runtime})
+        ).hexdigest(),
+        "runtime_directories": {
+            name: {
+                "archive_id": f"release-runtime.directory.{name}.v1",
+                "mode": record["mode"],
+            }
+            for name, record in sorted(runtime_directories.items())
+        },
+        "cargo_home": {
+            "archive_id": "release-cargo-cache.home.v1",
+            "mode": f"{stat.S_IMODE(cargo_home.lstat().st_mode):04o}",
+        },
         "source_cargo_home_disclosure": "withheld",
-        "cargo_home_path": str(cargo_home),
         "input_root_count": len(roots),
         "input_record_count": len(records),
         "input_file_count": input_file_count,
@@ -889,38 +1068,37 @@ def _publish_receipt_validation_ack(
         validator_path, "archived receipt validator", maximum_bytes=16 * 1024 * 1024,
     )
     stdout = f"Sumeragi v2 aggregate release receipt verified: {receipt_path}\n".encode()
-    option_names = sorted(argument for argument in sys.argv[1:] if argument.startswith("--"))
-    if len(option_names) != len(set(option_names)) or hashlib.sha256("\n".join(option_names).encode()).hexdigest() != _RECEIPT_VALIDATION_OPTION_NAMES_SHA256:
-        raise ReceiptError("receipt validation argument option contract is not exact")
+    if sys.flags.isolated != 1 or sys.flags.no_site != 1:
+        raise ReceiptError("receipt validation Python flags are not exact")
+    invocation_binding = _receipt_validation_invocation_binding(sys.argv[1:])
     value = {
         "format": "iroha-sumeragi-v2-receipt-validation-ack",
-        "schema_version": 1,
+        "schema_version": 3,
         "profile": "release",
-        "invocation_root": str(invocation_root),
         "sealed_source": {
-            "path": str(release_root), "manifest_sha256": source_manifest_sha256,
+            "archive_id": "release-retained.source.v1",
+            "manifest_sha256": source_manifest_sha256,
         },
         "receipt": {
-            "path": str(receipt.path), "sha256": receipt.sha256,
-            "size": receipt.size,
+            "archive_id": "release-terminal.receipt.v1",
+            "mode": f"{receipt.mode:04o}",
+            "sha256": receipt.sha256,
+            "size_bytes": receipt.size,
         },
         "validator": {
-            "path": str(validator.path), "sha256": validator.sha256,
+            "archive_id": "release-bootstrap.receipt-validator.v1",
+            "sha256": validator.sha256,
             "bootstrap_completion_sha256": bootstrap_completion_sha256,
         },
-        "argv": {
-            "profile": "release", "python_flags": ["-I", "-S"],
-            "validator": "protected:validate-receipt.py",
-            "operation": "verify-existing-and-ack",
-            "option_names_sha256": _RECEIPT_VALIDATION_OPTION_NAMES_SHA256,
-        },
+        "invocation": invocation_binding,
         "exit_status": 0,
         "stdout": {
-            "base64": base64.b64encode(stdout).decode(),
-            "sha256": hashlib.sha256(stdout).hexdigest(), "size": len(stdout),
+            "sha256": hashlib.sha256(stdout).hexdigest(),
+            "size_bytes": len(stdout),
         },
         "stderr": {
-            "base64": "", "sha256": hashlib.sha256(b"").hexdigest(), "size": 0,
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "size_bytes": 0,
         },
     }
     _publish_terminal_receipt(ack_path, _canonical_json(value), revalidate=revalidate)
@@ -937,13 +1115,16 @@ def _receipt_validation_ack(
 ) -> None:
     if args.validation_ack is None or args.source_manifest_sha256 is None:
         raise ReceiptError("receipt verification lacks its acknowledgment binding")
+    mutable_directory = frozenset({args.validation_ack.parent})
     _publish_receipt_validation_ack(
         ack_path=args.validation_ack,
         receipt_path=args.output,
         release_root=args.release_root,
         source_manifest_sha256=args.source_manifest_sha256,
         bootstrap_completion_sha256=args.expected_bootstrap_completion_sha256,
-        revalidate=lambda: _revalidate_receipt_inputs(snapshots),
+        revalidate=lambda: _revalidate_receipt_inputs(
+            snapshots, ignored_directories=mutable_directory,
+        ),
     )
 
 
@@ -1135,7 +1316,7 @@ def _corridor_legs(
             (
                 "preflight-source-seal",
                 "pytest",
-                30,
+                78,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/workspace_source_manifest_test.py "
                 "pytests/scripts/seal_workspace_source_test.py",
@@ -1185,7 +1366,7 @@ def _corridor_legs(
             (
                 "preflight-release-identity",
                 "pytest",
-                68,
+                75,
                 "SUMERAGI_V2_TEST_RELOCATABLE_SSH_KEYGEN_BIN="
                 "$IROHA_RELEASE_SSH_KEYGEN_BIN PYTHONDONTWRITEBYTECODE=1 "
                 "PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider "
@@ -1194,7 +1375,7 @@ def _corridor_legs(
             (
                 "preflight-release-bootstrap",
                 "pytest",
-                257,
+                258,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_bootstrap_test.py "
@@ -1203,7 +1384,7 @@ def _corridor_legs(
             (
                 "preflight-release-bootstrap-validator",
                 "pytest",
-                37,
+                44,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_bootstrap_validator_test.py",
@@ -1211,7 +1392,7 @@ def _corridor_legs(
             (
                 "preflight-release-receipt",
                 "pytest",
-                363,
+                367,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
@@ -1264,7 +1445,7 @@ def _corridor_legs(
             (
                 "preflight-formal-launcher",
                 "pytest",
-                26,
+                27,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_formal_release_test.py",
             ),

@@ -29,7 +29,6 @@ def _load_recursive_reviewed_rust_source_module() -> Any:
     return module
 
 _RECURSIVE_REVIEWED_RUST_SOURCE = _load_recursive_reviewed_rust_source_module()
-
 def _retired_sidecar_gate_ttl_source_errors(
     path: Path,
     source: str,
@@ -355,6 +354,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "user/torii_peer_geo.rs",
         "user/torii_soranet_privacy_ingest.rs",
         "user/torii_tx_history.rs",
+        "user/sorafs_moderation_query_bound_tests.rs",
         "user/governance_dag_head_mode_tests.rs",
         "user/zk_prover_report_retention_tests.rs",
         "user/query_fanout_memory_tests.rs",
@@ -524,11 +524,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "tests/v2_adapter_main_02.rs",
         "tests/v2_adapter_main_03.rs",
         "tests/v2_adapter_main_04.rs",
-        "tests/v2_adapter_04_wal_recovery.rs", "tests/v2_adapter_04b_lifecycle_startup.rs",
-        "tests/v2_adapter_05_direct_lifecycle.rs",
     ),
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_main_00.rs": ("v2_adapter_activation_context.rs",),
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_main_03.rs": (
+        "v2_adapter_04_wal_recovery.rs", "v2_adapter_04b_lifecycle_startup.rs",
+        "v2_adapter_05_direct_lifecycle.rs",),
+    "crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs": (
         "v2_adapter_01_replay_and_registry.rs", "v2_adapter_02_view_and_lock_progress.rs",
         "v2_adapter_03_tc_and_terminal_ingress.rs",),
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs": (
@@ -563,7 +564,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs",
         "tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs",
     ),
-    "crates/iroha_core/src/sumeragi/tests/v2_runtime_main_06.rs": ("v2_runtime_periodic_fairness.rs",),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
         "v2_worker/exact_output_rollover_claim.rs",
         "v2_worker/kura_replica_advert_refresh.rs",
@@ -579,7 +579,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "tests/v2_worker_main_04.rs",
         "tests/v2_worker_main_05.rs",
     ),
-    "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs": ("v2_worker_reply_route_cases.rs", "v2_worker_backpressure_cases.rs", "v2_worker_nonzero_view_restart.rs"),
+    "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs": ("v2_worker_reply_route_cases.rs", "v2_worker_backpressure_cases.rs", "v2_worker_recovered_lifecycle_output_cases.rs", "v2_worker_nonzero_view_restart.rs"),
     "crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs": ("v2_worker_serve_unsealed_cases.rs", "v2_worker_serve_decision_restart_cases.rs", "v2_worker_certified_serve_budget_cases.rs"),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
         "v2_runner/height_ingress_bindings.rs",
@@ -1485,7 +1485,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "234399223cc9b36bd4c6f3be6dd29040fd0761b67b4a1c38f4fcdd40bf79ac19"
     ),
     "runner::run_inner": (
-        "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca"
+        "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4"
     ),
     "runner::drain_v2_ingress": (
         _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
@@ -1961,7 +1961,7 @@ _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
 # focused order and coordinate checks.
 _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
     "begin_fetch": (
-        "9d50ba3ff1b4227c8e0ce7a8444796eb1b50c6c1a23b8c5f5669991652f7f4e0"
+        "d5a1c197ffac9dfa1e49a3a393d0367ad3953a89ffc431b38b8d74e3695a61a8"
     ),
     "reserve_body_available_with_owner": (
         "a29bf418476f2b07e4821d63c6c1415ac611fc52a59868ea5fb7dc077d17dfa2"
@@ -2034,7 +2034,7 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "b4d2ee106bb9b7654078958031fbb603c21865ccad66b4c9e1ae127f3140e998"
+    "4f91147622f605e1724fdab9a6c9bb674797b319d5225a0951a9ebe2894a2e45"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -3099,7 +3099,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
+    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
     "claim_runner_lifecycle_process_generation": "b4bb67413cbfce25355d34b5342d81a96ad7674614e4134b48f7c74cd49af315",
     # Approved together with the exact-output alias after the focused
     # non-descent and handoff mutations passed against the reconciled component.
@@ -3139,13 +3139,13 @@ _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
     ),
     # Bound after completion-owner field/provenance mutations were rejected.
     "V2IoCompletionOwnership": (
-        "77b36edd147d961df47a314fae4d0f5a108899fc577ca8a23628cda3b18611f1"
+        "ab8a1b61fd83ca1eccaa7aab25c8cfdda367f4a4a00e16fc4882f1cb18c518fb"
     ),
     "CertifiedServeProducerEpisode": (
         "e1e0bdfc4854c5553d5fbf70a67a153998be353b7e7016e890af3bbe9a76a67b"
     ),
     "V2IoCommandQueueState": (
-        "6d9725ef43b23784bbf0dd3ec14c282a9ef5ff0e6e21e757b604cb2382a19e2b"
+        "8ea3c5c5f025272450a1bc3af06ace9f34321cf356a31e45a7e7e3f6cc8897b5"
     ),
 }
 
@@ -3184,10 +3184,10 @@ _EXACT_SERVE_COMPLETION_PROVENANCE_ITEM_SHA256 = {
     # Each provider is bound after retain/peek/abandon and exact
     # lifecycle-ordinal mutations were independently rejected.
     "V2IoCommand::runtime_lifecycle_ordinal": (
-        "c14b7fdc65702f7c5e69ec043f433d71d376a5477150966f27e94eada40012c5"
+        "6f20f6ca45dde2755022f714d99f98d5d59e10e501c5f8309555f09e3197f382"
     ),
     "V2IoAdmission::retain_completion": (
-        "edbcfb4b5030cf359af467772897d3924dab53a2d1264b634552a056d6b7422f"
+        "ceb4c44f4b8f7acaf7a7e6dd838975a867777b292f030ff34a1033f284f773ba"
     ),
     "V2IoAdmission::abandon_latest_completion": (
         "8b15ac13c7155d468869bc06451eda891a0e83306291e8979645a40b7b1403a4"
@@ -3196,7 +3196,7 @@ _EXACT_SERVE_COMPLETION_PROVENANCE_ITEM_SHA256 = {
         "d5344d0c356eefd40ac512da5052531d72b1b421293656086dea462874c8732e"
     ),
     "V2IoHandle::spawn": (
-        "eeb89cf683f8e8fa53f46697afabd1905efab9a14edbbc8726cfb29e78817fe8"
+        "94e1038db8ee6b2ce66bb921464e8701c36b209f562d747817a81c27bb354093"
     ),
     "V2IoHandle::completion_ownership_at": (
         "3b8de8e5d3c0702bee6510648bf0bd4f36f64fc46c79fcd04528d5cd8f892035"
@@ -3208,10 +3208,10 @@ _EXACT_SERVE_COMPLETION_PROVENANCE_ITEM_SHA256 = {
         "5d91be7698dbaf645fbe0d1d83cdfe346f97259ad437e8e6e02c36fe7444378e"
     ),
     "send_tracked_completion_with_lifecycle_ordinal": (
-        "175e7f93c2a95ca886d467d8a516fb1ff6aa782f7a89591e72324a6e5fc12e8d"
+        "287b40b3cb5725b4fccf468d3e68b956fd6ff32a918103afcc5c1ca51464209f"
     ),
     "try_send_tracked_completion_with_lifecycle_ordinal": (
-        "863583a551c796536b4d0739eb9be18b65d03a709d18e774f96d03d607121145"
+        "d5cc9cc3351c53307192ffa45bb9602af64f37df1b267b413d9c7d35ab9bbbba"
     ),
 }
 
@@ -3226,13 +3226,13 @@ _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256 = {
 
 _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
     "build_v2_io_command_channel": (
-        "44a2a24124e68854da2bbf58c25f1b0978de31f3f98719142c25eb1ef41bad0d"
+        "51555d88f961e90b5c6112c3578027122cd2699c74b089c881da2081380971ab"
     ),
     "CertifiedServeProducerEpisode::drop": (
         "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3"
     ),
     "V2IoCommandQueue::close_receiver": (
-        "1281df67fbf3ffbe36a8f26f972dc15eacdcee4c1dbf7f4c58e040e80fec9105"
+        "0a4453bbd1b0da3033722427504423e7d359a9b53503f33afd150dbb4df91171"
     ),
     "V2IoCommandQueue::reserve_serve_ingress": (
         "2077c9245b85b0447c9a9a29fa8211e706a4fb1f787378c21fd2a3104ed6a11e"
@@ -3264,7 +3264,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "02d2bb266994d99ca4fdef5ec8d90fef193a969fe2136eb6e0f0a7f0ae47f0df"
     ),
     "V2IoCommandQueue::try_send_as": (
-        "2d856e95b453802720dfd5721dc61e4f323d0763672f2110672990f51c1a62a6"
+        "8aea353b4dad9ba713b465e5edb8904056126726d0991cb742b7b4db793b4e5f"
     ),
     "ProductionV2Services::certified_serve_barrier": (
         "2daa1fafb0049a95cb78d01630aa55932539b3de9a0db99eb169c0e5e031f56d"
@@ -3300,7 +3300,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "32f88cdb12d5d67bfa896ea472b9571988d1d9755a74e86be25e9036538b87c6"
     ),
     "ProductionV2Services::drain_completions_inner": (
-        "d7e217369c7a0fc948e47879b587b2a4975b4d965bb69c992ff954fa0652401f"
+        "bd2ca1a454703b2a5cea6ab934733525249814edd8a0d1e181b875f3a720937b"
     ),
 }
 
@@ -3309,7 +3309,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256 = {
         "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26"
     ),
     # Bound after the observe-before-claim ordering mutation was rejected.
-    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
+    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESTORE_ITEM_SHA256 = {
@@ -3462,7 +3462,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
+    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
     "service_certified_serve_barrier_liveness_turn": (
         "d6afb60b54ec1b0a482ac76cdcc4f14469dbd39930a21ae26904c1a2d4cacb88"
     ),
@@ -3867,7 +3867,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     # drain_v2_ingress was approved separately after its three-mode drain
     # mutations passed.
-    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
+    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
     "drain_v2_ingress": (
         _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
     ),
@@ -4041,7 +4041,7 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
     "runner::run_inner": (
-        "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca"
+        "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4"
     ),
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
@@ -4223,7 +4223,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
     ),
     "effects::matches_apply": "8b746ccd8649e40fcb767676099580fabdf47d1b6089999729e15f34cace88a5",
     "effects::complete_application": (
-        "f86a6717148fc91ad4da8b6e0358b7581aef4819a44c99b51baca3356f5b0868"
+        "beb5a46dd53315316bd1cdca436c083efee56bee66bc45858ab13d93966daa88"
     ),
     "ingress::leader_wire_token_view": (
         "ef9f78efaa117ac2a787a9791e87d5a199978cf1d5a87d8a9e43b94f12e12b82"

@@ -2,7 +2,7 @@
 //!
 //! This bounded, non-authorizing child shares one exact challenge schedule
 //! between prover and verifier, checks canonical relations and multiproofs,
-//! and remains production-uninhabited until authenticated replay exists.
+//! and remains production-uninhabited behind uninhabited replay authorities.
 
 use core::{convert::Infallible, fmt};
 
@@ -44,11 +44,18 @@ const FIXED_BEFORE_SECTIONS_V2: usize = HEADER_BYTES_V2
 const MAX_INITIAL_OPENED_LEAVES_V2: usize = 320;
 const MAX_INITIAL_AUTH_HASHES_PER_TREE_V2: usize = 3_392;
 const MAX_FRI_OPENED_LEAVES_V2: usize = 4_028;
-const MAX_FRI_AUTH_HASHES_V2: usize = 19_712;
+const MAX_FRI_AUTH_HASHES_V2: usize = 20_030;
 const MAX_MULTIPROOF_VALUE_BYTES_V2: usize =
     (2 * MAX_INITIAL_OPENED_LEAVES_V2 + MAX_FRI_OPENED_LEAVES_V2) * LEAF_BYTES_V2;
 const MAX_MULTIPROOF_AUTH_BYTES_V2: usize =
     (2 * MAX_INITIAL_AUTH_HASHES_PER_TREE_V2 + MAX_FRI_AUTH_HASHES_V2) * 32;
+const MAX_INITIAL_MULTIPROOF_BYTES_V2: usize =
+    2 * (MAX_INITIAL_OPENED_LEAVES_V2 * LEAF_BYTES_V2 + MAX_INITIAL_AUTH_HASHES_PER_TREE_V2 * 32);
+// This is the correlated FRI value-plus-authentication maximum; the two
+// standalone maxima above are not simultaneously attainable.
+const MAX_FRI_MULTIPROOF_BYTES_V2: usize = 25_121_024;
+const MAX_MULTIPROOF_SECTION_BYTES_V2: usize =
+    MAX_INITIAL_MULTIPROOF_BYTES_V2 + MAX_FRI_MULTIPROOF_BYTES_V2;
 const FIXED_ENVELOPE_BYTES_V2: usize =
     FIXED_BEFORE_SECTIONS_V2 + SECTION_COUNT_V2 * SECTION_HEADER_BYTES_V2;
 const MAX_PROOF_BYTES_V2: usize = 29_245_792;
@@ -94,14 +101,13 @@ const _: () = {
     assert!(EVALUATION_BYTES_V2 == 3_040);
     assert!(FIXED_BEFORE_SECTIONS_V2 == 16_320);
     assert!(MAX_MULTIPROOF_VALUE_BYTES_V2 == 28_381_440);
-    assert!(MAX_MULTIPROOF_AUTH_BYTES_V2 == 847_872);
+    assert!(MAX_MULTIPROOF_AUTH_BYTES_V2 == 858_048);
+    assert!(MAX_INITIAL_MULTIPROOF_BYTES_V2 == 4_108_288);
+    assert!(MAX_FRI_MULTIPROOF_BYTES_V2 == 25_121_024);
+    assert!(MAX_MULTIPROOF_SECTION_BYTES_V2 == 29_229_312);
     assert!(FIXED_ENVELOPE_BYTES_V2 == 16_480);
-    assert!(
-        MAX_PROOF_BYTES_V2
-            == MAX_MULTIPROOF_VALUE_BYTES_V2
-                + MAX_MULTIPROOF_AUTH_BYTES_V2
-                + FIXED_ENVELOPE_BYTES_V2
-    );
+    assert!(MAX_PROOF_BYTES_V2 == MAX_MULTIPROOF_SECTION_BYTES_V2 + FIXED_ENVELOPE_BYTES_V2);
+    assert!(GLOBAL_PROOF_CAP_BYTES_V2 - MAX_PROOF_BYTES_V2 == 4_308_640);
     assert!(MAX_PROOF_BYTES_V2 < GLOBAL_PROOF_CAP_BYTES_V2);
 };
 
@@ -233,6 +239,28 @@ pub(super) struct ProverBatchChallengesV2 {
 pub(super) struct ProverBatchRowsCompleteV2 {
     transcript: [u8; 32],
     batch_schedule_digest: [u8; 32],
+}
+struct ProverFriLayer0LiveV2 {
+    pre_layer_transcript: [u8; 32],
+    transcript: [u8; 32],
+    batch_schedule_digest: [u8; 32],
+    fold_schedule_digest: [u8; 32],
+    layer0_root: [u8; 32],
+    alphas: [BatchValueV2; COORDINATE_COUNT_V2],
+}
+pub(super) struct ProverFriLayer0ChallengesV2 {
+    live: Option<ProverFriLayer0LiveV2>,
+    fields: [BatchFieldV2; LIMBS_V2],
+    inverse_domain_roots: [BatchValueV2; LIMBS_V2],
+    next_pair_block: u64,
+    next_column: u16,
+}
+pub(super) struct ProverFriLayer0FoldCompleteV2 {
+    pre_layer_transcript: [u8; 32],
+    transcript: [u8; 32],
+    batch_schedule_digest: [u8; 32],
+    fold_schedule_digest: [u8; 32],
+    layer0_root: [u8; 32],
 }
 struct LiveProtocolV2<'a> {
     wire: &'a [u8],
@@ -820,6 +848,165 @@ impl ProverBatchChallengesV2 {
         })
     }
 }
+
+impl ProverBatchRowsCompleteV2 {
+    pub(super) fn bind_fri_layer0_root_v2(
+        self,
+        root: [u8; 32],
+    ) -> Result<ProverFriLayer0ChallengesV2, SoundnessErrorV2> {
+        if root == [0; 32] {
+            return Err(SoundnessErrorV2::InvalidRoot);
+        }
+        let transcript = absorb_root_v2(FRI_ROOT_DOMAIN_V2, self.transcript, 0, root)?;
+        let mut fold_schedule_digest = self.batch_schedule_digest;
+        let mut alphas = [BatchValueV2::ZERO; COORDINATE_COUNT_V2];
+        for limb in 0..LIMBS_V2 {
+            for row in 0..ROWS_PER_LIMB_V2 {
+                let alpha = derive_fq2_challenge_v2(FOLD_DOMAIN_V2, transcript, limb, row, 0, 0)?;
+                alphas[limb * ROWS_PER_LIMB_V2 + row] = BatchValueV2 {
+                    c0: alpha.c0,
+                    c1: alpha.c1,
+                };
+                fold_schedule_digest =
+                    absorb_schedule_value_v2(fold_schedule_digest, 1, limb, row, 0, 0, alpha)?;
+            }
+        }
+        let first = BatchFieldV2::derive(RELEASE_MODULI_V1[0], DOMAIN_LOG_V2 as usize)
+            .map_err(|_| SoundnessErrorV2::InvalidChallenge)?;
+        let first_inverse_root = first
+            .inverse(first.domain_root)
+            .map_err(|_| SoundnessErrorV2::InvalidFriEquation)?;
+        let mut fields = [first; LIMBS_V2];
+        let mut inverse_domain_roots = [first_inverse_root; LIMBS_V2];
+        for limb in 1..LIMBS_V2 {
+            let field = BatchFieldV2::derive(RELEASE_MODULI_V1[limb], DOMAIN_LOG_V2 as usize)
+                .map_err(|_| SoundnessErrorV2::InvalidChallenge)?;
+            fields[limb] = field;
+            inverse_domain_roots[limb] = field
+                .inverse(field.domain_root)
+                .map_err(|_| SoundnessErrorV2::InvalidFriEquation)?;
+        }
+        Ok(ProverFriLayer0ChallengesV2 {
+            live: Some(ProverFriLayer0LiveV2 {
+                pre_layer_transcript: self.transcript,
+                transcript,
+                batch_schedule_digest: self.batch_schedule_digest,
+                fold_schedule_digest,
+                layer0_root: root,
+                alphas,
+            }),
+            fields,
+            inverse_domain_roots,
+            next_pair_block: 0,
+            next_column: 0,
+        })
+    }
+}
+
+impl ProverFriLayer0ChallengesV2 {
+    pub(super) fn context_v2(
+        &self,
+    ) -> Result<([u8; 32], [u8; 32], [u8; 32], [u8; 32], [u8; 32]), SoundnessErrorV2> {
+        let live = self.live.as_ref().ok_or(SoundnessErrorV2::Poisoned)?;
+        Ok((
+            live.pre_layer_transcript,
+            live.transcript,
+            live.batch_schedule_digest,
+            live.fold_schedule_digest,
+            live.layer0_root,
+        ))
+    }
+
+    pub(super) fn fold_next_pair_v2(
+        &mut self,
+        pair_block: u64,
+        column: u16,
+        lower: &[u8],
+        upper: &[u8],
+        output: &mut [u8],
+    ) -> Result<(), SoundnessErrorV2> {
+        let live = self.live.take().ok_or(SoundnessErrorV2::Poisoned)?;
+        if pair_block != self.next_pair_block
+            || column != self.next_column
+            || pair_block >= 256
+            || column >= COORDINATE_COUNT_V2 as u16
+            || lower.len() != 1_024 * FQ2_BYTES_V2
+            || upper.len() != lower.len()
+            || output.len() != lower.len()
+        {
+            return Err(SoundnessErrorV2::InvalidFriEquation);
+        }
+        let coordinate = usize::from(column);
+        let limb = coordinate / ROWS_PER_LIMB_V2;
+        let field = self.fields[limb];
+        let alpha = live.alphas[coordinate];
+        let inverse_two = mod_pow_v1(2, field.modulus - 2, field.modulus);
+        let exponent = u128::from(pair_block) * 1_024;
+        let x = field.pow(field.domain_root, exponent);
+        let mut inverse_x = field
+            .inverse(x)
+            .map_err(|_| SoundnessErrorV2::InvalidFriEquation)?;
+        let inverse_root = self.inverse_domain_roots[limb];
+        for ((positive, negative), next) in lower
+            .chunks_exact(FQ2_BYTES_V2)
+            .zip(upper.chunks_exact(FQ2_BYTES_V2))
+            .zip(output.chunks_exact_mut(FQ2_BYTES_V2))
+        {
+            let decode = |value: &[u8]| -> Result<BatchValueV2, SoundnessErrorV2> {
+                let c0 = read_u64_v2(value, 0)?;
+                let c1 = read_u64_v2(value, 8)?;
+                if c0 >= field.modulus || c1 >= field.modulus {
+                    return Err(SoundnessErrorV2::NonCanonicalResidue);
+                }
+                Ok(BatchValueV2 { c0, c1 })
+            };
+            let positive = decode(positive)?;
+            let negative = decode(negative)?;
+            let even = field.scale(field.add(positive, negative), inverse_two);
+            let inverse_two_x = field.scale(inverse_x, inverse_two);
+            let odd = field.mul(field.sub(positive, negative), inverse_two_x);
+            let value = field.add(even, field.mul(alpha, odd));
+            next[..8].copy_from_slice(&value.c0.to_be_bytes());
+            next[8..].copy_from_slice(&value.c1.to_be_bytes());
+            inverse_x = field.mul(inverse_x, inverse_root);
+        }
+        self.next_column += 1;
+        if self.next_column == COORDINATE_COUNT_V2 as u16 {
+            self.next_column = 0;
+            self.next_pair_block += 1;
+        }
+        self.live = Some(live);
+        Ok(())
+    }
+
+    pub(super) fn complete_v2(mut self) -> Result<ProverFriLayer0FoldCompleteV2, SoundnessErrorV2> {
+        let mut live = self.live.take().ok_or(SoundnessErrorV2::Poisoned)?;
+        if self.next_pair_block != 256 || self.next_column != 0 {
+            return Err(SoundnessErrorV2::InvalidFriEquation);
+        }
+        live.alphas.fill(BatchValueV2::ZERO);
+        Ok(ProverFriLayer0FoldCompleteV2 {
+            pre_layer_transcript: live.pre_layer_transcript,
+            transcript: live.transcript,
+            batch_schedule_digest: live.batch_schedule_digest,
+            fold_schedule_digest: live.fold_schedule_digest,
+            layer0_root: live.layer0_root,
+        })
+    }
+}
+
+impl ProverFriLayer0FoldCompleteV2 {
+    pub(super) const fn context_v2(&self) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
+        (
+            self.pre_layer_transcript,
+            self.transcript,
+            self.batch_schedule_digest,
+            self.fold_schedule_digest,
+            self.layer0_root,
+        )
+    }
+}
+
 fn absorb_root_v2(
     domain: &[u8],
     transcript: [u8; 32],
@@ -1037,10 +1224,7 @@ impl<'a> QuotientRootBoundV2<'a> {
             .wire
             .get(live.offset..terminal_end)
             .ok_or(SoundnessErrorV2::Truncated)?;
-        validate_leaf_values_v2(terminal)?;
-        if terminal[..LEAF_BYTES_V2] != terminal[LEAF_BYTES_V2..] {
-            return Err(SoundnessErrorV2::InvalidTerminal);
-        }
+        validate_equal_terminal_v2(terminal)?;
         live.transcript = absorb_terminal_v2(live.transcript, terminal)?;
         live.queries = derive_queries_v2(live.transcript)?;
         live.offset = terminal_end;
@@ -1105,6 +1289,28 @@ fn exact_authentication_count_v2(
         length /= 2;
     }
     Ok(authentication)
+}
+
+fn checked_fri_multiproof_bytes_v2(
+    opened: usize,
+    authentication: usize,
+) -> Result<usize, SoundnessErrorV2> {
+    if opened > MAX_FRI_OPENED_LEAVES_V2 || authentication > MAX_FRI_AUTH_HASHES_V2 {
+        return Err(SoundnessErrorV2::InvalidSectionCount);
+    }
+    let value_bytes = opened
+        .checked_mul(LEAF_BYTES_V2)
+        .ok_or(SoundnessErrorV2::ArithmeticOverflow)?;
+    let authentication_bytes = authentication
+        .checked_mul(32)
+        .ok_or(SoundnessErrorV2::ArithmeticOverflow)?;
+    let bytes = value_bytes
+        .checked_add(authentication_bytes)
+        .ok_or(SoundnessErrorV2::ArithmeticOverflow)?;
+    if bytes > MAX_FRI_MULTIPROOF_BYTES_V2 {
+        return Err(SoundnessErrorV2::InvalidSectionCount);
+    }
+    Ok(bytes)
 }
 
 fn parse_section_v2(
@@ -1179,10 +1385,8 @@ impl<'a> FriTranscriptBoundV2<'a> {
             }
             length /= 2;
         }
-        if length != 2
-            || fri_opened > MAX_FRI_OPENED_LEAVES_V2
-            || fri_authentication > MAX_FRI_AUTH_HASHES_V2
-        {
+        checked_fri_multiproof_bytes_v2(fri_opened, fri_authentication)?;
+        if length != 2 {
             return Err(SoundnessErrorV2::InvalidSectionCount);
         }
         if live.offset != live.wire.len() {
@@ -1191,6 +1395,13 @@ impl<'a> FriTranscriptBoundV2<'a> {
         Ok(StructurallyParsedV2 { live: Some(live) })
     }
 }
+
+#[path = "phase23_rns_link_q_pcs_v2_soundness/prover_fri_rounds_v2.rs"]
+mod prover_fri_rounds_v2;
+pub(super) use prover_fri_rounds_v2::*;
+#[path = "phase23_rns_link_q_pcs_v2_soundness/prover_canonical_proof_v2.rs"]
+mod prover_canonical_proof_v2;
+pub(super) use prover_canonical_proof_v2::*;
 
 #[path = "phase23_rns_link_q_pcs_v2_verifier.rs"]
 mod verifier;

@@ -541,6 +541,9 @@ pub(super) fn bind_cq_post_root_replay_v2(
     })
 }
 
+#[path = "post_c0_replay_v2/canonical_proof_replay_v2.rs"]
+mod canonical_proof_replay_v2;
+pub(super) use canonical_proof_replay_v2::*;
 #[cfg(test)]
 #[path = "post_c0_replay_v2_tests.rs"]
 mod tests;

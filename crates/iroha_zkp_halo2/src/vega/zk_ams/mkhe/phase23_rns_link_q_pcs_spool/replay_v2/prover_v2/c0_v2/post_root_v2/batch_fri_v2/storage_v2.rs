@@ -12,6 +12,10 @@ use crate::vega::sponge::Keccak256;
 
 use super::*;
 
+#[path = "storage_v2/fold_layer1_v2.rs"]
+mod fold_layer1_v2;
+pub(super) use fold_layer1_v2::*;
+
 const FRI0_CONTEXT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.batch-fri.layer0.context\0";
 const FRI_LEAF_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0";
@@ -388,3 +392,7 @@ impl FriLayer0SealedV2 {
         })
     }
 }
+
+#[path = "storage_v2/canonical_proof_replay_v2.rs"]
+mod canonical_proof_replay_v2;
+pub(super) use canonical_proof_replay_v2::*;

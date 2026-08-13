@@ -19,7 +19,7 @@ use iroha_data_model::privacy::{
     PrivacyPoolIdV1, PrivacyRecipientIdV1,
 };
 use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest as _, Sha256};
+use sha2::{Digest as _, Sha256, compress256, digest::generic_array::GenericArray};
 use zeroize::{Zeroize, Zeroizing};
 
 use super::{
@@ -38,6 +38,139 @@ const NOTE_AAD_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.wallet.note-aad.v1";
 const NOTE_KEY_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.wallet.note-key.v1";
 const POLY1305_TAG_BYTES_V1: usize = 16;
 const AEAD_BYTES_V1: usize = PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1 + POLY1305_TAG_BYTES_V1;
+
+struct WalletSecretCopyValueV1<T: Copy + Zeroize>(T);
+
+struct BorrowedWalletCopySlotV1<'a, T: Copy + Zeroize>(&'a mut T);
+
+impl<T: Copy + Zeroize> BorrowedWalletCopySlotV1<'_, T> {
+    fn expose_copy(&self) -> T {
+        *self.0
+    }
+}
+
+impl<T: Copy + Zeroize> Drop for BorrowedWalletCopySlotV1<'_, T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *self.0);
+    }
+}
+
+impl<T: Copy + Zeroize> WalletSecretCopyValueV1<T> {
+    fn copy_from_ref(value: &T) -> Self {
+        Self::from_copy(*value)
+    }
+
+    fn from_copy(mut value: T) -> Self {
+        Self::take(&mut value)
+    }
+
+    fn take(value: &mut T) -> Self {
+        let incoming = BorrowedWalletCopySlotV1(value);
+        let owned = Self(incoming.expose_copy());
+        drop(incoming);
+        owned
+    }
+
+    fn expose_copy(&self) -> T {
+        self.0
+    }
+
+    fn expose_ref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T: Copy + Zeroize> Drop for WalletSecretCopyValueV1<T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.0);
+    }
+}
+
+struct WalletSecretSha256V1 {
+    state: [u32; 8],
+    block: [u8; 64],
+    block_len: usize,
+    byte_len: u64,
+}
+
+impl WalletSecretSha256V1 {
+    fn new() -> Self {
+        Self {
+            state: [
+                0x6a09_e667,
+                0xbb67_ae85,
+                0x3c6e_f372,
+                0xa54f_f53a,
+                0x510e_527f,
+                0x9b05_688c,
+                0x1f83_d9ab,
+                0x5be0_cd19,
+            ],
+            block: [0; 64],
+            block_len: 0,
+            byte_len: 0,
+        }
+    }
+
+    fn compress_block_v1(&mut self) {
+        let block = GenericArray::from_slice(&self.block);
+        compress256(&mut self.state, core::slice::from_ref(block));
+        self.block.zeroize();
+        self.block_len = 0;
+    }
+
+    fn update_v1(&mut self, mut input: &[u8]) {
+        self.byte_len = self
+            .byte_len
+            .checked_add(u64::try_from(input.len()).expect("usize fits u64"))
+            .expect("wallet note KDF input length fits u64");
+        while !input.is_empty() {
+            let take = core::cmp::min(64 - self.block_len, input.len());
+            self.block[self.block_len..self.block_len + take].copy_from_slice(&input[..take]);
+            self.block_len += take;
+            input = &input[take..];
+            if self.block_len == 64 {
+                self.compress_block_v1();
+            }
+        }
+    }
+
+    fn finalize_v1(mut self) -> WalletSecretCopyValueV1<[u8; 32]> {
+        let bit_len = self
+            .byte_len
+            .checked_mul(8)
+            .expect("wallet note KDF bit length fits u64");
+        self.block[self.block_len] = 0x80;
+        self.block_len += 1;
+        if self.block_len > 56 {
+            self.block[self.block_len..].zeroize();
+            self.compress_block_v1();
+        }
+        self.block[self.block_len..56].zeroize();
+        self.block[56..].copy_from_slice(&bit_len.to_be_bytes());
+        self.compress_block_v1();
+
+        let mut output = WalletSecretCopyValueV1([0_u8; 32]);
+        for index in 0..32 {
+            output.0[index] = (self.state[index / 4] >> (24 - (8 * (index % 4)))) as u8;
+        }
+        output
+    }
+}
+
+impl Drop for WalletSecretSha256V1 {
+    fn drop(&mut self) {
+        self.state.zeroize();
+        self.block.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.state);
+        let _ = core::hint::black_box(&mut self.block);
+    }
+}
 
 /// Decrypted fixed-width FCMP++ wallet note.
 ///
@@ -91,39 +224,84 @@ impl FcmpWalletNoteV1 {
     /// Construct and validate a spendable note opening.
     pub fn new(
         output: FcmpOutputTupleV1,
-        spend_x: [u8; 32],
-        output_y: [u8; 32],
-        amount: u64,
-        commitment_mask: [u8; 32],
+        mut spend_x: [u8; 32],
+        mut output_y: [u8; 32],
+        mut amount: u64,
+        mut commitment_mask: [u8; 32],
     ) -> Result<Self, FcmpNativeErrorV1> {
-        let spend_x_bytes = Zeroizing::new(spend_x);
-        let output_y_bytes = Zeroizing::new(output_y);
-        let amount = Zeroizing::new(amount);
-        let commitment_mask = Zeroizing::new(commitment_mask);
-        validate_edwards_scalar(*spend_x_bytes)?;
-        validate_edwards_scalar(*output_y_bytes)?;
-        let spend_x = Zeroizing::new(
-            Option::<Scalar>::from(Scalar::from_canonical_bytes(*spend_x_bytes))
-                .ok_or(FcmpNativeErrorV1::WalletNoteEncoding)?,
-        );
-        let output_y = Zeroizing::new(
-            Option::<Scalar>::from(Scalar::from_canonical_bytes(*output_y_bytes))
-                .ok_or(FcmpNativeErrorV1::WalletNoteEncoding)?,
-        );
-        if *spend_x == Scalar::ZERO {
+        let spend_x_bytes = WalletSecretCopyValueV1::take(&mut spend_x);
+        let output_y_bytes = WalletSecretCopyValueV1::take(&mut output_y);
+        let amount = WalletSecretCopyValueV1::take(&mut amount);
+        let commitment_mask = WalletSecretCopyValueV1::take(&mut commitment_mask);
+        Self::from_secret_owners_v1(
+            output,
+            spend_x_bytes,
+            output_y_bytes,
+            amount,
+            commitment_mask,
+        )
+    }
+
+    /// Construct a note from borrowed secret openings without creating raw
+    /// by-value copies in the caller.
+    pub fn new_borrowed(
+        output: FcmpOutputTupleV1,
+        spend_x: &[u8; 32],
+        output_y: &[u8; 32],
+        amount: &u64,
+        commitment_mask: &[u8; 32],
+    ) -> Result<Self, FcmpNativeErrorV1> {
+        let spend_x_bytes = WalletSecretCopyValueV1::copy_from_ref(spend_x);
+        let output_y_bytes = WalletSecretCopyValueV1::copy_from_ref(output_y);
+        let amount = WalletSecretCopyValueV1::copy_from_ref(amount);
+        let commitment_mask = WalletSecretCopyValueV1::copy_from_ref(commitment_mask);
+        Self::from_secret_owners_v1(
+            output,
+            spend_x_bytes,
+            output_y_bytes,
+            amount,
+            commitment_mask,
+        )
+    }
+
+    fn from_secret_owners_v1(
+        output: FcmpOutputTupleV1,
+        spend_x_bytes: WalletSecretCopyValueV1<[u8; 32]>,
+        output_y_bytes: WalletSecretCopyValueV1<[u8; 32]>,
+        amount: WalletSecretCopyValueV1<u64>,
+        commitment_mask: WalletSecretCopyValueV1<[u8; 32]>,
+    ) -> Result<Self, FcmpNativeErrorV1> {
+        validate_edwards_scalar(*spend_x_bytes.expose_ref())?;
+        validate_edwards_scalar(*output_y_bytes.expose_ref())?;
+        let mut decoded_spend_x =
+            Option::<Scalar>::from(Scalar::from_canonical_bytes(*spend_x_bytes.expose_ref()))
+                .ok_or(FcmpNativeErrorV1::WalletNoteEncoding)?;
+        let spend_x = WalletSecretCopyValueV1::take(&mut decoded_spend_x);
+        let mut decoded_output_y =
+            Option::<Scalar>::from(Scalar::from_canonical_bytes(*output_y_bytes.expose_ref()))
+                .ok_or(FcmpNativeErrorV1::WalletNoteEncoding)?;
+        let output_y = WalletSecretCopyValueV1::take(&mut decoded_output_y);
+        if spend_x.expose_ref() == &Scalar::ZERO {
             return Err(FcmpNativeErrorV1::WalletNoteEncoding);
         }
         let output_key = decode_edwards_point(output.components().0, false)?;
-        if (ED25519_BASEPOINT_POINT * *spend_x) + (generator_t() * *output_y) != output_key {
+        let spend_component = Zeroizing::new(&ED25519_BASEPOINT_POINT * spend_x.expose_ref());
+        let output_component = Zeroizing::new(&generator_t() * output_y.expose_ref());
+        let expected_output = Zeroizing::new(&*spend_component + &*output_component);
+        if &*expected_output != &output_key {
             return Err(FcmpNativeErrorV1::WalletNoteEncoding);
         }
-        FcmpOutputCommitmentOpeningV1::new(output, *amount, *commitment_mask)?;
+        FcmpOutputCommitmentOpeningV1::new_borrowed(
+            output,
+            amount.expose_ref(),
+            commitment_mask.expose_ref(),
+        )?;
         Ok(Self {
             output,
-            amount: *amount,
-            commitment_mask: *commitment_mask,
-            spend_x: spend_x.to_bytes(),
-            output_y: output_y.to_bytes(),
+            amount: amount.expose_copy(),
+            commitment_mask: commitment_mask.expose_copy(),
+            spend_x: spend_x_bytes.expose_copy(),
+            output_y: output_y_bytes.expose_copy(),
         })
     }
 
@@ -135,35 +313,39 @@ impl FcmpWalletNoteV1 {
 
     /// Canonical secret spend scalar.
     #[must_use]
-    pub const fn spend_x(&self) -> [u8; 32] {
-        self.spend_x
+    pub const fn spend_x(&self) -> &[u8; 32] {
+        &self.spend_x
     }
 
     /// Canonical secret output blinding scalar.
     #[must_use]
-    pub const fn output_y(&self) -> [u8; 32] {
-        self.output_y
+    pub const fn output_y(&self) -> &[u8; 32] {
+        &self.output_y
     }
 
     /// Hidden strict-positive `u64` amount.
     #[must_use]
-    pub const fn amount(&self) -> u64 {
-        self.amount
+    pub const fn amount(&self) -> &u64 {
+        &self.amount
     }
 
     /// Canonical secret amount-commitment mask.
     #[must_use]
-    pub const fn commitment_mask(&self) -> [u8; 32] {
-        self.commitment_mask
+    pub const fn commitment_mask(&self) -> &[u8; 32] {
+        &self.commitment_mask
     }
 
     /// Reconstruct the validated range-proof witness carried by this note.
     pub fn commitment_opening(&self) -> Result<FcmpOutputCommitmentOpeningV1, FcmpNativeErrorV1> {
-        FcmpOutputCommitmentOpeningV1::new(self.output, self.amount, self.commitment_mask)
+        FcmpOutputCommitmentOpeningV1::new_borrowed(
+            self.output,
+            &self.amount,
+            &self.commitment_mask,
+        )
     }
 
-    fn encode(&self, output_id: [u8; 32]) -> [u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1] {
-        let mut bytes = [0_u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1];
+    fn encode(&self, output_id: [u8; 32]) -> Zeroizing<[u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1]> {
+        let mut bytes = Zeroizing::new([0_u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1]);
         let mut cursor = 0;
         bytes[cursor..cursor + 4].copy_from_slice(&NOTE_MAGIC_V1);
         cursor += 4;
@@ -171,7 +353,8 @@ impl FcmpWalletNoteV1 {
         cursor += 32;
         bytes[cursor..cursor + FCMP_OUTPUT_TUPLE_BYTES_V1].copy_from_slice(&self.output.encode());
         cursor += FCMP_OUTPUT_TUPLE_BYTES_V1;
-        bytes[cursor..cursor + 8].copy_from_slice(&self.amount.to_le_bytes());
+        let amount_bytes = Zeroizing::new(self.amount.to_le_bytes());
+        bytes[cursor..cursor + 8].copy_from_slice(amount_bytes.as_ref());
         cursor += 8;
         bytes[cursor..cursor + 32].copy_from_slice(&self.commitment_mask);
         cursor += 32;
@@ -254,10 +437,11 @@ pub fn derive_fcmp_recipient_id_v1(
 
 /// Derive a canonical X25519 public key from a non-zero wallet secret.
 pub fn fcmp_recipient_public_key_v1(
-    recipient_secret_key: [u8; 32],
+    mut recipient_secret_key: [u8; 32],
 ) -> Result<[u8; 32], FcmpNativeErrorV1> {
-    let recipient_secret_key = Zeroizing::new(recipient_secret_key);
-    x25519_public_key_v1(*recipient_secret_key).map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)
+    let recipient_secret_key = WalletSecretCopyValueV1::take(&mut recipient_secret_key);
+    x25519_public_key_v1(recipient_secret_key.expose_ref())
+        .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)
 }
 
 fn aad_v1(
@@ -278,13 +462,12 @@ fn aad_v1(
     aad
 }
 
-fn note_key_v1(shared_secret: &[u8; 32], aad: &[u8]) -> Zeroizing<[u8; 32]> {
-    let mut hash = Sha256::new();
-    hash.update(NOTE_KEY_DOMAIN_V1);
-    hash.update(shared_secret);
-    hash.update(aad);
-    let bytes: [u8; 32] = hash.finalize().into();
-    Zeroizing::new(bytes)
+fn note_key_v1(shared_secret: &[u8; 32], aad: &[u8]) -> WalletSecretCopyValueV1<[u8; 32]> {
+    let mut hash = WalletSecretSha256V1::new();
+    hash.update_v1(NOTE_KEY_DOMAIN_V1);
+    hash.update_v1(shared_secret);
+    hash.update_v1(aad);
+    hash.finalize_v1()
 }
 
 fn parsed_ciphertext(
@@ -365,12 +548,10 @@ pub fn encrypt_fcmp_wallet_note_v1(
     if ephemeral_secret.iter().all(|byte| *byte == 0) {
         return Err(FcmpNativeErrorV1::EncryptedOutputRandomness);
     }
-    let ephemeral_public = x25519_public_key_v1(*ephemeral_secret)
+    let ephemeral_public = x25519_public_key_v1(&*ephemeral_secret)
         .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
-    let shared = Zeroizing::new(
-        x25519_shared_secret_v1(*ephemeral_secret, recipient_public_key)
-            .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?,
-    );
+    let shared = x25519_shared_secret_v1(&*ephemeral_secret, recipient_public_key)
+        .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
     let ephemeral_public_key = PrivacyEncryptionKeyV1::new(ephemeral_public);
     let aad = aad_v1(pool_id, recipient, ephemeral_public_key, output);
     let key = note_key_v1(&shared, &aad);
@@ -383,9 +564,9 @@ pub fn encrypt_fcmp_wallet_note_v1(
         return Err(FcmpNativeErrorV1::EncryptedOutputRandomness);
     }
     let nonce: chacha20poly1305::XNonce = nonce_bytes.into();
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = XChaCha20Poly1305::new_from_slice(key.expose_ref())
         .map_err(|_| FcmpNativeErrorV1::WalletNoteEncoding)?;
-    let plaintext = Zeroizing::new(note.encode(output.output_id().into_bytes()));
+    let plaintext = note.encode(output.output_id().into_bytes());
     let authenticated = cipher
         .encrypt(
             &nonce,
@@ -417,21 +598,20 @@ pub fn decrypt_fcmp_wallet_note_v1(
     pool_id: PrivacyPoolIdV1,
     expected_output: PrivacyFcmpOutputTupleV1,
     encrypted: &PrivacyFcmpEncryptedOutputV1,
-    recipient_secret_key: [u8; 32],
+    mut recipient_secret_key: [u8; 32],
 ) -> Result<FcmpWalletNoteV1, FcmpNativeErrorV1> {
-    let recipient_secret_key = Zeroizing::new(recipient_secret_key);
+    let recipient_secret_key = WalletSecretCopyValueV1::take(&mut recipient_secret_key);
     validate_fcmp_encrypted_output_v1(pool_id, expected_output, encrypted)?;
-    let recipient_public_key = fcmp_recipient_public_key_v1(*recipient_secret_key)?;
+    let recipient_public_key = x25519_public_key_v1(recipient_secret_key.expose_ref())
+        .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
     if derive_fcmp_recipient_id_v1(recipient_public_key)? != encrypted.recipient {
         return Err(FcmpNativeErrorV1::EncryptedOutputBinding);
     }
-    let shared = Zeroizing::new(
-        x25519_shared_secret_v1(
-            *recipient_secret_key,
-            encrypted.ephemeral_public_key.into_bytes(),
-        )
-        .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?,
-    );
+    let shared = x25519_shared_secret_v1(
+        recipient_secret_key.expose_ref(),
+        encrypted.ephemeral_public_key.into_bytes(),
+    )
+    .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
     let aad = aad_v1(
         pool_id,
         encrypted.recipient,
@@ -441,7 +621,7 @@ pub fn decrypt_fcmp_wallet_note_v1(
     let key = note_key_v1(&shared, &aad);
     let (nonce_bytes, authenticated) = parsed_ciphertext(encrypted)?;
     let nonce: chacha20poly1305::XNonce = nonce_bytes.into();
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = XChaCha20Poly1305::new_from_slice(key.expose_ref())
         .map_err(|_| FcmpNativeErrorV1::WalletNoteEncoding)?;
     let plaintext = Zeroizing::new(
         cipher
@@ -463,11 +643,294 @@ pub fn decrypt_fcmp_wallet_note_v1(
 
 #[cfg(test)]
 mod tests {
+    use core::cell::Cell;
+
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
     use rand_08::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::privacy_engines::fcmp_plus_plus::{FailingRngV1, range::amount_generator};
+
+    thread_local! {
+        static WALLET_COPY_CLEARS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[derive(Clone, Copy)]
+    struct TrackingCopy(u64);
+
+    impl Zeroize for TrackingCopy {
+        fn zeroize(&mut self) {
+            self.0 = 0;
+            WALLET_COPY_CLEARS.with(|calls| calls.set(calls.get() + 1));
+        }
+    }
+
+    #[test]
+    fn wallet_copy_owner_clears_taken_and_borrowed_retained_slots() {
+        WALLET_COPY_CLEARS.with(|calls| calls.set(0));
+        let mut source = TrackingCopy(7);
+        let owner = WalletSecretCopyValueV1::take(&mut source);
+        assert_eq!(source.0, 0);
+        assert_eq!(owner.expose_ref().0, 7);
+        assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 1);
+        drop(owner);
+        assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 2);
+
+        WALLET_COPY_CLEARS.with(|calls| calls.set(0));
+        let borrowed = TrackingCopy(11);
+        let owner = WalletSecretCopyValueV1::copy_from_ref(&borrowed);
+        assert_eq!(borrowed.0, 11);
+        assert_eq!(owner.expose_ref().0, 11);
+        assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 0);
+        drop(owner);
+        assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 1);
+    }
+
+    #[test]
+    fn wallet_secret_sha256_matches_the_frozen_note_kdf() {
+        let shared_secret = [0x31; 32];
+        let aad = [0xa7; 224];
+        let actual = note_key_v1(&shared_secret, &aad);
+        let mut expected = Sha256::new();
+        expected.update(NOTE_KEY_DOMAIN_V1);
+        expected.update(shared_secret);
+        expected.update(aad);
+        let expected: [u8; 32] = expected.finalize().into();
+        assert_eq!(actual.expose_ref(), &expected);
+        assert_eq!(
+            expected,
+            hex::decode("69e939fa1441f1353609cf5a5df72e60782976a166884df190e9093b6af54333")
+                .expect("literal SHA-256")
+                .try_into()
+                .expect("32-byte SHA-256")
+        );
+    }
+
+    #[test]
+    fn wallet_note_constructor_takes_inputs_before_validation_and_owns_products() {
+        let source = include_str!("wallet.rs");
+        let constructor = source
+            .split_once("impl FcmpWalletNoteV1 {")
+            .expect("wallet note impl")
+            .1
+            .split_once("/// Complete public output tuple recovered from the note")
+            .expect("constructor boundary")
+            .0;
+        assert_eq!(
+            constructor
+                .matches("WalletSecretCopyValueV1::take(&mut")
+                .count(),
+            6
+        );
+        let input_last_take = constructor
+            .find("WalletSecretCopyValueV1::take(&mut commitment_mask)")
+            .expect("last input take");
+        let first_validation = constructor
+            .find("validate_edwards_scalar(")
+            .expect("first scalar validation");
+        assert!(input_last_take < first_validation);
+        let spend_decode_take = constructor
+            .find("WalletSecretCopyValueV1::take(&mut decoded_spend_x)")
+            .expect("spend scalar take");
+        let output_decode_take = constructor
+            .find("WalletSecretCopyValueV1::take(&mut decoded_output_y)")
+            .expect("output scalar take");
+        let output_decode = constructor
+            .find("let mut decoded_output_y")
+            .expect("output scalar decode");
+        assert!(first_validation < spend_decode_take);
+        assert!(output_decode < output_decode_take);
+        assert!(constructor.contains("&ED25519_BASEPOINT_POINT * spend_x.expose_ref()"));
+        assert!(constructor.contains("&generator_t() * output_y.expose_ref()"));
+        assert!(constructor.contains("Zeroizing::new(&*spend_component + &*output_component)"));
+        assert!(!constructor.contains("Zeroizing::new(spend_x)"));
+        assert!(!constructor.contains("ED25519_BASEPOINT_POINT * *spend_x"));
+        let borrowed_constructor = constructor
+            .find("pub fn new_borrowed(")
+            .expect("borrowed wallet-note constructor");
+        let first_borrowed_owner = constructor
+            .find("WalletSecretCopyValueV1::copy_from_ref(spend_x)")
+            .expect("borrowed spend owner");
+        let borrowed_validation = constructor[borrowed_constructor..]
+            .find("Self::from_secret_owners_v1(")
+            .expect("borrowed constructor validation");
+        assert!(borrowed_constructor < first_borrowed_owner);
+        assert!(first_borrowed_owner - borrowed_constructor < borrowed_validation);
+        let range_validation = constructor
+            .find("FcmpOutputCommitmentOpeningV1::new_borrowed(")
+            .expect("range opening validation");
+        let publish_relative = constructor[range_validation..]
+            .find("Ok(Self {")
+            .expect("final publication");
+        let publish = range_validation + publish_relative;
+        assert!(output_decode_take < range_validation && range_validation < publish);
+        assert!(constructor.contains("amount.expose_ref(),"));
+        assert!(constructor.contains("commitment_mask.expose_ref(),"));
+        assert!(!constructor.contains(
+            "amount.expose_copy(),\n            commitment_mask.expose_copy(),\n        )?"
+        ));
+
+        let accessors = source
+            .split_once("/// Complete public output tuple recovered from the note")
+            .expect("wallet-note accessors")
+            .1
+            .split_once("    fn encode(")
+            .expect("wallet-note accessor boundary")
+            .0;
+        assert!(accessors.contains("pub const fn spend_x(&self) -> &[u8; 32]"));
+        assert!(accessors.contains("pub const fn output_y(&self) -> &[u8; 32]"));
+        assert!(accessors.contains("pub const fn amount(&self) -> &u64"));
+        assert!(accessors.contains("pub const fn commitment_mask(&self) -> &[u8; 32]"));
+        let opening = accessors
+            .split_once("pub fn commitment_opening(&self)")
+            .expect("wallet-note opening helper")
+            .1;
+        assert!(opening.contains("FcmpOutputCommitmentOpeningV1::new_borrowed("));
+        assert!(!opening.contains("FcmpOutputCommitmentOpeningV1::new(self.output"));
+
+        let encoder = source
+            .split_once("    fn encode(&self,")
+            .expect("wallet-note encoder")
+            .1
+            .split_once("    fn decode(")
+            .expect("encoder boundary")
+            .0;
+        assert!(encoder.contains(") -> Zeroizing<[u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1]>"));
+        let owner = encoder
+            .find("Zeroizing::new([0_u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1])")
+            .expect("plaintext owner");
+        let first_write = encoder
+            .find("copy_from_slice")
+            .expect("first plaintext write");
+        assert!(owner < first_write);
+        let amount_owner = encoder
+            .find("let amount_bytes = Zeroizing::new(self.amount.to_le_bytes())")
+            .expect("amount encoding owner");
+        let amount_write = encoder
+            .find("copy_from_slice(amount_bytes.as_ref())")
+            .expect("owned amount write");
+        assert!(amount_owner < amount_write);
+        assert!(!encoder.contains("copy_from_slice(&self.amount.to_le_bytes())"));
+        assert!(!encoder.contains(") -> [u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1]"));
+    }
+
+    #[test]
+    fn wallet_note_accessors_borrow_exact_storage_and_opening_preserves_it() {
+        let (_, _, note, _) = fixture();
+        assert!(core::ptr::eq(note.spend_x(), &note.spend_x));
+        assert!(core::ptr::eq(note.output_y(), &note.output_y));
+        assert!(core::ptr::eq(note.amount(), &note.amount));
+        assert!(core::ptr::eq(note.commitment_mask(), &note.commitment_mask));
+
+        let opening = note.commitment_opening().expect("borrowed note opening");
+        assert_eq!(opening.amount(), note.amount());
+        let opening_mask = opening.commitment_mask();
+        assert_eq!(&*opening_mask, note.commitment_mask());
+        assert_eq!(opening.output(), note.output());
+    }
+
+    #[test]
+    fn wallet_x25519_secrets_are_taken_or_borrowed_across_helper_boundaries() {
+        let source = include_str!("wallet.rs");
+        let secret_sha = source
+            .split_once("struct WalletSecretSha256V1 {")
+            .expect("secret SHA-256 owner")
+            .1
+            .split_once("/// Decrypted fixed-width FCMP++ wallet note.")
+            .expect("secret SHA-256 boundary")
+            .0;
+        assert!(secret_sha.contains("state: [u32; 8]"));
+        assert!(secret_sha.contains("block: [u8; 64]"));
+        assert!(secret_sha.contains("GenericArray::from_slice(&self.block)"));
+        assert!(secret_sha.contains("compress256(&mut self.state"));
+        let compress = secret_sha
+            .find("compress256(&mut self.state")
+            .expect("secret compression");
+        let block_clear = secret_sha[compress..]
+            .find("self.block.zeroize()")
+            .expect("post-compression block clear");
+        assert!(block_clear > 0);
+        let drop = secret_sha
+            .split_once("impl Drop for WalletSecretSha256V1")
+            .expect("secret SHA-256 drop")
+            .1;
+        assert!(drop.contains("self.state.zeroize()"));
+        assert!(drop.contains("self.block.zeroize()"));
+        assert!(drop.contains("compiler_fence"));
+        assert!(drop.matches("black_box").count() >= 2);
+
+        let note_key = source
+            .split_once("fn note_key_v1(")
+            .expect("note-key helper")
+            .1
+            .split_once("fn parsed_ciphertext(")
+            .expect("note-key boundary")
+            .0;
+        assert!(note_key.contains(") -> WalletSecretCopyValueV1<[u8; 32]>"));
+        let owner = note_key
+            .find("let mut hash = WalletSecretSha256V1::new()")
+            .expect("secret SHA-256 owner");
+        let secret_update = note_key
+            .find("hash.update_v1(shared_secret)")
+            .expect("borrowed shared-secret update");
+        let finalize = note_key
+            .find("hash.finalize_v1()")
+            .expect("owned SHA-256 finalization");
+        assert!(owner < secret_update && secret_update < finalize);
+        assert!(!note_key.contains("Sha256::new()"));
+        assert!(!note_key.contains(".finalize()"));
+
+        let public_key = source
+            .split_once("pub fn fcmp_recipient_public_key_v1(")
+            .expect("recipient public-key helper")
+            .1
+            .split_once("fn aad_v1(")
+            .expect("public-key boundary")
+            .0;
+        let public_take = public_key
+            .find("WalletSecretCopyValueV1::take(&mut recipient_secret_key)")
+            .expect("recipient secret take");
+        let public_derive = public_key
+            .find("x25519_public_key_v1(recipient_secret_key.expose_ref())")
+            .expect("borrowed public-key derivation");
+        assert!(public_take < public_derive);
+        assert!(!public_key.contains("Zeroizing::new(recipient_secret_key)"));
+
+        let encrypt = source
+            .split_once("pub fn encrypt_fcmp_wallet_note_v1(")
+            .expect("encrypt helper")
+            .1
+            .split_once("/// Decrypt and authenticate")
+            .expect("encrypt boundary")
+            .0;
+        assert!(encrypt.contains("x25519_public_key_v1(&*ephemeral_secret)"));
+        assert!(encrypt.contains("x25519_shared_secret_v1(&*ephemeral_secret,"));
+        assert!(encrypt.contains("let plaintext = note.encode("));
+        assert!(encrypt.contains("XChaCha20Poly1305::new_from_slice(key.expose_ref())"));
+        assert!(!encrypt.contains("x25519_public_key_v1(*ephemeral_secret)"));
+        assert!(!encrypt.contains("Zeroizing::new(\n        x25519_shared_secret_v1"));
+        assert!(!encrypt.contains("Zeroizing::new(note.encode("));
+
+        let decrypt = source
+            .split_once("pub fn decrypt_fcmp_wallet_note_v1(")
+            .expect("decrypt helper")
+            .1
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("decrypt boundary")
+            .0;
+        let decrypt_take = decrypt
+            .find("WalletSecretCopyValueV1::take(&mut recipient_secret_key)")
+            .expect("decrypt secret take");
+        let validation = decrypt
+            .find("validate_fcmp_encrypted_output_v1")
+            .expect("ciphertext validation");
+        assert!(decrypt_take < validation);
+        assert!(decrypt.contains("x25519_public_key_v1(recipient_secret_key.expose_ref())"));
+        assert!(decrypt.contains("recipient_secret_key.expose_ref(),"));
+        assert!(decrypt.contains("XChaCha20Poly1305::new_from_slice(key.expose_ref())"));
+        assert!(!decrypt.contains("fcmp_recipient_public_key_v1(*recipient_secret_key)"));
+        assert!(!decrypt.contains("Zeroizing::new(recipient_secret_key)"));
+    }
 
     struct PeriodicRng {
         period: usize,
@@ -557,7 +1020,7 @@ mod tests {
         let key = note_key_v1(&shared, &aad);
         let (nonce_bytes, _) = parsed_ciphertext(encrypted).expect("canonical ciphertext");
         let nonce: chacha20poly1305::XNonce = nonce_bytes.into();
-        let authenticated = XChaCha20Poly1305::new_from_slice(key.as_slice())
+        let authenticated = XChaCha20Poly1305::new_from_slice(key.expose_ref())
             .expect("fixed key length")
             .encrypt(
                 &nonce,
@@ -652,10 +1115,8 @@ mod tests {
         // decoding must still reject an amount/mask that does not open the
         // public C, instead of treating AEAD authentication as proof of the
         // commitment relation.
-        let shared = Zeroizing::new(
-            x25519_shared_secret_v1(secret, encrypted.ephemeral_public_key.into_bytes())
-                .expect("recipient shared secret"),
-        );
+        let shared = x25519_shared_secret_v1(secret, encrypted.ephemeral_public_key.into_bytes())
+            .expect("recipient shared secret");
         let aad = aad_v1(
             pool,
             encrypted.recipient,
@@ -668,7 +1129,7 @@ mod tests {
         let mut mismatching_plaintext = note.encode(output.output_id().into_bytes());
         let amount_offset = 36 + FCMP_OUTPUT_TUPLE_BYTES_V1;
         mismatching_plaintext[amount_offset] ^= 1;
-        let authenticated = XChaCha20Poly1305::new_from_slice(key.as_slice())
+        let authenticated = XChaCha20Poly1305::new_from_slice(key.expose_ref())
             .expect("fixed key length")
             .encrypt(
                 &nonce,
@@ -761,9 +1222,9 @@ mod tests {
 
         let native = model_output(output).unwrap();
         assert!(
-            FcmpWalletNoteV1::new(
+            FcmpWalletNoteV1::new_borrowed(
                 native,
-                Scalar::from(18_u64).to_bytes(),
+                &Scalar::from(18_u64).to_bytes(),
                 note.output_y(),
                 note.amount(),
                 note.commitment_mask(),
@@ -771,12 +1232,12 @@ mod tests {
             .is_err()
         );
         assert!(matches!(
-            FcmpWalletNoteV1::new(
+            FcmpWalletNoteV1::new_borrowed(
                 native,
                 note.spend_x(),
                 note.output_y(),
                 note.amount(),
-                Scalar::from(41_u64).to_bytes(),
+                &Scalar::from(41_u64).to_bytes(),
             ),
             Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch)
         ));
@@ -798,7 +1259,7 @@ mod tests {
             ("inner linking-tag generator", 36 + 32),
             ("inner amount commitment", 36 + 64),
         ] {
-            let mut plaintext = Zeroizing::new(note.encode(output.output_id().into_bytes()));
+            let mut plaintext = note.encode(output.output_id().into_bytes());
             plaintext[offset] ^= 1;
             let adversarial = authenticated_plaintext_for_test(
                 pool,
@@ -820,7 +1281,7 @@ mod tests {
             ("spend scalar", amount_start + 40),
             ("output blinding scalar", amount_start + 72),
         ] {
-            let mut plaintext = Zeroizing::new(note.encode(output.output_id().into_bytes()));
+            let mut plaintext = note.encode(output.output_id().into_bytes());
             plaintext[start..start + 32].fill(u8::MAX);
             let adversarial = authenticated_plaintext_for_test(
                 pool,

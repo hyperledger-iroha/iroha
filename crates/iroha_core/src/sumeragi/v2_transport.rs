@@ -233,6 +233,58 @@ impl AuthenticatedCertifiedBodyRequest {
     pub(crate) const fn request(&self) -> &wire::CertifiedBodyRequest {
         &self.request
     }
+
+    /// Authenticate one response against this exact already-authenticated request.
+    ///
+    /// This request-scoped entry point lets a dedicated lifecycle owner retain
+    /// request authority without inserting it into the ordinary outstanding
+    /// tracker. The authenticated response constructor remains private here.
+    pub(in crate::sumeragi) fn authenticate_response(
+        &self,
+        context: &wire::HeightContext,
+        response: wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+    ) -> Result<AuthenticatedCertifiedBodyResponse, V2TransportError> {
+        authenticate_certified_body_response_for_request(
+            context,
+            self,
+            response,
+            authenticated_responder,
+        )
+    }
+}
+
+fn authenticate_certified_body_response_for_request(
+    context: &wire::HeightContext,
+    authenticated_request: &AuthenticatedCertifiedBodyRequest,
+    response: wire::CertifiedBodyResponse,
+    authenticated_responder: &PeerId,
+) -> Result<AuthenticatedCertifiedBodyResponse, V2TransportError> {
+    let claimed_responder = roster_peer(context, response.responder)?;
+    bind_outer_identity(
+        TransportIdentityKind::Responder,
+        claimed_responder,
+        authenticated_responder,
+    )?;
+    response.validate_against(
+        context,
+        authenticated_request.request(),
+        authenticated_responder,
+    )?;
+    verify_signature(
+        TransportSignatureKind::CertifiedBodyResponse,
+        claimed_responder,
+        &response.signature,
+        &response.signature_preimage(),
+    )?;
+    let proposal = decode_framed_signed_block(&response.body)
+        .map_err(|error| V2TransportError::InvalidProposalBody(error.to_string()))?;
+    if !proposal.is_resultless_proposal() {
+        return Err(V2TransportError::InvalidProposalBody(
+            "execution results or result root are present".to_owned(),
+        ));
+    }
+    Ok(AuthenticatedCertifiedBodyResponse { response })
 }
 
 /// Certified-body response admitted for one outstanding exact request.
@@ -659,6 +711,21 @@ impl OutstandingCertifiedBodyRequests {
         self.requests.contains_key(&hash)
     }
 
+    /// Whether the ordinary tracker already owns the logical identity of one
+    /// separately authenticated request.
+    ///
+    /// The private [`RequestIdentity`] does not escape this module; dedicated
+    /// lifecycle owners use this comparison oracle to prevent a second owner
+    /// with different signature bytes from bypassing the ordinary identity
+    /// fence.
+    pub(in crate::sumeragi) fn contains_authenticated_identity(
+        &self,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> bool {
+        self.identities
+            .contains_key(&RequestIdentity::from(authenticated.request()))
+    }
+
     /// Validate the complete request, logical-identity, and response-claim cut.
     pub(crate) fn validate_exact_indexes(&self) -> bool {
         self.capacity != 0
@@ -846,28 +913,7 @@ impl OutstandingCertifiedBodyRequests {
             .requests
             .get(&request_hash)
             .ok_or(V2TransportError::UnsolicitedResponse(request_hash))?;
-        let request = authenticated_request.request();
-        let claimed_responder = roster_peer(context, response.responder)?;
-        bind_outer_identity(
-            TransportIdentityKind::Responder,
-            claimed_responder,
-            authenticated_responder,
-        )?;
-        response.validate_against(context, request, authenticated_responder)?;
-        verify_signature(
-            TransportSignatureKind::CertifiedBodyResponse,
-            claimed_responder,
-            &response.signature,
-            &response.signature_preimage(),
-        )?;
-        let proposal = decode_framed_signed_block(&response.body)
-            .map_err(|error| V2TransportError::InvalidProposalBody(error.to_string()))?;
-        if !proposal.is_resultless_proposal() {
-            return Err(V2TransportError::InvalidProposalBody(
-                "execution results or result root are present".to_owned(),
-            ));
-        }
-        Ok(AuthenticatedCertifiedBodyResponse { response })
+        authenticated_request.authenticate_response(context, response, authenticated_responder)
     }
 
     /// Check the one-response family without acquiring or replacing it.

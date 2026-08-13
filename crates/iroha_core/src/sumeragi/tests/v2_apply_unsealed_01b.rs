@@ -1,4 +1,57 @@
 v2_apply_test!(
+    canonical_overlap_detects_same_transaction_under_substituted_key,
+    {
+        let fixture = ApplyFixture::new();
+        let producer = KeyPair::try_from_seed(vec![0xBD; 32], Algorithm::BlsNormal)
+            .expect("derive canonical-overlap autonomous producer");
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+        let journal_dir = tempfile::tempdir().expect("canonical-overlap journal directory");
+        queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install canonical-overlap queue-plan journal");
+        queue
+            .install_lane_reservation_journal(
+                journal_dir.path().join("lane-reservations.norito"),
+                1024 * 1024,
+            )
+            .expect("install canonical-overlap reservation journal");
+        let (mut substituted, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
+        let snapshot = queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture canonical-overlap ownership snapshot");
+        let group = snapshot
+            .ordered_groups
+            .first()
+            .expect("one canonical-overlap group");
+        substituted.reservation_keys[0].queue_plan_admission_binding_hash =
+            Hash::new(b"substituted canonical QueuePlan binding");
+
+        assert!(
+            autonomous_payload_overlaps_group_transaction_identity(&substituted, group),
+            "same signed transaction or typed entrypoint must make a substituted key relevant"
+        );
+        assert!(
+            !canonical_payload_contains_group_in_order(&substituted, group),
+            "the substituted key must remain ineligible for exact canonical classification"
+        );
+        assert_eq!(
+            queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("capture canonical-overlap post-check snapshot"),
+            snapshot,
+            "conflict preflight must not mutate Queue ownership"
+        );
+        assert!(queue.lane_reservation_commit_barriers().is_empty());
+        assert!(queue.lane_reservation_release_barriers().is_empty());
+    }
+);
+
+v2_apply_test!(
     autonomous_reservation_cross_store_crash_matrix_preserves_fifo_exactly_once,
     {
         for boundary in [

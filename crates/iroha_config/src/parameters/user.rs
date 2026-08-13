@@ -45,6 +45,7 @@ use iroha_data_model::{
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     sorafs::{
         capacity::ProviderId,
+        moderation_ledger::{MODERATION_QUERY_MAX_CASES_V1, MODERATION_QUERY_MAX_EVENTS_V1},
         orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
     },
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
@@ -19712,11 +19713,16 @@ impl SorafsModerationOrchestrator {
             ("max_handoffs", self.max_handoffs),
             ("maintenance_batch_limit", self.maintenance_batch_limit),
         ] {
-            if value == 0 || value > MAX_COLLECTION {
+            let maximum = match field {
+                "max_cases" => MODERATION_QUERY_MAX_CASES_V1,
+                "max_events" => MODERATION_QUERY_MAX_EVENTS_V1,
+                _ => MAX_COLLECTION,
+            };
+            if value == 0 || value > maximum {
                 emit(
                     emitter,
                     format!(
-                        "sorafs.storage.moderation_orchestrator.{field} must be within 1..={MAX_COLLECTION}"
+                        "sorafs.storage.moderation_orchestrator.{field} must be within 1..={maximum}"
                     ),
                 );
             }
@@ -23890,6 +23896,7 @@ mod sorafs_moderation_orchestrator_tests {
         assert!(config.parse(true, &mut emitter).is_none());
         assert!(emitter.into_result().is_err());
     }
+    include!("user/sorafs_moderation_query_bound_tests.rs");
 }
 #[cfg(test)]
 #[path = "user/sorafs_provider_ingest_runtime_config_tests.rs"]

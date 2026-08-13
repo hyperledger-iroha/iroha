@@ -2333,6 +2333,7 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
 #[test]
 fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     let adapter = include_str!("../v2.rs");
+    let body_store_source = include_str!("../v2_body_store.rs");
     let runtime = include_str!("../v2_runtime.rs");
     let replay = include_str!("../v2_lifecycle_replay_authority.rs");
     let wal_recovery = include_str!("../v2_lifecycle_wal_recovery.rs");
@@ -2340,7 +2341,7 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     let registry = include_str!("../v2_lifecycle_work_registry.rs");
 
     let factory_start = adapter
-        .find("pub(crate) fn open_production_lifecycle_owner_v1(")
+        .find("pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(")
         .expect("locate unified lifecycle owner factory");
     let factory_tail = &adapter[factory_start..];
     let factory_end = factory_tail
@@ -2351,9 +2352,24 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
         .find("fn open_production_lifecycle_owner_v1_at_authenticated_roots(")
         .expect("locate the private authenticated-root implementation");
     let canonical_factory = &factory[..canonical_factory_end];
-    let storage_authority = canonical_factory
-        .find("storage: RecoveredLifecycleStorageAuthorityV1")
-        .expect("consume the recovery-minted storage authority");
+    let factory_inputs = canonical_factory
+        .find("factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1")
+        .expect("consume the adapter-bound execution/storage seal");
+    assert!(canonical_factory.contains(
+        "body_store: super::v2_body_store::QuarantinedV2BodyStore"
+    ));
+    assert!(!canonical_factory.contains(
+        "body_store: super::v2_body_store::V2BodyStore"
+    ));
+    assert!(!canonical_factory.contains(
+        "body_store: super::v2_body_store::RevalidatedV2BodyStore"
+    ));
+    let residual = canonical_factory
+        .find("if !self.effects.is_empty()")
+        .expect("reject residual effects before marker replay");
+    let startup_binding = canonical_factory
+        .find("Arc::ptr_eq(&adapter_owner, &self.factory_owner)")
+        .expect("bind inputs to the exact authenticated startup");
     let context_binding = canonical_factory
         .find("storage.context_id != context.id()")
         .expect("bind the storage authority to the recovered context");
@@ -2363,6 +2379,12 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     let wal_path = canonical_factory
         .find("self.adapter.wal.matches_path(&storage.wal_path)")
         .expect("bind the adapter to the recovery-sealed WAL path");
+    let apply_service = canonical_factory
+        .find("let apply_service = super::v2_apply::V2ApplyService::new(")
+        .expect("construct one exact replay/live Apply service");
+    let replay_markers = canonical_factory
+        .find(".into_revalidated_lifecycle_startup(")
+        .expect("consume the fixed marker replay cut");
     let sealed_parts = canonical_factory
         .find("let RecoveredLifecycleStorageAuthorityV1 {")
         .expect("open the storage seal only after exact validation");
@@ -2370,14 +2392,49 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
         .find("self.open_production_lifecycle_owner_v1_at_authenticated_roots(")
         .expect("enter the private implementation after exact target checks");
     let kura_binding = canonical_factory
-        .find("owner.with_recovered_kura_binding(kura_binding)")
-        .expect("retain the exact recovered Kura instance in the owner");
-    assert!(storage_authority < context_binding);
+        .find("owner.with_recovered_kura_binding_and_apply_service(")
+        .expect("retain exact Kura and replay service together");
+    assert!(factory_inputs < residual);
+    assert!(residual < startup_binding);
+    assert!(startup_binding < context_binding);
     assert!(context_binding < body_root);
     assert!(body_root < wal_path);
-    assert!(wal_path < sealed_parts);
+    assert!(wal_path < apply_service);
+    assert!(apply_service < replay_markers);
+    assert!(replay_markers < sealed_parts);
     assert!(sealed_parts < authenticated_roots);
     assert!(authenticated_roots < kura_binding);
+    let quarantine = body_store_source
+        .split_once("impl QuarantinedV2BodyStore {")
+        .expect("locate quarantined recovered-startup cut")
+        .1
+        .split_once("impl RevalidatedV2BodyStore {")
+        .expect("locate end of quarantined recovered-startup cut")
+        .0;
+    assert!(quarantine.contains("fn into_revalidated_lifecycle_startup("));
+    assert!(!quarantine.contains("fn retain_recovered_markers_for_subject("));
+    assert!(!quarantine.contains("fn retain_recovered_markers_for_authority("));
+    assert!(!quarantine.contains("fn revalidate_recovered_markers<"));
+    assert!(!quarantine.contains("fn into_revalidated_startup("));
+    let finality = quarantine
+        .find("apply_service.recovered_finality_subject(context)")
+        .expect("derive recovered-finality authority inside fixed replay");
+    let subject_filter = quarantine
+        .find(".retain_recovered_markers_for_subject(subject)")
+        .expect("filter markers to recovered finality first");
+    let authority_filter = quarantine
+        .find(".retain_recovered_markers_for_authority(validation_authority)")
+        .expect("then filter markers to WAL authority");
+    let semantic_replay = quarantine
+        .find(".revalidate_recovered_markers(|body|")
+        .expect("semantically replay retained markers");
+    let seal_markers = quarantine
+        .find("self.0.into_revalidated_startup()")
+        .expect("seal only replayed marker state");
+    assert!(finality < subject_filter);
+    assert!(subject_filter < authority_filter);
+    assert!(authority_filter < semantic_replay);
+    assert!(semantic_replay < seal_markers);
     for forbidden in [
         "kura: &Kura",
         "ledger_root: &std::path::Path",
@@ -2416,6 +2473,8 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     assert!(decision_body_preflight < decision_adapter_preview);
     assert!(decision_adapter_preview < body_handoff);
     assert!(body_handoff < serve_open);
+    assert!(serve_open < control_open);
+    assert!(serve_open < decision_open);
     assert!(!factory.contains("publish_recovered_adapter_status"));
     assert!(factory[..projection].contains("if !self.effects.is_empty()"));
     let decision_apply_open = factory

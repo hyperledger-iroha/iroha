@@ -3,9 +3,9 @@
 //! The release ring is always represented by eight ordered 16,384-
 //! coefficient chunks.  Role marker types fix the coefficient bound, outer
 //! wire magic, and every transcript/root domain at compile time.  In
-//! particular, persistent-secret and CPK-error evidence cannot be converted
-//! into one another and neither verified membership capability establishes a
-//! CPK polynomial relation.
+//! particular, persistent-secret, RKG-ephemeral, and CPK-error evidence cannot
+//! be converted into one another and no verified membership capability alone
+//! establishes a polynomial relation.
 
 use core::{fmt::Debug, marker::PhantomData};
 
@@ -64,6 +64,10 @@ pub(super) const EXACT_MEMBERSHIP_HEADER_BYTES_V1: usize =
 pub(super) const ZK_AMS_MKHE_PERSISTENT_SECRET_MEMBERSHIP_WIRE_BYTES_V1: usize =
     EXACT_MEMBERSHIP_HEADER_BYTES_V1
         + ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 * BOUND_ONE_CHUNK_WIRE_BYTES_V1;
+/// Exact RKG-ephemeral evidence width for the distinct bound-one role.
+pub(super) const ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1: usize =
+    EXACT_MEMBERSHIP_HEADER_BYTES_V1
+        + ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 * BOUND_ONE_CHUNK_WIRE_BYTES_V1;
 /// Exact CPK-error evidence width for the bound-two role.
 pub(super) const ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1: usize =
     EXACT_MEMBERSHIP_HEADER_BYTES_V1
@@ -78,6 +82,7 @@ const _: () = {
     assert!(BOUND_TWO_CHUNK_WIRE_BYTES_V1 == 1_560);
     assert!(EXACT_MEMBERSHIP_HEADER_BYTES_V1 == 339);
     assert!(ZK_AMS_MKHE_PERSISTENT_SECRET_MEMBERSHIP_WIRE_BYTES_V1 == 12_291);
+    assert!(ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1 == 12_291);
     assert!(ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1 == 12_819);
 };
 
@@ -89,11 +94,16 @@ mod sealed {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PersistentSecretMembershipRoleV1 {}
 
+/// Compile-time RKG-ephemeral role. It has no constructible values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RkgEphemeralMembershipRoleV1 {}
+
 /// Compile-time CPK public-error role.  It has no constructible values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CpkErrorMembershipRoleV1 {}
 
 impl sealed::Sealed for PersistentSecretMembershipRoleV1 {}
+impl sealed::Sealed for RkgEphemeralMembershipRoleV1 {}
 impl sealed::Sealed for CpkErrorMembershipRoleV1 {}
 
 pub(super) trait ExactEightChunkMembershipRoleV1:
@@ -126,6 +136,22 @@ impl ExactEightChunkMembershipRoleV1 for PersistentSecretMembershipRoleV1 {
         b"iroha.zk-ams.v1.mkhe.persistent-membership.verifier-transcript-set";
 }
 
+impl ExactEightChunkMembershipRoleV1 for RkgEphemeralMembershipRoleV1 {
+    const MAGIC: [u8; 4] = *b"ZRME";
+    const BOUND: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::One;
+    const PROOF_BYTES: usize = BOUND_ONE_PROOF_BYTES_V1;
+    const CHUNK_WIRE_BYTES: usize = BOUND_ONE_CHUNK_WIRE_BYTES_V1;
+    const WIRE_BYTES: usize = ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1;
+    const CONTEXT_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.rkg-ephemeral-membership.context";
+    const COMMITMENT_SET_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.rkg-ephemeral-membership.commitment-set";
+    const PROOF_SET_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.rkg-ephemeral-membership.proof-set";
+    const VERIFIER_TRANSCRIPT_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.rkg-ephemeral-membership.verifier-transcript-set";
+}
+
 impl ExactEightChunkMembershipRoleV1 for CpkErrorMembershipRoleV1 {
     const MAGIC: [u8; 4] = *b"ZCEM";
     const BOUND: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::Two;
@@ -142,7 +168,7 @@ impl ExactEightChunkMembershipRoleV1 for CpkErrorMembershipRoleV1 {
         b"iroha.zk-ams.v1.mkhe.cpk-error-membership.verifier-transcript-set";
 }
 
-/// Stable failures shared by the two sealed exact-eight-chunk roles.
+/// Stable failures shared by the three sealed exact-eight-chunk roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ExactEightChunkMembershipErrorV1 {
     /// One or more source-context axes are zero.
@@ -1006,30 +1032,40 @@ mod tests {
     }
 
     #[test]
-    fn both_roles_have_exact_release_sizes_and_move_only_verified_outputs() {
+    fn all_roles_have_exact_release_sizes_and_move_only_verified_outputs() {
         assert_eq!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1, 8);
         assert_eq!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1, 131_072);
         assert_eq!(PersistentSecretMembershipRoleV1::PROOF_BYTES, 1_447);
         assert_eq!(PersistentSecretMembershipRoleV1::CHUNK_WIRE_BYTES, 1_494);
         assert_eq!(PersistentSecretMembershipRoleV1::WIRE_BYTES, 12_291);
+        assert_eq!(RkgEphemeralMembershipRoleV1::PROOF_BYTES, 1_447);
+        assert_eq!(RkgEphemeralMembershipRoleV1::CHUNK_WIRE_BYTES, 1_494);
+        assert_eq!(RkgEphemeralMembershipRoleV1::WIRE_BYTES, 12_291);
         assert_eq!(CpkErrorMembershipRoleV1::PROOF_BYTES, 1_513);
         assert_eq!(CpkErrorMembershipRoleV1::CHUNK_WIRE_BYTES, 1_560);
         assert_eq!(CpkErrorMembershipRoleV1::WIRE_BYTES, 12_819);
         assert_role_roundtrip::<PersistentSecretMembershipRoleV1>();
+        assert_role_roundtrip::<RkgEphemeralMembershipRoleV1>();
         assert_role_roundtrip::<CpkErrorMembershipRoleV1>();
 
         fn consume_persistent(
             _: VerifiedExactEightChunkMembershipV1<PersistentSecretMembershipRoleV1>,
         ) {
         }
+        fn consume_ephemeral(_: VerifiedExactEightChunkMembershipV1<RkgEphemeralMembershipRoleV1>) {
+        }
         fn consume_error(_: VerifiedExactEightChunkMembershipV1<CpkErrorMembershipRoleV1>) {}
         let persistent = fake_evidence::<PersistentSecretMembershipRoleV1>(b"move-only-p", 0)
             .into_verified_with_for_test(fake_verify::<PersistentSecretMembershipRoleV1>)
             .expect("persistent verified");
-        let error = fake_evidence::<CpkErrorMembershipRoleV1>(b"move-only-e", 8)
+        let ephemeral = fake_evidence::<RkgEphemeralMembershipRoleV1>(b"move-only-u", 8)
+            .into_verified_with_for_test(fake_verify::<RkgEphemeralMembershipRoleV1>)
+            .expect("ephemeral verified");
+        let error = fake_evidence::<CpkErrorMembershipRoleV1>(b"move-only-e", 16)
             .into_verified_with_for_test(fake_verify::<CpkErrorMembershipRoleV1>)
             .expect("error verified");
         consume_persistent(persistent);
+        consume_ephemeral(ephemeral);
         consume_error(error);
     }
 
@@ -1055,8 +1091,9 @@ mod tests {
     }
 
     #[test]
-    fn both_roles_reject_every_truncation_and_representative_trailing_bytes() {
+    fn all_roles_reject_every_truncation_and_representative_trailing_bytes() {
         assert_exact_length_rejection::<PersistentSecretMembershipRoleV1>();
+        assert_exact_length_rejection::<RkgEphemeralMembershipRoleV1>();
         assert_exact_length_rejection::<CpkErrorMembershipRoleV1>();
     }
 
@@ -1065,7 +1102,10 @@ mod tests {
         let persistent = fake_evidence::<PersistentSecretMembershipRoleV1>(b"cross-role", 0)
             .to_wire_bytes()
             .expect("persistent wire");
-        let error = fake_evidence::<CpkErrorMembershipRoleV1>(b"cross-role", 8)
+        let ephemeral = fake_evidence::<RkgEphemeralMembershipRoleV1>(b"cross-role", 8)
+            .to_wire_bytes()
+            .expect("ephemeral wire");
+        let error = fake_evidence::<CpkErrorMembershipRoleV1>(b"cross-role", 16)
             .to_wire_bytes()
             .expect("error wire");
         assert!(
@@ -1077,6 +1117,18 @@ mod tests {
         assert!(
             ExactEightChunkMembershipEvidenceV1::<PersistentSecretMembershipRoleV1>::from_wire_bytes_exact(
                 &error
+            )
+            .is_err()
+        );
+        assert!(
+            ExactEightChunkMembershipEvidenceV1::<RkgEphemeralMembershipRoleV1>::from_wire_bytes_exact(
+                &persistent
+            )
+            .is_err()
+        );
+        assert!(
+            ExactEightChunkMembershipEvidenceV1::<PersistentSecretMembershipRoleV1>::from_wire_bytes_exact(
+                &ephemeral
             )
             .is_err()
         );
@@ -1168,10 +1220,21 @@ mod tests {
     }
 
     #[test]
-    fn every_context_axis_is_bound_for_both_roles_and_domains_are_disjoint() {
+    fn every_context_axis_is_bound_for_all_roles_and_domains_are_disjoint() {
         assert_all_context_axes_bound::<PersistentSecretMembershipRoleV1>();
+        assert_all_context_axes_bound::<RkgEphemeralMembershipRoleV1>();
         assert_all_context_axes_bound::<CpkErrorMembershipRoleV1>();
         let persistent = context::<PersistentSecretMembershipRoleV1>(b"same-axes");
+        let ephemeral = ExactEightChunkMembershipContextV1::<RkgEphemeralMembershipRoleV1>::new(
+            persistent.profile_digest(),
+            persistent.roster_digest(),
+            persistent.key_material_digest(),
+            persistent.epoch(),
+            persistent.cpk_transcript_digest(),
+            persistent.party(),
+            persistent.share_statement_digest(),
+        )
+        .expect("same axes under RKG-ephemeral role");
         let error = ExactEightChunkMembershipContextV1::<CpkErrorMembershipRoleV1>::new(
             persistent.profile_digest(),
             persistent.roster_digest(),
@@ -1182,7 +1245,13 @@ mod tests {
             persistent.share_statement_digest(),
         )
         .expect("same axes under error role");
+        assert_ne!(persistent.context_digest(), ephemeral.context_digest());
         assert_ne!(persistent.context_digest(), error.context_digest());
+        assert_ne!(ephemeral.context_digest(), error.context_digest());
+        assert_ne!(
+            PersistentSecretMembershipRoleV1::COMMITMENT_SET_DIGEST_DOMAIN,
+            RkgEphemeralMembershipRoleV1::COMMITMENT_SET_DIGEST_DOMAIN
+        );
         assert_ne!(
             PersistentSecretMembershipRoleV1::COMMITMENT_SET_DIGEST_DOMAIN,
             CpkErrorMembershipRoleV1::COMMITMENT_SET_DIGEST_DOMAIN
@@ -1257,13 +1326,14 @@ mod tests {
     }
 
     #[test]
-    fn outer_inner_and_digest_mutations_fail_closed_for_both_roles() {
+    fn outer_inner_and_digest_mutations_fail_closed_for_all_roles() {
         assert_mutations_rejected::<PersistentSecretMembershipRoleV1>();
+        assert_mutations_rejected::<RkgEphemeralMembershipRoleV1>();
         assert_mutations_rejected::<CpkErrorMembershipRoleV1>();
     }
 
     #[test]
-    fn zero_context_axes_are_rejected_for_both_roles() {
+    fn zero_context_axes_are_rejected_for_all_roles() {
         fn assert_role<R: ExactEightChunkMembershipRoleV1>() {
             let valid = context::<R>(b"zero-axis");
             for axis in 0..7 {
@@ -1308,7 +1378,30 @@ mod tests {
             }
         }
         assert_role::<PersistentSecretMembershipRoleV1>();
+        assert_role::<RkgEphemeralMembershipRoleV1>();
         assert_role::<CpkErrorMembershipRoleV1>();
+    }
+
+    #[test]
+    fn rkg_ephemeral_role_has_distinct_frozen_wire_and_domains() {
+        assert_eq!(RkgEphemeralMembershipRoleV1::MAGIC, *b"ZRME");
+        assert_eq!(
+            RkgEphemeralMembershipRoleV1::BOUND,
+            ZkAmsT256MembershipBoundV1::One
+        );
+        assert_eq!(RkgEphemeralMembershipRoleV1::WIRE_BYTES, 12_291);
+        assert_eq!(
+            RkgEphemeralMembershipRoleV1::CONTEXT_DIGEST_DOMAIN,
+            b"iroha.zk-ams.v1.mkhe.rkg-ephemeral-membership.context"
+        );
+        assert_ne!(
+            RkgEphemeralMembershipRoleV1::CONTEXT_DIGEST_DOMAIN,
+            PersistentSecretMembershipRoleV1::CONTEXT_DIGEST_DOMAIN
+        );
+        assert_ne!(
+            RkgEphemeralMembershipRoleV1::PROOF_SET_DIGEST_DOMAIN,
+            CpkErrorMembershipRoleV1::PROOF_SET_DIGEST_DOMAIN
+        );
     }
 
     #[test]

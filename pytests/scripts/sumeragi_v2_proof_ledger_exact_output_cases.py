@@ -2396,6 +2396,27 @@ def _apply_exact_output_non_runtime_extended_mutations(
 ) -> list[str]:
     mutations = (
         (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(crate) fn complete_application<S: V2EffectServices>(",
+            "|| !self.recovered_decision_fetch_request_index_is_exact_and_empty()",
+            "|| false",
+            "runtime Apply completion must reject a second terminal or recovered-Fetch overlap",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(",
+            "|| !self.recovered_decision_fetch_request_index_is_exact_and_empty()",
+            "|| false",
+            "recovered Decision Apply completion must not overtake retained executor work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn commit_recovered_decision_apply_finality(",
+            "&& self.recovered_decision_fetch_request_index_is_exact_and_empty()",
+            "&& true",
+            "recovered Decision Apply finality must authenticate its height, artifact, receipt, and drained runtime",
+        ),
+        (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn derive_server_request_capacities(",
             "|| server_stream_capacity > MAX_CERTIFIED_MERGE_SERVER_STREAMS",

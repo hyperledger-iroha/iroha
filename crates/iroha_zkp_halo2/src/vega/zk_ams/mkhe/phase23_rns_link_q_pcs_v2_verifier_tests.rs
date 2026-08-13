@@ -128,7 +128,31 @@ fn append_uniform_section(
     assert_eq!(written, authentication);
 }
 
-fn authenticated_uniform_wire(case: UniformCase) -> Vec<u8> {
+fn authentication_cap_witness_queries() -> [u32; QUERY_COUNT_V2] {
+    let mut queries = [0_u32; QUERY_COUNT_V2];
+    let mut next = 0_usize;
+    for parity in [1_u32, 0] {
+        for state in 0_u16..=u8::MAX as u16 {
+            let state = state as u8;
+            if state.count_ones() % 2 == parity {
+                for bit in 1_usize..18 {
+                    let state_bit = (bit - 1) % 8;
+                    queries[next] |= u32::from((state >> state_bit) & 1) << bit;
+                }
+                next += 1;
+                if next == QUERY_COUNT_V2 {
+                    return queries;
+                }
+            }
+        }
+    }
+    unreachable!("the 8-bit parity partition contains 160 requested states")
+}
+
+fn authenticated_uniform_wire_for_queries(
+    case: UniformCase,
+    query_override: Option<[u32; QUERY_COUNT_V2]>,
+) -> Vec<u8> {
     let parameter_digest = parameter_digest_v2().unwrap();
     let initial_leaf = uniform_leaf(case, TreeKindV2::Initial, 0);
     let quotient_leaf = uniform_leaf(case, TreeKindV2::OpeningQuotient, 0);
@@ -177,7 +201,7 @@ fn authenticated_uniform_wire(case: UniformCase) -> Vec<u8> {
     let mut relations = points.check_relations_v2().unwrap();
     let mut quotient = relations.bind_quotient_root_v2().unwrap();
     let fri = quotient.bind_fri_transcript_v2().unwrap();
-    let queries = fri.live.as_ref().unwrap().queries;
+    let queries = query_override.unwrap_or(fri.live.as_ref().unwrap().queries);
 
     append_uniform_section(
         &mut wire,
@@ -219,6 +243,10 @@ fn authenticated_uniform_wire(case: UniformCase) -> Vec<u8> {
     assert_eq!(length, 2);
     assert!(wire.len() <= MAX_PROOF_BYTES_V2);
     wire
+}
+
+fn authenticated_uniform_wire(case: UniformCase) -> Vec<u8> {
+    authenticated_uniform_wire_for_queries(case, None)
 }
 
 fn authenticated_zero_wire() -> Vec<u8> {
@@ -344,6 +372,30 @@ fn literal_hash_field_and_equation_kats_are_stable() {
 }
 
 #[test]
+fn authenticated_verifier_accepts_the_exact_fri_authentication_maximum() {
+    let queries = authentication_cap_witness_queries();
+    let wire = authenticated_uniform_wire_for_queries(UniformCase::Valid, Some(queries));
+    assert_eq!(wire.len(), 27_322_528);
+    let mut offset = FIXED_BEFORE_SECTIONS_V2;
+    let mut fri_opened = 0_usize;
+    let mut fri_authentication = 0_usize;
+    for section in 0..SECTION_COUNT_V2 {
+        if section >= FRI_SECTION_START_V2 {
+            fri_opened += read_u32_v2(&wire, offset).unwrap() as usize;
+            fri_authentication += read_u32_v2(&wire, offset + 4).unwrap() as usize;
+        }
+        offset += section_len(&wire, offset);
+    }
+    assert_eq!(offset, wire.len());
+    assert_eq!((fri_opened, fri_authentication), (3_710, 20_030));
+    let mut fri = through_fri(&wire);
+    // Test authenticated geometry independently of a transcript-preimage search.
+    fri.live.as_mut().unwrap().queries = queries;
+    let verified = fri.verify_authenticated_equations_v2().unwrap();
+    assert!(verified.live.is_some());
+}
+
+#[test]
 fn authenticated_zero_codeword_verifies_and_transition_poison_is_sticky() {
     let wire = authenticated_zero_wire();
     let mut fri = through_fri(&wire);
@@ -439,6 +491,9 @@ fn source_guards_keep_verifier_borrowed_private_bounded_and_non_authorizing() {
     assert!(!source.contains("caller_challenge"));
     assert!(source.contains("values: &'a [u8]"));
     assert!(source.contains("[EMPTY_FRONTIER_NODE_V2; MAX_FRONTIER_NODES_V2]"));
+    assert!(source.contains("checked_fri_multiproof_bytes_v2(fri_opened, fri_authentication)?"));
+    assert!(parent.contains("const MAX_FRI_AUTH_HASHES_V2: usize = 20_030;"));
+    assert!(parent.contains("const MAX_FRI_MULTIPROOF_BYTES_V2: usize = 25_121_024;"));
     assert!(source.contains("self.live.take().ok_or(SoundnessErrorV2::Poisoned)"));
     assert!(!source.contains("derive(Clone, Debug"));
     for true_gate in [

@@ -1,5 +1,95 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+# Canonical one-to-one operational-correspondence mapping. The source snapshot
+# below proves that every model action appears exactly once, every Rust action
+# tag and numeric discriminant appears exactly once, and every mapped tag is an
+# arm of the shared composed transition kernel. Multiple concrete production
+# call sites may refine one action, but they cannot mint a second mapping.
+PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS = (
+    ("SelectQueuePlanV4Conjunction", "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4", 1),
+    ("FsyncReservationV5", "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5", 2),
+    ("ActivateKura", "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA", 3),
+    ("FanoutFromProducer", "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER", 4),
+    ("ServeLateBody", "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY", 5),
+    ("PersistExecutionInput", "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT", 6),
+    ("AuthorizeReady", "IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY", 7),
+    ("SignReady", "IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY", 8),
+    ("PersistReadyQc", "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC", 9),
+    ("Crash", "IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH", 10),
+    ("Recover", "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER", 11),
+    (
+        "RecoverReservationSnapshot",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+        25,
+    ),
+    (
+        "ReleaseReservationDirect",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+        26,
+    ),
+    (
+        "RehydrateLocalKuraCustody",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY",
+        27,
+    ),
+    ("LaneCommit", "IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT", 12),
+    ("ApplyCarrier", "IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER", 13),
+    (
+        "PersistReservationCommitted",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED",
+        14,
+    ),
+    (
+        "PersistPlanTombstone",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE",
+        15,
+    ),
+    (
+        "ForgetReservationCommit",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT",
+        16,
+    ),
+    (
+        "PersistKuraRetirement",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT",
+        17,
+    ),
+    (
+        "AdvanceReleasePendingPrefix",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
+        18,
+    ),
+    (
+        "PrepareReservationRelease",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE",
+        19,
+    ),
+    (
+        "AdvanceReleasedPrefix",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
+        20,
+    ),
+    (
+        "CompleteReservationRelease",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE",
+        21,
+    ),
+    (
+        "RestoreReleasedFifo",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO",
+        22,
+    ),
+    (
+        "ForgetReservationRelease",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE",
+        23,
+    ),
+    (
+        "RepairPostCarrierEvidence",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        24,
+    ),
+)
 
 def _retained_effect_frontier_adapter_contracts(
     effects_path: Path,
@@ -614,8 +704,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                     "NodeRole::Observer => Ok(None)",
                     "NodeRole::Validator =>",
                     "kura.claim_autonomous_lifecycle_process_generation(",
-                    "context.network_id,",
-                    "local_peer,",
+                    "context.network_id, local_peer)",
                     ".map(Some)",
                 ),
             },
@@ -1846,7 +1935,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "role": "finality-to-State ApplyCarrier orchestration",
                 "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
                 "impl": "V2ApplyService",
-                "symbol": "execute",
+                "symbol": "execute_exact_apply",
                 "required_tokens": (
                     "check_production_application_transition",
                     "CheckedCarrierApplications::for_block",
@@ -1856,7 +1945,6 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                     "application.projection",
                     "checked_carrier_applications.push",
                     "validate_and_apply",
-                    "finish_durable_apply_completion_against",
                 ),
                 "ordered_tokens": (
                     "check_production_application_transition",
@@ -1867,7 +1955,22 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                     "application.checked_transition()",
                     "application.projection",
                     "validate_and_apply",
-                    "finish_durable_apply_completion_against",
+                ),
+            },
+            {
+                "role": "ordinary Apply completion wrapper",
+                "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+                "impl": "V2ApplyService",
+                "symbol": "execute",
+                "required_tokens": (
+                    "self.execute_exact_apply(context, body_store, ExactApplyTaskRef::Ordinary(task))",
+                    "material.ordinary_projection",
+                    "self.finish_durable_apply_completion_against(evidence, prospective_application)",
+                ),
+                "ordered_tokens": (
+                    "self.execute_exact_apply(context, body_store, ExactApplyTaskRef::Ordinary(task))",
+                    "material.ordinary_projection",
+                    "self.finish_durable_apply_completion_against(evidence, prospective_application)",
                 ),
             },
         ),
@@ -2373,7 +2476,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         ),
     },
     {
-        "path": "crates/iroha_core/src/kura.rs",
+        "path": "crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs",
         "impl": "Kura",
         "symbol": "publish_autonomous_lifecycle_bootstrap_cursor_stage",
         "required_tokens": (
@@ -2425,7 +2528,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         ),
     },
     {
-        "path": "crates/iroha_core/src/kura.rs",
+        "path": "crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs",
         "impl": "Kura",
         "symbol": "revalidate_autonomous_lifecycle_bootstrap_for_completion",
         "required_tokens": (
@@ -3411,6 +3514,7 @@ def _production_trace_extraction_source_snapshot(
     for symbol in (
         *ordered_actions,
         "Next",
+        "ConflictingPayloadBindingMutation",
         "MLExecutionInputBeforeReadyAuthorization",
         "MLLaneCommitBeforeAtomicWsvCarrierApplication",
         "MLExactlyOnceCarrierApplication",
@@ -3425,12 +3529,30 @@ def _production_trace_extraction_source_snapshot(
         model_symbols.append(
             _production_trace_tla_symbol_entry(model_relative, symbol, extracted[0])
         )
+        if symbol == "ConflictingPayloadBindingMutation":
+            mutation_tokens = tla_code_tokens(extracted[0])
+            for required in (
+                'Mode = "PayloadBindingConflict"',
+                "payloadBinding'",
+                "BindingB",
+            ):
+                if _token_sequence_count(
+                    mutation_tokens,
+                    tla_code_tokens(required),
+                ) != 1:
+                    errors.append(
+                        "production operational-correspondence requires the "
+                        "unmapped payload-binding mutation to remain explicitly "
+                        f"test-mode-only: missing {required!r}"
+                    )
 
     core_relative = "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     core_items: list[dict[str, Any]] = []
     for symbol in (
         "check_production_in_flight_first_release_transition",
         "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
+        "production_in_flight_first_release_transition_kernel",
+        "production_in_flight_first_release_witness_binding_kernel",
         "production_in_flight_first_release_terminal_owner",
     ):
         item = _production_trace_unique_function(
@@ -3474,6 +3596,112 @@ def _production_trace_extraction_source_snapshot(
             )
         )
 
+    witness_structs = rust_struct_items(
+        core_source,
+        "ProductionInFlightFirstReleaseTransitionWitnessV1",
+    )
+    if len(witness_structs) != 1 or _rust_item_is_test_only(witness_structs[0]):
+        errors.append(
+            "production trace-extraction theorem requires exactly one "
+            "non-test ProductionInFlightFirstReleaseTransitionWitnessV1 struct"
+        )
+    else:
+        core_items.append(
+            _production_trace_rust_item_entry(
+                path=core_relative,
+                kind="struct",
+                symbol="ProductionInFlightFirstReleaseTransitionWitnessV1",
+                item=witness_structs[0],
+            )
+        )
+    witness_binding_macros = rust_macro_items(
+        core_source,
+        "production_in_flight_first_release_witness_binding_body",
+    )
+    if len(witness_binding_macros) != 1:
+        errors.append(
+            "production trace-extraction theorem requires exactly one "
+            "production_in_flight_first_release_witness_binding_body macro"
+        )
+    else:
+        core_items.append(
+            _production_trace_rust_item_entry(
+                path=core_relative,
+                kind="macro",
+                symbol="production_in_flight_first_release_witness_binding_body",
+                item=witness_binding_macros[0],
+            )
+        )
+
+    action_mappings = PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS
+    mapped_model_actions = tuple(mapping[0] for mapping in action_mappings)
+    mapped_action_tags = tuple(mapping[1] for mapping in action_mappings)
+    mapped_discriminants = tuple(mapping[2] for mapping in action_mappings)
+    if mapped_model_actions != PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS:
+        errors.append(
+            "production operational-correspondence mapping has an unmapped, "
+            "unexpected, or reordered model action"
+        )
+    if len(set(mapped_model_actions)) != len(mapped_model_actions):
+        errors.append(
+            "production operational-correspondence mapping contains a duplicate model action"
+        )
+    if len(set(mapped_action_tags)) != len(mapped_action_tags):
+        errors.append(
+            "production operational-correspondence mapping contains a duplicate Rust action tag"
+        )
+    if set(mapped_discriminants) != set(range(1, 28)) or len(
+        set(mapped_discriminants)
+    ) != len(mapped_discriminants):
+        errors.append(
+            "production operational-correspondence mapping must use each V1 "
+            "discriminant from 1 through 27 exactly once"
+        )
+
+    core_statements = rust_top_level_statements(core_source)
+    action_mapping_entries: list[dict[str, Any]] = []
+    transition_macro_tokens = (
+        () if len(transition_macros) != 1 else rust_code_tokens(transition_macros[0].source)
+    )
+    for model_action, action_tag, discriminant in action_mappings:
+        expected_statement = rust_code_tokens(
+            f"pub(crate) const {action_tag}: u8 = {discriminant};"
+        )
+        matching_statements = [
+            statement
+            for statement in core_statements
+            if statement.tokens == expected_statement
+        ]
+        kernel_occurrences = _token_sequence_count(
+            transition_macro_tokens,
+            rust_code_tokens(f"refinement_tag_value!({action_tag})"),
+        )
+        if len(matching_statements) != 1:
+            errors.append(
+                "production operational-correspondence action tag definition "
+                f"is missing or ambiguous for {model_action}: {action_tag}={discriminant}"
+            )
+            continue
+        if kernel_occurrences != 1:
+            errors.append(
+                "production operational-correspondence action must have exactly "
+                f"one shared-kernel arm for {model_action}; found {kernel_occurrences}"
+            )
+            continue
+        statement = matching_statements[0]
+        action_mapping_entries.append(
+            {
+                "model_action": model_action,
+                "rust_action_tag": action_tag,
+                "discriminant": discriminant,
+                "tag_source_sha256": _sha256_bytes(
+                    statement.source.encode("utf-8")
+                ),
+                "tag_token_sha256": _rust_statement_token_sha256(statement),
+                "shared_kernel_occurrences": kernel_occurrences,
+            }
+        )
+
     verus_relative = (
         "crates/iroha_sumeragi_core/src/verus_proofs/"
         "in_flight_first_release_proofs.rs"
@@ -3481,6 +3709,7 @@ def _production_trace_extraction_source_snapshot(
     verus_items: list[dict[str, Any]] = []
     for symbol in (
         "production_in_flight_first_release_transition_refines_named_next",
+        "production_in_flight_first_release_witness_refines_named_next",
         "production_in_flight_reservation_snapshot_replay_refines_composed_stutter",
         "production_in_flight_first_release_snapshot_recovery_is_stutter",
         "production_in_flight_first_release_local_kura_rehydration_is_exact",
@@ -3529,6 +3758,49 @@ def _production_trace_extraction_source_snapshot(
                     "does not retain its exact checked-transition implication"
                 )
 
+    witness_theorem = _production_trace_unique_function(
+        root_dir=root_dir,
+        relative=verus_relative,
+        symbol="production_in_flight_first_release_witness_refines_named_next",
+        impl_name=None,
+        errors=[],
+    )
+    if witness_theorem is not None:
+        witness_theorem_tokens = rust_code_tokens(witness_theorem.source)
+        for required in (
+            "production_in_flight_first_release_transition_kernel(projection)",
+            "production_in_flight_first_release_witness_binding_kernel(projection, witness)",
+            "witness.action == projection.action",
+            "witness.actor == projection.actor",
+            "witness.target == projection.target",
+        ):
+            if _token_sequence_count(
+                witness_theorem_tokens,
+                rust_code_tokens(required),
+            ) == 0:
+                errors.append(
+                    "Verus first-release witness theorem lost required structural "
+                    f"binding {required!r}"
+                )
+
+    verus_kernel_relative = "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    verus_witness_kernel = _production_trace_unique_function(
+        root_dir=root_dir,
+        relative=verus_kernel_relative,
+        symbol="production_in_flight_first_release_witness_binding_kernel",
+        impl_name=None,
+        errors=errors,
+    )
+    if verus_witness_kernel is not None:
+        verus_items.append(
+            _production_trace_rust_item_entry(
+                path=verus_kernel_relative,
+                kind="verus_spec_fn",
+                symbol="production_in_flight_first_release_witness_binding_kernel",
+                item=verus_witness_kernel,
+            )
+        )
+
     shared_identity_relative = "crates/iroha_core/src/queue.rs"
     shared_identity_symbol = (
         "canonical_lane_queue_reservation_group_identity_projection"
@@ -3563,12 +3835,258 @@ def _production_trace_extraction_source_snapshot(
         )
 
     production_items: list[dict[str, Any]] = []
+    operational_relative = "crates/iroha_core/src/sumeragi/v2_core.rs"
+    operational_items: list[dict[str, Any]] = []
+    operational_source = ""
+    try:
+        operational_source = _bounded_regular_file_bytes(
+            root_dir / operational_relative,
+            label="production first-release operational-correspondence wrapper",
+            maximum_bytes=PRODUCTION_TRACE_EXTRACTION_COMPONENT_MAX_BYTES,
+        ).decode("utf-8")
+    except (UnicodeDecodeError, ValueError) as error:
+        errors.append(str(error))
+
+    operational_required_tokens = {
+        "canonical_first_release_state_bytes_v1": (
+            "state.validator_count",
+            "state.producer",
+            "state.producer_selected_owner",
+            "state.replicated_carrier_owners",
+            "state.payload_binding_a",
+            "state.binding_a",
+            "state.queue.plan_state",
+            "state.queue.selected_count",
+            "state.queue.reservation_state",
+            "state.carrier.kura_active",
+            "state.carrier.execution_input_durable",
+            "state.carrier.ready_qc_durable",
+            "state.session.bodies",
+            "state.session.ready_authorized",
+            "state.session.crashed",
+            "state.session.producer_alive",
+            "state.history.ever_queue_plan_v4",
+            "state.history.ever_reservation_v5",
+            "state.history.ever_execution_input_durable",
+            "state.history.ever_ready_authorized",
+            "state.history.ready_signed",
+            "state.history.ever_ready_qc_durable",
+            "state.history.reservation_committed_prefix",
+            "state.history.queue_plan_tombstoned_prefix",
+            "state.history.reservation_commit_forgotten_prefix",
+            "state.history.pending_high_water",
+            "state.history.released_high_water",
+            "state.decision.lane_commit_scope",
+            "state.decision.release_scope",
+            "state.decision.lane_commit_owner",
+            "state.decision.release_owner",
+            "state.decision.wsv_committed",
+            "state.decision.application_count",
+            "state.decision.applied_by",
+            "state.release.kura_retired",
+            "state.release.pending_prefix",
+            "state.release.released_prefix",
+            "state.release.fifo_restored",
+        ),
+        "production_in_flight_first_release_state_digest_v1": (
+            "iroha_crypto::sha256(canonical_first_release_state_bytes_v1(state))",
+        ),
+        "production_in_flight_first_release_transition_witness_v1": (
+            "schema_version: PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION",
+            "action: projection.action",
+            "actor: projection.actor",
+            "target: projection.target",
+            "before_state_digest: production_in_flight_first_release_state_digest_v1(projection.before,)",
+            "after_state_digest: production_in_flight_first_release_state_digest_v1(projection.after)",
+            "source_identity: PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256",
+        ),
+        "authenticate_production_in_flight_first_release_transition_witness_v1": (
+            "refinement::production_in_flight_first_release_transition_kernel(projection)",
+            "production_in_flight_first_release_witness_binding_kernel(projection, witness)",
+            "witness == production_in_flight_first_release_transition_witness_v1(projection)",
+        ),
+        "check_production_in_flight_first_release_replay_step_v1": (
+            "ProductionInFlightFirstReleaseReplayStepV1::ComposedNext",
+            "projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+            "projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+            "projection.before != projection.after",
+            "ProductionInFlightFirstReleaseReplayStepV1::RecoverReservationSnapshotStutter",
+            "projection.before == projection.after",
+            "ProductionInFlightFirstReleaseReplayStepV1::RepairPostCarrierEvidenceStutter",
+            "refinement::check_production_in_flight_first_release_transition(projection)",
+            "authenticate_production_in_flight_first_release_transition_witness_v1(projection, witness)",
+            "checked.with_first_release_witness(witness)",
+        ),
+        "check_production_in_flight_first_release_transition": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+            "ProductionInFlightFirstReleaseReplayStepV1::RecoverReservationSnapshotStutter",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+            "ProductionInFlightFirstReleaseReplayStepV1::RepairPostCarrierEvidenceStutter",
+            "_ => ProductionInFlightFirstReleaseReplayStepV1::ComposedNext",
+            "check_production_in_flight_first_release_replay_step_v1(projection, classification)",
+        ),
+    }
+    for symbol, required_tokens in operational_required_tokens.items():
+        item = _production_trace_unique_function(
+            root_dir=root_dir,
+            relative=operational_relative,
+            symbol=symbol,
+            impl_name=None,
+            errors=errors,
+        )
+        if item is None:
+            continue
+        item_tokens = rust_code_tokens(item.source)
+        missing = [
+            token
+            for token in required_tokens
+            if _token_sequence_count(item_tokens, rust_code_tokens(token)) == 0
+        ]
+        if missing:
+            errors.append(
+                "production operational-correspondence wrapper is incomplete at "
+                f"{symbol}: missing exact code tokens {missing!r}"
+            )
+            continue
+        entry = _production_trace_rust_item_entry(
+            path=operational_relative,
+            kind="fn",
+            symbol=symbol,
+            item=item,
+        )
+        operational_items.append(entry)
+        production_items.append(entry)
+
+    replay_enums = rust_enum_items(
+        operational_source,
+        "ProductionInFlightFirstReleaseReplayStepV1",
+    )
+    if len(replay_enums) != 1 or _rust_item_is_test_only(replay_enums[0]):
+        errors.append(
+            "production operational-correspondence requires exactly one non-test "
+            "ProductionInFlightFirstReleaseReplayStepV1 enum"
+        )
+    else:
+        replay_enum_tokens = rust_code_tokens(replay_enums[0].source)
+        for variant in (
+            "ComposedNext",
+            "RecoverReservationSnapshotStutter",
+            "RepairPostCarrierEvidenceStutter",
+        ):
+            if _token_sequence_count(replay_enum_tokens, rust_code_tokens(variant)) != 1:
+                errors.append(
+                    "production trace replay classification must define exactly "
+                    f"one {variant} variant"
+                )
+        entry = _production_trace_rust_item_entry(
+            path=operational_relative,
+            kind="enum",
+            symbol="ProductionInFlightFirstReleaseReplayStepV1",
+            item=replay_enums[0],
+        )
+        operational_items.append(entry)
+        production_items.append(entry)
+
+    operational_statements = rust_top_level_statements(operational_source)
+    model_source_identity = _sha256_bytes(model_payload)
+    identity_words = [
+        model_source_identity[offset : offset + 16]
+        for offset in range(0, 64, 16)
+    ]
+    identity_literals = [
+        "0x" + "_".join(word[index : index + 4] for index in range(0, 16, 4))
+        for word in identity_words
+    ]
+    expected_operational_statements = {
+        "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION": rust_code_tokens(
+            "pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: u16 = 1;"
+        ),
+        "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256": rust_code_tokens(
+            "pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256: "
+            "ProductionDigest256Projection = ProductionDigest256Projection { "
+            f"word0: {identity_literals[0]}, word1: {identity_literals[1]}, "
+            f"word2: {identity_literals[2]}, word3: {identity_literals[3]}, }};"
+        ),
+    }
+    for symbol, expected_tokens in expected_operational_statements.items():
+        matches = [
+            statement
+            for statement in operational_statements
+            if statement.tokens == expected_tokens
+        ]
+        if len(matches) != 1:
+            errors.append(
+                "production operational-correspondence constant is missing, "
+                f"ambiguous, or stale for {symbol}"
+            )
+            continue
+        statement = matches[0]
+        entry = {
+            "path": operational_relative,
+            "kind": "const",
+            "symbol": symbol,
+            "source_sha256": _sha256_bytes(statement.source.encode("utf-8")),
+            "token_sha256": _rust_statement_token_sha256(statement),
+        }
+        operational_items.append(entry)
+        production_items.append(entry)
+
     if shared_identity_entry is not None:
         production_items.append(shared_identity_entry)
     source_bindings: list[dict[str, Any]] = []
     model_by_symbol = {entry["symbol"]: entry for entry in model_symbols}
     core_by_symbol = {entry["symbol"]: entry for entry in core_items}
     verus_by_symbol = {entry["symbol"]: entry for entry in verus_items}
+    operational_by_symbol = {
+        entry["symbol"]: entry for entry in operational_items
+    }
+    operational_correspondence = {
+        "id": "first_release_transition_witness_v1",
+        "schema_version": 1,
+        "model_source_sha256": model_source_identity,
+        "action_mappings": action_mapping_entries,
+        "canonical_state_encoder": operational_by_symbol.get(
+            "canonical_first_release_state_bytes_v1"
+        ),
+        "state_digest_builder": operational_by_symbol.get(
+            "production_in_flight_first_release_state_digest_v1"
+        ),
+        "witness_builder": operational_by_symbol.get(
+            "production_in_flight_first_release_transition_witness_v1"
+        ),
+        "witness_authenticator": operational_by_symbol.get(
+            "authenticate_production_in_flight_first_release_transition_witness_v1"
+        ),
+        "trace_replay_reducer": operational_by_symbol.get(
+            "check_production_in_flight_first_release_replay_step_v1"
+        ),
+        "production_transition_checker": operational_by_symbol.get(
+            "check_production_in_flight_first_release_transition"
+        ),
+        "replay_classification": operational_by_symbol.get(
+            "ProductionInFlightFirstReleaseReplayStepV1"
+        ),
+        "witness_schema_version": operational_by_symbol.get(
+            "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION"
+        ),
+        "model_source_identity": operational_by_symbol.get(
+            "PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256"
+        ),
+        "shared_transition_kernel": core_by_symbol.get(
+            "production_in_flight_first_release_transition_kernel"
+        ),
+        "shared_witness_binding_kernel": core_by_symbol.get(
+            "production_in_flight_first_release_witness_binding_kernel"
+        ),
+        "verus_witness_binding_kernel": verus_by_symbol.get(
+            "production_in_flight_first_release_witness_binding_kernel"
+        ),
+        "verus_witness_theorem": verus_by_symbol.get(
+            "production_in_flight_first_release_witness_refines_named_next"
+        ),
+        "digest_proof_boundary": "canonical-recomputation-plus-trusted-cryptography-contract",
+        "authenticated": True,
+    }
     snapshot_recovery_bridge_entries: list[dict[str, Any]] = []
     for binding in PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS:
         item = _production_trace_unique_function(
@@ -3652,6 +4170,7 @@ def _production_trace_extraction_source_snapshot(
                 "verus_theorem": verus_by_symbol.get(
                     "production_in_flight_reservation_snapshot_replay_refines_composed_stutter"
                 ),
+                "operational_correspondence_id": operational_correspondence["id"],
                 "bridge_symbols": snapshot_recovery_bridge_entries,
                 "authenticated": True,
             }
@@ -4109,6 +4628,7 @@ def _production_trace_extraction_source_snapshot(
                 "verus_theorem": verus_by_symbol.get(
                     "production_in_flight_first_release_transition_refines_named_next"
                 ),
+                "operational_correspondence_id": operational_correspondence["id"],
                 "authenticated": True,
             }
         )
@@ -4156,6 +4676,7 @@ def _production_trace_extraction_source_snapshot(
         "refinement_symbols": core_items,
         "production_symbols": production_items,
         "verus_theorems": verus_items,
+        "operational_correspondence": operational_correspondence,
         "source_bindings": source_bindings,
     }
 
@@ -4367,6 +4888,9 @@ def build_production_trace_extraction_evidence(
         "refinement_symbols": source_snapshot["refinement_symbols"],
         "production_symbols": source_snapshot["production_symbols"],
         "verus_theorems": source_snapshot["verus_theorems"],
+        "operational_correspondence": source_snapshot[
+            "operational_correspondence"
+        ],
         "source_bindings": source_snapshot["source_bindings"],
         "proof_linkage": {
             "ledger_document_sha256": _canonical_json_sha256(ledger),

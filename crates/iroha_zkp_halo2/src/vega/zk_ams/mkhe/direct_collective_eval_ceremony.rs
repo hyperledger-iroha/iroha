@@ -323,6 +323,36 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         Ok(value)
     }
 
+    /// Revalidate the exact relinearization context used by an RKG-ephemeral
+    /// membership source against the opaque CPK secret-binding set.
+    ///
+    /// This deliberately returns no lineage leaf or set internals.  It is the
+    /// narrow authority check used by the sibling membership wrapper before
+    /// binding a party-local `u_i` opening to one evaluated-key digit.
+    pub(super) fn validate_rkg_ephemeral_membership_axes(
+        &self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        bindings: &VerifiedPersistentWitnessBindingSetV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate(roster)?;
+        bindings.validate_for_consumer(roster, PersistentWitnessConsumerV1::RkgRoundOne)?;
+        if self.profile_digest != roster.profile_digest()
+            || self.roster_digest != roster.roster_digest()
+            || self.key_material_digest != roster.key_material_digest()
+            || self.epoch != roster.epoch()
+            || self.transcript_digest != bindings.cpk_transcript_digest()
+            || self.collective_public_key_digest != bindings.collective_public_key_digest()
+            || self.secret_lineage_digests != *bindings.identity_digests()
+            || self.secret_lineage_root != bindings.set_root()
+            || self.target != ZkAmsMkheDirectEvaluatedKeyTargetV1::Relinearization
+            || self.evaluated_key_ordinal != 0
+            || self.galois_exponent != 0
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Ok(())
+    }
+
     /// Frozen profile digest.
     #[must_use]
     pub const fn profile_digest(self) -> [u8; 32] {

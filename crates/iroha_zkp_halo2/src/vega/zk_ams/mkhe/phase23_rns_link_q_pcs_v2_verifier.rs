@@ -665,11 +665,8 @@ impl<'a> FriTranscriptBoundV2<'a> {
             }
             length = half;
         }
-        if length != 2
-            || fri_opened > MAX_FRI_OPENED_LEAVES_V2
-            || fri_authentication > MAX_FRI_AUTH_HASHES_V2
-            || live.offset != live.wire.len()
-        {
+        checked_fri_multiproof_bytes_v2(fri_opened, fri_authentication)?;
+        if length != 2 || live.offset != live.wire.len() {
             return Err(if live.offset == live.wire.len() {
                 SoundnessErrorV2::InvalidSectionCount
             } else {

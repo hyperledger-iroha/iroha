@@ -88,7 +88,17 @@ impl<T: Copy + Zeroize> Drop for ProverSecretCopyValueV1<T> {
         self.0.zeroize();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let _ = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        let _ = PROVER_SECRET_COPY_OWNER_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
     }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PROVER_SECRET_COPY_OWNER_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// Clears one prover-owned scalar on success, error, and unwind.
@@ -196,6 +206,14 @@ fn push_secret_scalar_v1<F: ProofScalar>(
     values.push(value.expose_copy());
     drop(value);
     Ok(())
+}
+
+fn secret_edwards_product_v1(generator: &EdwardsPoint, scalar: &Scalar) -> Zeroizing<EdwardsPoint> {
+    Zeroizing::new(generator * scalar)
+}
+
+fn secret_edwards_scalar_product_v1(left: &Scalar, right: &Scalar) -> Zeroizing<Scalar> {
+    Zeroizing::new(left * right)
 }
 
 fn ct_slice_contains_by<T, U>(
@@ -511,6 +529,24 @@ impl FcmpProverInputV1 {
     ) -> Result<Self, FcmpNativeErrorV1> {
         let spend_x_bytes = ProverSecretCopyValueV1::take(&mut spend_x);
         let output_y_bytes = ProverSecretCopyValueV1::take(&mut output_y);
+        Self::from_secret_byte_owners_v1(
+            output,
+            spend_x_bytes,
+            output_y_bytes,
+            rerandomization,
+            leaves,
+            additional_branches,
+        )
+    }
+
+    fn from_secret_byte_owners_v1(
+        output: FcmpOutputTupleV1,
+        spend_x_bytes: ProverSecretCopyValueV1<[u8; 32]>,
+        output_y_bytes: ProverSecretCopyValueV1<[u8; 32]>,
+        rerandomization: FcmpInputRerandomizationV1,
+        leaves: Vec<FcmpOutputTupleV1>,
+        additional_branches: Vec<Vec<[u8; 32]>>,
+    ) -> Result<Self, FcmpNativeErrorV1> {
         let mut leaves = Zeroizing::new(leaves);
         let additional_branches = Zeroizing::new(additional_branches);
         validate_edwards_scalar(*spend_x_bytes.expose_ref())?;
@@ -624,17 +660,30 @@ impl FcmpProverInputV1 {
         let output = decode_edwards_point(output_bytes, false)?;
         let linking = decode_edwards_point(linking_bytes, false)?;
         let amount_commitment = decode_edwards_point(commitment_bytes, false)?;
-        if (ED25519_BASEPOINT_POINT * self.spend_x) + (generator_t() * self.output_y) != output {
+        let spend_component = secret_edwards_product_v1(&ED25519_BASEPOINT_POINT, &self.spend_x);
+        let output_component = secret_edwards_product_v1(&generator_t(), &self.output_y);
+        let expected_output = Zeroizing::new(&*spend_component + &*output_component);
+        if &*expected_output != &output {
             return Err(FcmpNativeErrorV1::SalWitnessMismatch);
         }
-        let output_key_tilde = output + (generator_t() * self.rerandomization.output);
-        let linking_tilde = linking + (generator_u() * self.rerandomization.linking);
-        let rerandomization = (generator_v() * self.rerandomization.linking)
-            + (generator_t() * self.rerandomization.rerandomization_blind);
-        let pseudo_out =
-            amount_commitment + (ED25519_BASEPOINT_POINT * self.rerandomization.commitment);
-        let key_image = (linking_tilde * self.spend_x)
-            - (generator_u() * (self.rerandomization.linking * self.spend_x));
+        let output_blind = secret_edwards_product_v1(&generator_t(), &self.rerandomization.output);
+        let output_key_tilde = &output + &*output_blind;
+        let linking_blind =
+            secret_edwards_product_v1(&generator_u(), &self.rerandomization.linking);
+        let linking_tilde = &linking + &*linking_blind;
+        let rerandomization_v =
+            secret_edwards_product_v1(&generator_v(), &self.rerandomization.linking);
+        let rerandomization_t =
+            secret_edwards_product_v1(&generator_t(), &self.rerandomization.rerandomization_blind);
+        let rerandomization = &*rerandomization_v + &*rerandomization_t;
+        let commitment_blind =
+            secret_edwards_product_v1(&ED25519_BASEPOINT_POINT, &self.rerandomization.commitment);
+        let pseudo_out = &amount_commitment + &*commitment_blind;
+        let linking_spend =
+            secret_edwards_scalar_product_v1(&self.rerandomization.linking, &self.spend_x);
+        let key_image_left = secret_edwards_product_v1(&linking_tilde, &self.spend_x);
+        let key_image_right = secret_edwards_product_v1(&generator_u(), &*linking_spend);
+        let key_image = &*key_image_left - &*key_image_right;
         FcmpProofInputPublicV1::new(
             output_key_tilde.compress().to_bytes(),
             linking_tilde.compress().to_bytes(),
@@ -682,40 +731,92 @@ impl FcmpProvedBundleV1 {
 }
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+type FcmpFixtureSpendableOutputV1 = (
+    FcmpOutputTupleV1,
+    ProverSecretCopyValueV1<[u8; 32]>,
+    ProverSecretCopyValueV1<[u8; 32]>,
+);
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fcmp_fixture_spendable_output_from_scalars_v1(
-    spend_x: Scalar,
-    output_y: Scalar,
-    linking: Scalar,
-    amount: u64,
-    commitment_mask: Scalar,
-) -> Result<(FcmpOutputTupleV1, [u8; 32], [u8; 32]), FcmpNativeErrorV1> {
+    mut spend_x: Scalar,
+    mut output_y: Scalar,
+    mut linking: Scalar,
+    mut amount: u64,
+    mut commitment_mask: Scalar,
+) -> Result<FcmpFixtureSpendableOutputV1, FcmpNativeErrorV1> {
+    let spend_x = ProverSecretCopyValueV1::take(&mut spend_x);
+    let output_y = ProverSecretCopyValueV1::take(&mut output_y);
+    let linking = ProverSecretCopyValueV1::take(&mut linking);
+    let amount = ProverSecretCopyValueV1::take(&mut amount);
+    let commitment_mask = ProverSecretCopyValueV1::take(&mut commitment_mask);
+
+    let spend_component = secret_edwards_product_v1(&ED25519_BASEPOINT_POINT, spend_x.expose_ref());
+    let output_component = secret_edwards_product_v1(&generator_t(), output_y.expose_ref());
+    let output_point = Zeroizing::new(&*spend_component + &*output_component);
+    let linking_point = secret_edwards_product_v1(&ED25519_BASEPOINT_POINT, linking.expose_ref());
+    let amount_scalar = ProverSecretCopyValueV1::new(Scalar::from(*amount.expose_ref()));
+    let amount_generator = super::range::amount_generator()?;
+    let amount_component = secret_edwards_product_v1(&amount_generator, amount_scalar.expose_ref());
+    let mask_component =
+        secret_edwards_product_v1(&ED25519_BASEPOINT_POINT, commitment_mask.expose_ref());
+    let amount_point = Zeroizing::new(&*amount_component + &*mask_component);
     let output = FcmpOutputTupleV1::new(
-        ((ED25519_BASEPOINT_POINT * spend_x) + (generator_t() * output_y))
-            .compress()
-            .to_bytes(),
-        (ED25519_BASEPOINT_POINT * linking).compress().to_bytes(),
-        (super::range::amount_generator()? * Scalar::from(amount)
-            + ED25519_BASEPOINT_POINT * commitment_mask)
-            .compress()
-            .to_bytes(),
+        output_point.compress().to_bytes(),
+        linking_point.compress().to_bytes(),
+        amount_point.compress().to_bytes(),
     )?;
-    Ok((output, spend_x.to_bytes(), output_y.to_bytes()))
+    let spend_x_bytes = ProverSecretCopyValueV1::new(spend_x.expose_ref().to_bytes());
+    let output_y_bytes = ProverSecretCopyValueV1::new(output_y.expose_ref().to_bytes());
+    Ok((output, spend_x_bytes, output_y_bytes))
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn with_fcmp_fixture_u64_secret_owners_v1<T>(
+    spend_x: ProverSecretCopyValueV1<u64>,
+    output_y: ProverSecretCopyValueV1<u64>,
+    linking: ProverSecretCopyValueV1<u64>,
+    amount: ProverSecretCopyValueV1<u64>,
+    commitment_mask: ProverSecretCopyValueV1<u64>,
+    operation: impl FnOnce(&u64, &u64, &u64, &u64, &u64) -> T,
+) -> T {
+    operation(
+        spend_x.expose_ref(),
+        output_y.expose_ref(),
+        linking.expose_ref(),
+        amount.expose_ref(),
+        commitment_mask.expose_ref(),
+    )
 }
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fcmp_fixture_spendable_output_v1(
-    spend_x: u64,
-    output_y: u64,
-    linking: u64,
-    amount: u64,
-    commitment_mask: u64,
-) -> Result<(FcmpOutputTupleV1, [u8; 32], [u8; 32]), FcmpNativeErrorV1> {
-    fcmp_fixture_spendable_output_from_scalars_v1(
-        Scalar::from(spend_x),
-        Scalar::from(output_y),
-        Scalar::from(linking),
+    mut spend_x: u64,
+    mut output_y: u64,
+    mut linking: u64,
+    mut amount: u64,
+    mut commitment_mask: u64,
+) -> Result<FcmpFixtureSpendableOutputV1, FcmpNativeErrorV1> {
+    let spend_x = ProverSecretCopyValueV1::take(&mut spend_x);
+    let output_y = ProverSecretCopyValueV1::take(&mut output_y);
+    let linking = ProverSecretCopyValueV1::take(&mut linking);
+    let amount = ProverSecretCopyValueV1::take(&mut amount);
+    let commitment_mask = ProverSecretCopyValueV1::take(&mut commitment_mask);
+    with_fcmp_fixture_u64_secret_owners_v1(
+        spend_x,
+        output_y,
+        linking,
         amount,
-        Scalar::from(commitment_mask),
+        commitment_mask,
+        |spend_x, output_y, linking, amount, commitment_mask| {
+            fcmp_fixture_spendable_output_from_scalars_v1(
+                Scalar::from(*spend_x),
+                Scalar::from(*output_y),
+                Scalar::from(*linking),
+                *amount,
+                Scalar::from(*commitment_mask),
+            )
+        },
     )
 }
 
@@ -727,30 +828,68 @@ pub(crate) fn fcmp_test_spendable_output_v1(
     amount: u64,
     commitment_mask: u64,
 ) -> (FcmpOutputTupleV1, [u8; 32], [u8; 32]) {
-    fcmp_fixture_spendable_output_v1(spend_x, output_y, linking, amount, commitment_mask)
-        .expect("non-zero test scalars construct canonical FCMP++ points")
+    let (output, spend_x, output_y) =
+        fcmp_fixture_spendable_output_v1(spend_x, output_y, linking, amount, commitment_mask)
+            .expect("non-zero test scalars construct canonical FCMP++ points");
+    (output, spend_x.expose_copy(), output_y.expose_copy())
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn with_fcmp_fixture_output_u64_secret_owners_v1<T>(
+    output_key: ProverSecretCopyValueV1<u64>,
+    linking: ProverSecretCopyValueV1<u64>,
+    amount: ProverSecretCopyValueV1<u64>,
+    mask: ProverSecretCopyValueV1<u64>,
+    operation: impl FnOnce(&u64, &u64, &u64, &u64) -> T,
+) -> T {
+    operation(
+        output_key.expose_ref(),
+        linking.expose_ref(),
+        amount.expose_ref(),
+        mask.expose_ref(),
+    )
 }
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fcmp_fixture_output_opening_v1(
-    output_key: u64,
-    linking: u64,
-    amount: u64,
-    mask: u64,
+    mut output_key: u64,
+    mut linking: u64,
+    mut amount: u64,
+    mut mask: u64,
 ) -> Result<FcmpOutputCommitmentOpeningV1, FcmpNativeErrorV1> {
-    let mask = Scalar::from(mask);
-    let output = FcmpOutputTupleV1::new(
-        (ED25519_BASEPOINT_POINT * Scalar::from(output_key))
-            .compress()
-            .to_bytes(),
-        (ED25519_BASEPOINT_POINT * Scalar::from(linking))
-            .compress()
-            .to_bytes(),
-        (super::range::amount_generator()? * Scalar::from(amount) + ED25519_BASEPOINT_POINT * mask)
-            .compress()
-            .to_bytes(),
-    )?;
-    FcmpOutputCommitmentOpeningV1::new(output, amount, mask.to_bytes())
+    let output_key = ProverSecretCopyValueV1::take(&mut output_key);
+    let linking = ProverSecretCopyValueV1::take(&mut linking);
+    let amount = ProverSecretCopyValueV1::take(&mut amount);
+    let mask = ProverSecretCopyValueV1::take(&mut mask);
+    with_fcmp_fixture_output_u64_secret_owners_v1(
+        output_key,
+        linking,
+        amount,
+        mask,
+        |output_key, linking, amount, mask| {
+            let output_key_scalar = ProverSecretCopyValueV1::new(Scalar::from(*output_key));
+            let linking_scalar = ProverSecretCopyValueV1::new(Scalar::from(*linking));
+            let amount_scalar = ProverSecretCopyValueV1::new(Scalar::from(*amount));
+            let mask_scalar = ProverSecretCopyValueV1::new(Scalar::from(*mask));
+            let output_key_point =
+                secret_edwards_product_v1(&ED25519_BASEPOINT_POINT, output_key_scalar.expose_ref());
+            let linking_point =
+                secret_edwards_product_v1(&ED25519_BASEPOINT_POINT, linking_scalar.expose_ref());
+            let amount_generator = super::range::amount_generator()?;
+            let amount_component =
+                secret_edwards_product_v1(&amount_generator, amount_scalar.expose_ref());
+            let mask_component =
+                secret_edwards_product_v1(&ED25519_BASEPOINT_POINT, mask_scalar.expose_ref());
+            let amount_point = Zeroizing::new(&*amount_component + &*mask_component);
+            let output = FcmpOutputTupleV1::new(
+                output_key_point.compress().to_bytes(),
+                linking_point.compress().to_bytes(),
+                amount_point.compress().to_bytes(),
+            )?;
+            let mask_bytes = ProverSecretCopyValueV1::new(mask_scalar.expose_ref().to_bytes());
+            FcmpOutputCommitmentOpeningV1::new_borrowed(output, amount, mask_bytes.expose_ref())
+        },
+    )
 }
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -791,11 +930,12 @@ pub(crate) fn fcmp_release_fixture_v1(
             fcmp_fixture_spendable_output_v1(17, 23, 31, INPUT_AMOUNT, 37)?;
         let new_output = fcmp_fixture_output_opening_v1(43, 47, INPUT_AMOUNT, 37 + 41)?;
         let root = super::build_fcmp_frontier_v1(&[output])?.root;
-        let input = FcmpProverInputV1::new(
+        let rerandomization = fcmp_fixture_rerandomization_v1(61, 67, 71, 41)?;
+        let input = FcmpProverInputV1::from_secret_byte_owners_v1(
             output,
             spend_x,
             output_y,
-            fcmp_fixture_rerandomization_v1(61, 67, 71, 41)?,
+            rerandomization,
             vec![output],
             Vec::new(),
         )?;
@@ -846,19 +986,21 @@ pub(crate) fn fcmp_release_fixture_v1(
 
     let mut first_leaves = duplicate_zeroizing_slice(&leaves);
     let mut first_branches = duplicate_zeroizing_nested_slices(&branches);
-    let first_input = FcmpProverInputV1::new(
+    let first_rerandomization = fcmp_fixture_rerandomization_v1(439, 443, 449, 163)?;
+    let first_input = FcmpProverInputV1::from_secret_byte_owners_v1(
         output_1,
         spend_x_1,
         output_y_1,
-        fcmp_fixture_rerandomization_v1(439, 443, 449, 163)?,
+        first_rerandomization,
         core::mem::take(&mut *first_leaves),
         core::mem::take(&mut *first_branches),
     )?;
-    let second_input = FcmpProverInputV1::new(
+    let second_rerandomization = fcmp_fixture_rerandomization_v1(457, 461, 463, 167)?;
+    let second_input = FcmpProverInputV1::from_secret_byte_owners_v1(
         output_2,
         spend_x_2,
         output_y_2,
-        fcmp_fixture_rerandomization_v1(457, 461, 463, 167)?,
+        second_rerandomization,
         core::mem::take(&mut *leaves),
         core::mem::take(&mut *branches),
     )?;
@@ -1881,6 +2023,14 @@ mod tests {
         static PROVER_COPY_CLEARS: Cell<usize> = const { Cell::new(0) };
     }
 
+    fn reset_prover_secret_copy_owner_drops() {
+        PROVER_SECRET_COPY_OWNER_DROPS_V1.with(|drops| drops.set(0));
+    }
+
+    fn prover_secret_copy_owner_drops() -> usize {
+        PROVER_SECRET_COPY_OWNER_DROPS_V1.with(Cell::get)
+    }
+
     #[derive(Clone, Copy)]
     struct TrackingCopy(u64);
 
@@ -1911,6 +2061,472 @@ mod tests {
             .is_err()
         );
         assert_eq!(PROVER_COPY_CLEARS.with(Cell::get), 2);
+    }
+
+    #[test]
+    fn fixture_spendable_output_owns_inputs_and_secret_outputs_on_every_exit() {
+        let expected = FcmpOutputTupleV1::new(
+            ((ED25519_BASEPOINT_POINT * Scalar::from(17_u64))
+                + (generator_t() * Scalar::from(23_u64)))
+            .compress()
+            .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(31_u64))
+                .compress()
+                .to_bytes(),
+            (super::super::range::amount_generator().expect("amount generator")
+                * Scalar::from(TEST_AMOUNT)
+                + ED25519_BASEPOINT_POINT * Scalar::from(37_u64))
+            .compress()
+            .to_bytes(),
+        )
+        .expect("legacy fixture equation remains canonical");
+
+        reset_prover_secret_copy_owner_drops();
+        let fixture = fcmp_fixture_spendable_output_from_scalars_v1(
+            Scalar::from(17_u64),
+            Scalar::from(23_u64),
+            Scalar::from(31_u64),
+            TEST_AMOUNT,
+            Scalar::from(37_u64),
+        )
+        .expect("owned fixture output");
+        assert_eq!(fixture.0, expected);
+        assert_eq!(fixture.1.expose_ref(), &Scalar::from(17_u64).to_bytes());
+        assert_eq!(fixture.2.expose_ref(), &Scalar::from(23_u64).to_bytes());
+        assert_eq!(prover_secret_copy_owner_drops(), 6);
+        drop(fixture);
+        assert_eq!(prover_secret_copy_owner_drops(), 8);
+
+        reset_prover_secret_copy_owner_drops();
+        let error = fcmp_fixture_spendable_output_from_scalars_v1(
+            Scalar::ZERO,
+            Scalar::ZERO,
+            Scalar::ZERO,
+            0,
+            Scalar::ZERO,
+        )
+        .err()
+        .expect("identity fixture output must reject");
+        assert_eq!(error, FcmpNativeErrorV1::EdwardsPointIdentity);
+        assert_eq!(prover_secret_copy_owner_drops(), 6);
+
+        reset_prover_secret_copy_owner_drops();
+        let unwind = std::panic::catch_unwind(|| {
+            let _fixture = fcmp_fixture_spendable_output_from_scalars_v1(
+                Scalar::from(41_u64),
+                Scalar::from(43_u64),
+                Scalar::from(47_u64),
+                TEST_AMOUNT,
+                Scalar::from(53_u64),
+            )
+            .expect("owned unwind fixture");
+            assert_eq!(prover_secret_copy_owner_drops(), 6);
+            panic!("exercise secret fixture-output owner unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(prover_secret_copy_owner_drops(), 8);
+    }
+
+    #[test]
+    fn fixture_spendable_output_source_stays_owned_through_release_transfer() {
+        let source = include_str!("prover.rs");
+        assert!(source.contains(
+            "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n\
+             type FcmpFixtureSpendableOutputV1 = ("
+        ));
+        let fixture = source
+            .split_once("fn fcmp_fixture_spendable_output_from_scalars_v1(")
+            .expect("scalar fixture boundary")
+            .1
+            .split_once("fn fcmp_fixture_spendable_output_v1(")
+            .expect("u64 fixture boundary")
+            .0;
+        for parameter in [
+            "mut spend_x: Scalar",
+            "mut output_y: Scalar",
+            "mut linking: Scalar",
+            "mut amount: u64",
+            "mut commitment_mask: Scalar",
+        ] {
+            assert!(fixture.contains(parameter));
+        }
+        assert_eq!(
+            fixture
+                .matches("ProverSecretCopyValueV1::take(&mut")
+                .count(),
+            5
+        );
+        let last_take = fixture
+            .rfind("ProverSecretCopyValueV1::take(&mut")
+            .expect("last fixture input take");
+        let first_fallible = fixture
+            .find("amount_generator()?")
+            .expect("first fallible work");
+        assert!(last_take < first_fallible);
+        assert_eq!(fixture.matches("secret_edwards_product_v1(").count(), 5);
+        assert_eq!(fixture.matches("Zeroizing::new(&*").count(), 2);
+        assert!(fixture.contains("ProverSecretCopyValueV1::new(spend_x.expose_ref().to_bytes())"));
+        assert!(fixture.contains("ProverSecretCopyValueV1::new(output_y.expose_ref().to_bytes())"));
+        assert!(fixture.contains("Ok((output, spend_x_bytes, output_y_bytes))"));
+        for raw in [
+            "ED25519_BASEPOINT_POINT * spend_x",
+            "generator_t() * output_y",
+            "ED25519_BASEPOINT_POINT * linking",
+            "Scalar::from(amount)",
+            "ED25519_BASEPOINT_POINT * commitment_mask",
+            "Ok((output, spend_x.to_bytes(), output_y.to_bytes()))",
+        ] {
+            assert!(!fixture.contains(raw));
+        }
+
+        let constructor = source
+            .split_once("fn from_secret_byte_owners_v1(")
+            .expect("owned prover-input constructor")
+            .1
+            .split_once("#[cfg(test)]\n    fn duplicate_for_test")
+            .expect("owned constructor boundary")
+            .0;
+        assert!(constructor.contains("spend_x_bytes: ProverSecretCopyValueV1<[u8; 32]>"));
+        assert!(constructor.contains("output_y_bytes: ProverSecretCopyValueV1<[u8; 32]>"));
+
+        let release_fixture = source
+            .split_once("pub(crate) fn fcmp_release_fixture_v1(")
+            .expect("release fixture")
+            .1
+            .split_once("/// Build a maximum-shape fixture whose first canonical branch")
+            .expect("release fixture boundary")
+            .0;
+        assert_eq!(
+            release_fixture
+                .matches("FcmpProverInputV1::from_secret_byte_owners_v1(")
+                .count(),
+            3
+        );
+        assert!(!release_fixture.contains("spend_x.expose_copy()"));
+        assert!(!release_fixture.contains("output_y.expose_copy()"));
+        assert!(!release_fixture.contains("FcmpProverInputV1::new("));
+
+        assert!(source.contains("#[cfg(test)]\npub(crate) fn fcmp_test_spendable_output_v1("));
+        let explicit_test_boundary = source
+            .split_once("pub(crate) fn fcmp_test_spendable_output_v1(")
+            .expect("explicit test fixture boundary")
+            .1
+            .split_once("fn fcmp_fixture_output_opening_v1(")
+            .expect("explicit test fixture end")
+            .0;
+        assert!(explicit_test_boundary.contains("spend_x.expose_copy()"));
+        assert!(explicit_test_boundary.contains("output_y.expose_copy()"));
+    }
+
+    #[test]
+    fn fixture_u64_wrapper_owns_slots_on_success_error_and_inner_unwind() {
+        let expected = fcmp_fixture_spendable_output_from_scalars_v1(
+            Scalar::from(17_u64),
+            Scalar::from(23_u64),
+            Scalar::from(31_u64),
+            TEST_AMOUNT,
+            Scalar::from(37_u64),
+        )
+        .expect("owned scalar fixture");
+        let expected_output = expected.0;
+        drop(expected);
+
+        reset_prover_secret_copy_owner_drops();
+        let fixture = fcmp_fixture_spendable_output_v1(17, 23, 31, TEST_AMOUNT, 37)
+            .expect("owned u64 fixture");
+        assert_eq!(fixture.0, expected_output);
+        assert_eq!(fixture.1.expose_ref(), &Scalar::from(17_u64).to_bytes());
+        assert_eq!(fixture.2.expose_ref(), &Scalar::from(23_u64).to_bytes());
+        assert_eq!(prover_secret_copy_owner_drops(), 11);
+        drop(fixture);
+        assert_eq!(prover_secret_copy_owner_drops(), 13);
+
+        reset_prover_secret_copy_owner_drops();
+        let error = fcmp_fixture_spendable_output_v1(0, 0, 0, 0, 0)
+            .err()
+            .expect("identity u64 fixture must reject");
+        assert_eq!(error, FcmpNativeErrorV1::EdwardsPointIdentity);
+        assert_eq!(prover_secret_copy_owner_drops(), 11);
+
+        reset_prover_secret_copy_owner_drops();
+        let unwind = std::panic::catch_unwind(|| {
+            let _result: Result<FcmpFixtureSpendableOutputV1, FcmpNativeErrorV1> =
+                with_fcmp_fixture_u64_secret_owners_v1(
+                    ProverSecretCopyValueV1::new(41_u64),
+                    ProverSecretCopyValueV1::new(43_u64),
+                    ProverSecretCopyValueV1::new(47_u64),
+                    ProverSecretCopyValueV1::new(TEST_AMOUNT),
+                    ProverSecretCopyValueV1::new(53_u64),
+                    |spend_x, output_y, linking, amount, commitment_mask| {
+                        assert_eq!(
+                            (*spend_x, *output_y, *linking, *amount, *commitment_mask),
+                            (41, 43, 47, TEST_AMOUNT, 53)
+                        );
+                        panic!("exercise fixture u64 inner unwind");
+                    },
+                );
+        });
+        assert!(unwind.is_err());
+        assert_eq!(prover_secret_copy_owner_drops(), 5);
+    }
+
+    #[test]
+    fn fixture_u64_wrapper_source_takes_every_slot_before_inner_conversion() {
+        let source = include_str!("prover.rs");
+        assert!(source.contains(
+            "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n\
+             fn with_fcmp_fixture_u64_secret_owners_v1<T>("
+        ));
+        assert!(source.contains(
+            "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n\
+             fn fcmp_fixture_spendable_output_v1("
+        ));
+        let owner_scope = source
+            .split_once("fn with_fcmp_fixture_u64_secret_owners_v1<T>(")
+            .expect("u64 owner scope")
+            .1
+            .split_once("fn fcmp_fixture_spendable_output_v1(")
+            .expect("u64 owner scope boundary")
+            .0;
+        assert_eq!(
+            owner_scope.matches("ProverSecretCopyValueV1<u64>").count(),
+            5
+        );
+        assert!(owner_scope.contains("operation: impl FnOnce(&u64, &u64, &u64, &u64, &u64) -> T"));
+        assert_eq!(owner_scope.matches(".expose_ref()").count(), 5);
+
+        let wrapper = source
+            .split_once("fn fcmp_fixture_spendable_output_v1(")
+            .expect("u64 fixture wrapper")
+            .1
+            .split_once("#[cfg(test)]\npub(crate) fn fcmp_test_spendable_output_v1(")
+            .expect("u64 fixture wrapper boundary")
+            .0;
+        for parameter in [
+            "mut spend_x: u64",
+            "mut output_y: u64",
+            "mut linking: u64",
+            "mut amount: u64",
+            "mut commitment_mask: u64",
+        ] {
+            assert!(wrapper.contains(parameter));
+        }
+        assert_eq!(
+            wrapper
+                .matches("ProverSecretCopyValueV1::take(&mut")
+                .count(),
+            5
+        );
+        let last_take = wrapper
+            .rfind("ProverSecretCopyValueV1::take(&mut")
+            .expect("last u64 input take");
+        let owner_scope_call = wrapper
+            .find("with_fcmp_fixture_u64_secret_owners_v1(")
+            .expect("owner-scoped inner call");
+        let scalar_conversion = wrapper
+            .find("Scalar::from(*spend_x)")
+            .expect("borrowed scalar conversion");
+        assert!(last_take < owner_scope_call && owner_scope_call < scalar_conversion);
+        assert_eq!(wrapper.matches("Scalar::from(*").count(), 4);
+        assert!(wrapper.contains("*amount,"));
+        assert!(!wrapper.contains("let spend_x_scalar"));
+        assert!(!wrapper.contains("let output_y_scalar"));
+        assert!(!wrapper.contains('?'));
+    }
+
+    #[test]
+    fn fixture_output_opening_owns_success_error_mismatch_and_unwind_slots() {
+        let expected_output = FcmpOutputTupleV1::new(
+            (ED25519_BASEPOINT_POINT * Scalar::from(43_u64))
+                .compress()
+                .to_bytes(),
+            (ED25519_BASEPOINT_POINT * Scalar::from(47_u64))
+                .compress()
+                .to_bytes(),
+            (super::super::range::amount_generator().expect("amount generator")
+                * Scalar::from(TEST_AMOUNT)
+                + ED25519_BASEPOINT_POINT * Scalar::from(79_u64))
+            .compress()
+            .to_bytes(),
+        )
+        .expect("legacy fixture opening output");
+
+        reset_prover_secret_copy_owner_drops();
+        let opening =
+            fcmp_fixture_output_opening_v1(43, 47, TEST_AMOUNT, 79).expect("owned fixture opening");
+        assert_eq!(opening.output(), expected_output);
+        assert_eq!(opening.amount(), &TEST_AMOUNT);
+        assert_eq!(
+            &*opening.commitment_mask(),
+            &Scalar::from(79_u64).to_bytes()
+        );
+        assert_eq!(prover_secret_copy_owner_drops(), 9);
+        drop(opening);
+        assert_eq!(prover_secret_copy_owner_drops(), 9);
+
+        reset_prover_secret_copy_owner_drops();
+        let error = fcmp_fixture_output_opening_v1(0, 0, 0, 0)
+            .err()
+            .expect("identity fixture opening must reject");
+        assert_eq!(error, FcmpNativeErrorV1::EdwardsPointIdentity);
+        assert_eq!(prover_secret_copy_owner_drops(), 8);
+
+        reset_prover_secret_copy_owner_drops();
+        let mismatch = with_fcmp_fixture_output_u64_secret_owners_v1(
+            ProverSecretCopyValueV1::new(11_u64),
+            ProverSecretCopyValueV1::new(13_u64),
+            ProverSecretCopyValueV1::new(TEST_AMOUNT),
+            ProverSecretCopyValueV1::new(17_u64),
+            |output_key, linking, amount, mask| {
+                let mask_scalar = ProverSecretCopyValueV1::new(Scalar::from(*mask));
+                let mask_bytes = ProverSecretCopyValueV1::new(mask_scalar.expose_ref().to_bytes());
+                FcmpOutputCommitmentOpeningV1::new_borrowed(
+                    output_from_multiples(*output_key, *linking, *mask),
+                    amount,
+                    mask_bytes.expose_ref(),
+                )
+            },
+        )
+        .err()
+        .expect("missing positive amount component must mismatch");
+        assert_eq!(mismatch, FcmpNativeErrorV1::RangeCommitmentOpeningMismatch);
+        assert_eq!(prover_secret_copy_owner_drops(), 6);
+
+        reset_prover_secret_copy_owner_drops();
+        let unwind = std::panic::catch_unwind(|| {
+            let _result: Result<FcmpOutputCommitmentOpeningV1, FcmpNativeErrorV1> =
+                with_fcmp_fixture_output_u64_secret_owners_v1(
+                    ProverSecretCopyValueV1::new(19_u64),
+                    ProverSecretCopyValueV1::new(23_u64),
+                    ProverSecretCopyValueV1::new(TEST_AMOUNT),
+                    ProverSecretCopyValueV1::new(29_u64),
+                    |output_key, linking, amount, mask| {
+                        let output_key_scalar =
+                            ProverSecretCopyValueV1::new(Scalar::from(*output_key));
+                        let linking_scalar = ProverSecretCopyValueV1::new(Scalar::from(*linking));
+                        let amount_scalar = ProverSecretCopyValueV1::new(Scalar::from(*amount));
+                        let mask_scalar = ProverSecretCopyValueV1::new(Scalar::from(*mask));
+                        let output_key_point = secret_edwards_product_v1(
+                            &ED25519_BASEPOINT_POINT,
+                            output_key_scalar.expose_ref(),
+                        );
+                        let linking_point = secret_edwards_product_v1(
+                            &ED25519_BASEPOINT_POINT,
+                            linking_scalar.expose_ref(),
+                        );
+                        let amount_generator =
+                            super::super::range::amount_generator().expect("amount generator");
+                        let amount_component = secret_edwards_product_v1(
+                            &amount_generator,
+                            amount_scalar.expose_ref(),
+                        );
+                        let mask_component = secret_edwards_product_v1(
+                            &ED25519_BASEPOINT_POINT,
+                            mask_scalar.expose_ref(),
+                        );
+                        let amount_point = Zeroizing::new(&*amount_component + &*mask_component);
+                        let _ = core::hint::black_box((
+                            &*output_key_point,
+                            &*linking_point,
+                            &*amount_point,
+                        ));
+                        panic!("exercise fixture opening inner unwind");
+                    },
+                );
+        });
+        assert!(unwind.is_err());
+        assert_eq!(prover_secret_copy_owner_drops(), 8);
+    }
+
+    #[test]
+    fn fixture_output_opening_source_stays_owned_until_borrowed_constructor() {
+        let source = include_str!("prover.rs");
+        assert!(source.contains(
+            "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n\
+             fn with_fcmp_fixture_output_u64_secret_owners_v1<T>("
+        ));
+        assert!(source.contains(
+            "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n\
+             fn fcmp_fixture_output_opening_v1("
+        ));
+        let owner_scope = source
+            .split_once("fn with_fcmp_fixture_output_u64_secret_owners_v1<T>(")
+            .expect("output-opening u64 owner scope")
+            .1
+            .split_once("fn fcmp_fixture_output_opening_v1(")
+            .expect("output-opening owner scope boundary")
+            .0;
+        assert_eq!(
+            owner_scope.matches("ProverSecretCopyValueV1<u64>").count(),
+            4
+        );
+        assert!(owner_scope.contains("operation: impl FnOnce(&u64, &u64, &u64, &u64) -> T"));
+        assert_eq!(owner_scope.matches(".expose_ref()").count(), 4);
+
+        let fixture = source
+            .split_once("fn fcmp_fixture_output_opening_v1(")
+            .expect("fixture output opening")
+            .1
+            .split_once("fn fcmp_fixture_rerandomization_v1(")
+            .expect("fixture output-opening boundary")
+            .0;
+        for parameter in [
+            "mut output_key: u64",
+            "mut linking: u64",
+            "mut amount: u64",
+            "mut mask: u64",
+        ] {
+            assert!(fixture.contains(parameter));
+        }
+        assert_eq!(
+            fixture
+                .matches("ProverSecretCopyValueV1::take(&mut")
+                .count(),
+            4
+        );
+        let last_take = fixture
+            .rfind("ProverSecretCopyValueV1::take(&mut")
+            .expect("last output-opening input take");
+        let owner_scope_call = fixture
+            .find("with_fcmp_fixture_output_u64_secret_owners_v1(")
+            .expect("owned output-opening scope");
+        let first_conversion = fixture
+            .find("ProverSecretCopyValueV1::new(Scalar::from(*output_key))")
+            .expect("owned output-key scalar");
+        let generator = fixture
+            .find("super::range::amount_generator()?")
+            .expect("fallible amount generator");
+        let tuple = fixture
+            .find("let output = FcmpOutputTupleV1::new(")
+            .expect("public output tuple");
+        let mask_bytes = fixture
+            .find("ProverSecretCopyValueV1::new(mask_scalar.expose_ref().to_bytes())")
+            .expect("owned mask bytes");
+        let borrowed_constructor = fixture
+            .find("FcmpOutputCommitmentOpeningV1::new_borrowed(")
+            .expect("borrowed opening constructor");
+        assert!(
+            last_take < owner_scope_call
+                && owner_scope_call < first_conversion
+                && first_conversion < generator
+                && generator < tuple
+                && tuple < mask_bytes
+                && mask_bytes < borrowed_constructor
+        );
+        assert_eq!(
+            fixture
+                .matches("ProverSecretCopyValueV1::new(Scalar::from(*")
+                .count(),
+            4
+        );
+        assert_eq!(fixture.matches("secret_edwards_product_v1(").count(), 4);
+        assert_eq!(fixture.matches("Zeroizing::new(&*").count(), 1);
+        assert!(fixture.contains(
+            "FcmpOutputCommitmentOpeningV1::new_borrowed(output, amount, mask_bytes.expose_ref())"
+        ));
+        assert!(!fixture.contains("let mask = Scalar::from(mask)"));
+        assert!(!fixture.contains("ED25519_BASEPOINT_POINT * Scalar::from"));
+        assert!(!fixture.contains("FcmpOutputCommitmentOpeningV1::new("));
     }
 
     #[test]
@@ -2014,6 +2630,53 @@ mod tests {
         assert!(!constructor.contains("decoded_branch.push(decode_"));
         assert!(!constructor.contains("decode_helioselene_scalar(*encoded)"));
         assert!(!constructor.contains("decode_field25519_scalar(*encoded)"));
+    }
+
+    #[test]
+    fn public_input_keeps_private_products_in_borrowed_erasing_owners() {
+        let source = include_str!("prover.rs");
+        let product = source
+            .split_once("fn secret_edwards_product_v1(")
+            .expect("borrowed Edwards product")
+            .1
+            .split_once("fn secret_edwards_scalar_product_v1")
+            .expect("Edwards product boundary")
+            .0;
+        assert!(product.contains("generator: &EdwardsPoint"));
+        assert!(product.contains("scalar: &Scalar"));
+        assert!(product.contains("Zeroizing::new(generator * scalar)"));
+        let scalar_product = source
+            .split_once("fn secret_edwards_scalar_product_v1(")
+            .expect("borrowed scalar product")
+            .1
+            .split_once("fn ct_slice_contains_by")
+            .expect("scalar product boundary")
+            .0;
+        assert!(scalar_product.contains("left: &Scalar, right: &Scalar"));
+        assert!(scalar_product.contains("Zeroizing::new(left * right)"));
+
+        let public_input = source
+            .split_once("    pub fn public_input(&self)")
+            .expect("public-input method")
+            .1
+            .split_once("    /// Borrow the complete canonical origin set")
+            .expect("public-input boundary")
+            .0;
+        assert_eq!(
+            public_input.matches("secret_edwards_product_v1(").count(),
+            9
+        );
+        assert_eq!(
+            public_input
+                .matches("secret_edwards_scalar_product_v1(")
+                .count(),
+            1
+        );
+        assert!(public_input.contains("Zeroizing::new(&*spend_component + &*output_component)"));
+        assert!(public_input.contains("let key_image = &*key_image_left - &*key_image_right;"));
+        assert!(!public_input.contains("ED25519_BASEPOINT_POINT * self.spend_x"));
+        assert!(!public_input.contains("generator_t() * self.output_y"));
+        assert!(!public_input.contains("self.rerandomization.linking * self.spend_x"));
     }
 
     #[test]

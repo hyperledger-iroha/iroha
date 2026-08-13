@@ -12,6 +12,40 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 POLICY = REPO_ROOT / "scripts" / "sumeragi_v2_release_process_policy.sh"
 
 
+def _authenticated_temporary_base() -> Path:
+    configured = os.environ.get("IROHA_RELEASE_TEMP_BASE")
+    candidates = (
+        (Path(configured),)
+        if configured
+        else (Path("/private/tmp"), Path("/tmp"))
+    )
+    for candidate in candidates:
+        try:
+            metadata = candidate.lstat()
+            if (
+                candidate.is_absolute()
+                and Path(os.path.abspath(candidate)) == candidate
+                and candidate.resolve(strict=True) == candidate
+                and not candidate.is_symlink()
+                and candidate.is_dir()
+                and os.access(candidate, os.W_OK | os.X_OK)
+                and (
+                    (metadata.st_uid == 0 and metadata.st_mode & 0o1000)
+                    or (
+                        metadata.st_uid == os.geteuid()
+                        and not metadata.st_mode & 0o077
+                    )
+                )
+            ):
+                return candidate
+        except (OSError, RuntimeError):
+            continue
+    raise RuntimeError("tests require an authenticated release temporary base")
+
+
+AUTHENTICATED_TEMP_BASE = _authenticated_temporary_base()
+
+
 def _write_executable(path: Path, source: str) -> None:
     path.write_text(source, encoding="utf-8")
     path.chmod(0o700)
@@ -24,6 +58,7 @@ def _policy_environment(fake_bin: Path, **extra: str) -> dict[str, str]:
             "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
             "IROHA_RELEASE_POLICY_PYTHON": sys.executable,
             "IROHA_RELEASE_CARGO_BIN": str(fake_bin / "cargo"),
+            "IROHA_RELEASE_TEMP_BASE": str(AUTHENTICATED_TEMP_BASE),
         }
     )
     environment.update(extra)
@@ -43,7 +78,7 @@ def _run_policy(
     temporary_root = None
     if "IROHA_RELEASE_ARTIFACT_ROOT" not in merged:
         temporary_root = tempfile.TemporaryDirectory(
-            prefix="iroha-policy-artifacts-", dir="/private/tmp"
+            prefix="iroha-policy-artifacts-", dir=AUTHENTICATED_TEMP_BASE
         )
         artifact_root = Path(temporary_root.name)
         artifact_root.chmod(0o700)
@@ -69,7 +104,7 @@ def test_invocation_cargo_lock_is_private_fail_closed_and_reusable(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     with tempfile.TemporaryDirectory(
-        prefix="iroha-policy-lock-", dir="/private/tmp"
+        prefix="iroha-policy-lock-", dir=AUTHENTICATED_TEMP_BASE
     ) as temporary_root:
         artifact_root = Path(temporary_root)
         artifact_root.chmod(0o700)
@@ -218,7 +253,7 @@ def test_run_cargo_preserves_nonzero_status_when_sourced_by_zsh(tmp_path: Path) 
     )
 
     with tempfile.TemporaryDirectory(
-        prefix="iroha-policy-nonzero-", dir="/private/tmp"
+        prefix="iroha-policy-nonzero-", dir=AUTHENTICATED_TEMP_BASE
     ) as temporary_root:
         artifact_root = Path(temporary_root)
         artifact_root.chmod(0o700)
@@ -475,7 +510,7 @@ def test_cargo_target_accepts_authenticated_linux_tmp_and_rejects_aliases(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     with tempfile.TemporaryDirectory(
-        prefix="iroha-policy-target-", dir="/private/tmp"
+        prefix="iroha-policy-target-", dir=AUTHENTICATED_TEMP_BASE
     ) as temporary_root:
         target = Path(temporary_root) / "target"
         target.mkdir(mode=0o700)
@@ -484,6 +519,16 @@ def test_cargo_target_accepts_authenticated_linux_tmp_and_rejects_aliases(
             fake_bin=fake_bin,
             environment={"CARGO_TARGET_DIR": str(target)},
         )
+        default_accepted = None
+        if AUTHENTICATED_TEMP_BASE in (Path("/private/tmp"), Path("/tmp")):
+            default_accepted = _run_policy(
+                f'require_external_cargo_target_dir "{REPO_ROOT}"',
+                fake_bin=fake_bin,
+                environment={
+                    "CARGO_TARGET_DIR": str(target),
+                    "IROHA_RELEASE_TEMP_BASE": "",
+                },
+            )
     rejected = _run_policy(
         f'require_external_cargo_target_dir "{REPO_ROOT}"',
         fake_bin=fake_bin,
@@ -512,12 +557,96 @@ def test_cargo_target_accepts_authenticated_linux_tmp_and_rejects_aliases(
             "IROHA_RELEASE_TEMP_BASE": str(linux_alias),
         },
     )
+    real_target = linux_tmp / "real-target"
+    real_target.mkdir(mode=0o700)
+    target_alias = linux_tmp / "target-alias"
+    target_alias.symlink_to(real_target, target_is_directory=True)
+    target_alias_rejected = _run_policy(
+        f'require_external_cargo_target_dir "{REPO_ROOT}"',
+        fake_bin=fake_bin,
+        environment={
+            "CARGO_TARGET_DIR": str(target_alias),
+            "IROHA_RELEASE_TEMP_BASE": str(linux_tmp),
+        },
+    )
+    unsafe_mode_base = tmp_path / "unsafe-mode-base"
+    unsafe_mode_base.mkdir(mode=0o700)
+    unsafe_mode_target = unsafe_mode_base / "target"
+    unsafe_mode_target.mkdir(mode=0o700)
+    unsafe_mode_base.chmod(0o755)
+    mode_rejected = _run_policy(
+        f'require_external_cargo_target_dir "{REPO_ROOT}"',
+        fake_bin=fake_bin,
+        environment={
+            "CARGO_TARGET_DIR": str(unsafe_mode_target),
+            "IROHA_RELEASE_TEMP_BASE": str(unsafe_mode_base),
+        },
+    )
+    unsafe_mode_base.chmod(0o700)
+
+    ownership_base = tmp_path / "wrong-owner-base"
+    ownership_base.mkdir(mode=0o700)
+    ownership_target = ownership_base / "target"
+    ownership_target.mkdir(mode=0o700)
+    if os.geteuid() == 0:
+        os.chown(ownership_base, 65534, -1)
+        wrong_owner_base = ownership_base
+    else:
+        wrong_owner_base = Path("/")
+    owner_rejected = _run_policy(
+        f'require_external_cargo_target_dir "{REPO_ROOT}"',
+        fake_bin=fake_bin,
+        environment={
+            "CARGO_TARGET_DIR": str(ownership_target),
+            "IROHA_RELEASE_TEMP_BASE": str(wrong_owner_base),
+        },
+    )
+    if os.geteuid() == 0:
+        os.chown(ownership_base, 0, -1)
+
+    source = linux_tmp / "source"
+    source.mkdir(mode=0o700)
+    source_target = source / "target"
+    source_target.mkdir(mode=0o700)
+    source_overlap = _run_policy(
+        f'require_external_cargo_target_dir "{source}"',
+        fake_bin=fake_bin,
+        environment={
+            "CARGO_TARGET_DIR": str(source_target),
+            "IROHA_RELEASE_TEMP_BASE": str(linux_tmp),
+        },
+    )
+
+    protected_cache = linux_tmp / "caller-cache"
+    protected_cache.mkdir(mode=0o700)
+    cache_target = protected_cache / "target"
+    cache_target.mkdir(mode=0o700)
+    cache_overlap = _run_policy(
+        f'require_external_cargo_target_dir "{REPO_ROOT}" "{protected_cache}"',
+        fake_bin=fake_bin,
+        environment={
+            "CARGO_TARGET_DIR": str(cache_target),
+            "IROHA_RELEASE_TEMP_BASE": str(linux_tmp),
+        },
+    )
 
     assert accepted.returncode == 0, accepted.stderr
+    if default_accepted is not None:
+        assert default_accepted.returncode == 0, default_accepted.stderr
     assert linux_accepted.returncode == 0, linux_accepted.stderr
     assert rejected.returncode == 2
     assert alias_rejected.returncode == 2
     assert "temporary base" in alias_rejected.stderr
+    assert target_alias_rejected.returncode == 2
+    assert "Cargo target root" in target_alias_rejected.stderr
+    assert mode_rejected.returncode == 2
+    assert "temporary base" in mode_rejected.stderr
+    assert owner_rejected.returncode == 2
+    assert "temporary base" in owner_rejected.stderr
+    assert source_overlap.returncode == 2
+    assert "outside source" in source_overlap.stderr
+    assert cache_overlap.returncode == 2
+    assert "protected cache roots" in cache_overlap.stderr
 
 
 def test_artifact_root_must_be_private_external_and_under_private_tmp(
@@ -526,7 +655,7 @@ def test_artifact_root_must_be_private_external_and_under_private_tmp(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     with tempfile.TemporaryDirectory(
-        prefix="iroha-policy-artifacts-", dir="/private/tmp"
+        prefix="iroha-policy-artifacts-", dir=AUTHENTICATED_TEMP_BASE
     ) as temporary_root:
         invocation_root = Path(temporary_root)
         artifacts = invocation_root / "artifacts"
@@ -646,7 +775,7 @@ def test_artifact_root_must_be_private_external_and_under_private_tmp(
 
 def test_artifact_directory_must_remain_below_authenticated_root() -> None:
     with tempfile.TemporaryDirectory(
-        prefix="iroha-policy-artifact-tree-", dir="/private/tmp"
+        prefix="iroha-policy-artifact-tree-", dir=AUTHENTICATED_TEMP_BASE
     ) as temporary_root:
         root = Path(temporary_root) / "artifacts"
         root.mkdir(mode=0o700)
@@ -715,6 +844,11 @@ def test_policy_source_contains_no_process_control_or_observation_escape_hatch()
     assert source.count("release_invocation_cargo_lock || return $?") == 1
     assert source.count("trap _release_scoped_invocation_cargo_lock RETURN EXIT") == 1
     assert source.count('if "$IROHA_RELEASE_CARGO_BIN" "$@"; then') == 1
+    assert 'for candidate in ("/private/tmp", "/tmp"):' in source
+    assert "authenticate_temp_base(configured_base)" in source
+    assert "protected_cache_roots" in source
+    assert "metadata.st_uid != os.geteuid()" in source
+    assert "metadata.st_mode & 0o077" in source
     assert "command cargo +1.93.1" not in source
     assert 'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then' in source
     assert "--target-dir|--target-dir=*|--manifest-path|--manifest-path=*|--config|--config=*" in source

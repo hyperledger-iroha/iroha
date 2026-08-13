@@ -939,10 +939,12 @@ struct V2IoCompletionOwnership {
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
     recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
+    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
 }
 """,
         "completion ownership must retain time/debt, runtime-capacity class, "
-        "the exact shared lifecycle ordinal, and any recovered-Apply dispatch key",
+        "the exact shared lifecycle ordinal, and every recovered lifecycle dispatch key",
         errors,
     )
     _require_rust_token_sequence(
@@ -973,8 +975,12 @@ struct V2IoCertifiedServeIngressReservation {
         """
 recovered_decision_applies:
     BTreeMap<RecoveredDecisionApplyDispatchKeyV1, V2IoTrackedRecoveredDecisionApplyV1>,
+recovered_lifecycle_signs:
+    BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredLifecycleSignV1>,
+recovered_decision_fetch_bodies:
+    BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,
 """,
-        "the command queue must retain recovered Decision Apply under its exact opaque dispatch key",
+        "the command queue must retain every recovered lifecycle command under its exact opaque dispatch key",
         errors,
     )
     _require_rust_token_sequence(
@@ -1465,6 +1471,10 @@ const fn runtime_lifecycle_ordinal(&self) -> Option<u128> {
         Self::Validate(task) => Some(task.lifecycle_ordinal()),
         Self::Apply(task) => Some(task.lifecycle_ordinal()),
         Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+        Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+        Self::PersistRecoveredDecisionFetchBody(task) => {
+            Some(task.dispatch_key().lifecycle_ordinal())
+        }
         #[cfg(test)]
         Self::RecoveredDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
         Self::PersistCertifiedFetchBody(_)
@@ -1487,6 +1497,8 @@ fn retain_completion(
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
     recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
+    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
 ) {
     let mut state = self
         .completion_state
@@ -1502,6 +1514,8 @@ fn retain_completion(
         requires_runtime_capacity,
         runtime_lifecycle_ordinal,
         recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     });
 }
 """,
@@ -1590,11 +1604,15 @@ fn send_tracked_completion_with_lifecycle_ordinal(
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
     let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
+    let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
         recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     );
     sender.send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -1613,11 +1631,15 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
     let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
+    let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
         recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     );
     sender.try_send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -1642,6 +1664,8 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
         """
 let work_id = command.work_id();
 let recovered_decision_apply_key = command.recovered_decision_apply_key();
+let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();
+let recovered_decision_fetch_key = command.recovered_decision_fetch_key();
 let serve_lifecycle_id = command.serve_lifecycle_id();
 let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
 match command {
@@ -1658,6 +1682,28 @@ V2IoCompletion::RecoveredDecisionApply(guarded) => {
     recovered_decision_apply_key.map_or_else(
 """,
         "the I/O worker must use the key captured before execution to seal recovered Decision Apply completion",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_spawn,
+        """
+V2IoCompletion::RecoveredLifecycleSign(guarded) => {
+    recovered_lifecycle_sign_key.map_or_else(
+""",
+        "the I/O worker must use the key captured before execution to seal recovered Sign completion",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_spawn,
+        """
+V2IoCompletion::RecoveredDecisionFetchBodyPersisted(
+    guarded,
+) =>
+    recovered_decision_fetch_key.map_or_else(
+""",
+        "the I/O worker must use the key captured before execution to seal recovered Decision Fetch completion",
         errors,
     )
     _require_rust_token_sequence(
@@ -1717,6 +1763,20 @@ send_completion_with_lifecycle_ordinal(
     _require_rust_token_sequence(
         worker_path,
         channel_builder,
+        "recovered_lifecycle_signs: BTreeMap::new(),",
+        "the command channel initializer must start with no fabricated recovered Sign owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        channel_builder,
+        "recovered_decision_fetch_bodies: BTreeMap::new(),",
+        "the command channel initializer must start with no fabricated recovered Decision Fetch owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        channel_builder,
         """
 producer_episode_due: false,
 producer_episode_active: false,
@@ -1747,6 +1807,26 @@ state.recovered_decision_applies
     .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
 """,
         "receiver teardown must retain only completion-pending recovered Decision Apply ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        close_receiver,
+        """
+state.recovered_lifecycle_signs
+    .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+""",
+        "receiver teardown must retain only completion-pending recovered Sign ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        close_receiver,
+        """
+state.recovered_decision_fetch_bodies
+    .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+""",
+        "receiver teardown must retain only completion-pending recovered Decision Fetch ownership",
         errors,
     )
 
@@ -2033,10 +2113,42 @@ if barrier.request_hash != lifecycle_id.request_hash || barrier.lifecycle_id != 
 if let Some(key) = command.recovered_decision_apply_key() {
     return Err(V2IoTrySendError::UnreservedRecoveredDecisionApply { key, command });
 }
+assert!(
+    command.recovered_lifecycle_sign_key().is_none(),
+    "recovered Sign commands require their locked lifecycle reservation"
+);
+assert!(
+    command.recovered_decision_fetch_key().is_none(),
+    "recovered Decision Fetch persistence requires its locked lifecycle reservation"
+);
 let descriptor = command.work_descriptor();
 let mut state = self.lock();
 """,
         "generic I/O admission must reject recovered Decision Apply before locking or reserving shared capacity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        enqueue,
+        """
+assert!(
+    command.recovered_lifecycle_sign_key().is_none(),
+    "recovered Sign commands require their locked lifecycle reservation"
+);
+""",
+        "generic I/O admission must reject recovered Sign before locking or reserving shared capacity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        enqueue,
+        """
+assert!(
+    command.recovered_decision_fetch_key().is_none(),
+    "recovered Decision Fetch persistence requires its locked lifecycle reservation"
+);
+""",
+        "generic I/O admission must reject recovered Decision Fetch before locking or reserving shared capacity",
         errors,
     )
     _require_rust_token_sequence(
@@ -2336,6 +2448,38 @@ completion: V2IoCompletion::RecoveredDecisionApply(_),
 }
 """,
         "generic completion drain must reject recovered Decision Apply instead of consuming its owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_inner,
+        """
+completion: V2IoCompletion::RecoveredLifecycleSign(_),
+..
+} => {
+    return Err(executor.external_service_failed(
+        "recovered Sign completion crossed the generic executor drain",
+        self,
+    ));
+}
+""",
+        "generic completion drain must reject recovered Sign instead of consuming its owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_inner,
+        """
+completion: V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_),
+..
+} => {
+    return Err(executor.external_service_failed(
+        "recovered Decision Fetch body crossed the generic executor drain",
+        self,
+    ));
+}
+""",
+        "generic completion drain must reject recovered Decision Fetch instead of consuming its owner",
         errors,
     )
     _require_rust_token_sequence(

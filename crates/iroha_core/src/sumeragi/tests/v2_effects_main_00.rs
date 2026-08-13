@@ -10,7 +10,12 @@ use crate::sumeragi::{
     },
     v2_block_sync::{CommitCertificateAdmissionError, V2BlockSyncDiscovery},
     v2_core::Generation,
-    v2_lifecycle_coordinator::{CertifiedFetchReadyPublicationError, LifecyclePhase, WaitSource},
+    v2_lifecycle_coordinator::{
+        CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
+        ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
+        ProductionIngressTurnPreparation, ProductionRecoveredDecisionFetchPersistenceErrorV1,
+        ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
+    },
     v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
@@ -104,6 +109,8 @@ struct FakeRuntime {
     next_lifecycle_ordinal: u128,
     effect_ownership_calls: usize,
     effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+    local_proposal_intent_owners:
+        BTreeMap<(EventTag, HashOf<wire::PayloadManifest>), RuntimeEffectOwnership>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
@@ -267,10 +274,20 @@ impl EffectRuntime for FakeRuntime {
         if effects.is_empty() {
             return Ok(Vec::new());
         }
-        let ownership = effects
-            .iter()
-            .map(|effect| self.test_effect_ownership(effect))
-            .collect();
+        let mut ownership = Vec::with_capacity(effects.len());
+        for effect in effects {
+            let local = match effect {
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::Proposal(proposal),
+                } => self
+                    .local_proposal_intent_owners
+                    .get(&(*tag, HashOf::new(&proposal.manifest)))
+                    .cloned(),
+                _ => None,
+            };
+            ownership.push(local.unwrap_or_else(|| self.test_effect_ownership(effect)));
+        }
         bind_adapter_effect_batch_ownership(effects, ownership)
     }
 
@@ -352,19 +369,17 @@ impl EffectRuntime for FakeRuntime {
             self.effect_owners.insert(identity, ownership.clone());
             ownership
         };
-        let store_effect = AdapterEffect::StoreBody {
+        let effect = AdapterEffect::StoreBody {
             tag,
             round: manifest.round,
             subject: manifest.subject,
         };
-        let raw = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&store_effect),
-            vec![ownership],
-        )?
-        .pop()
-        .ok_or_else(|| "fake local proposal StoreBody binding was empty".to_owned())?;
-        LocalProposalEffectOwnership::for_test(raw, &store_effect, manifest).ok_or_else(|| {
-            "fake local proposal StoreBody replay seal did not match its owner".to_owned()
+        let ownership =
+            bind_adapter_effect_batch_ownership(std::slice::from_ref(&effect), vec![ownership])?
+                .pop()
+                .ok_or_else(|| "fake local proposal StoreBody binding was empty".to_owned())?;
+        LocalProposalEffectOwnership::for_test(ownership, &effect, manifest).ok_or_else(|| {
+            "fake local proposal replay seal did not match its Store owner".to_owned()
         })
     }
 
@@ -876,6 +891,38 @@ impl EffectRuntime for FakeRuntime {
             durable_receipt,
             validated_receipt,
         ))
+    }
+
+    fn enqueue_local_proposal_with_owner(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        durable_receipt: DurableBodyReceipt,
+        validated_receipt: ValidatedBodyReceipt,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<LocalProposalReadyCommandIdentity, EnqueueError> {
+        let identity = LocalProposalReadyCommandIdentity::from_exact_handoff(
+            tag,
+            &manifest,
+            &durable_receipt,
+            &validated_receipt,
+            ownership,
+        )
+        .ok_or(EnqueueError::FailClosed)?;
+        let key = (tag, HashOf::new(&manifest));
+        if matches!(
+            self.local_proposal_intent_owners.entry(key),
+            Entry::Occupied(_)
+        ) {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.enqueue_local_proposal(tag, manifest.clone(), durable_receipt, validated_receipt)?;
+        let key = (tag, HashOf::new(&manifest));
+        let Entry::Vacant(slot) = self.local_proposal_intent_owners.entry(key) else {
+            unreachable!("test runtime preflight proved the local owner slot vacant")
+        };
+        slot.insert(ownership.clone());
+        Ok(identity)
     }
 
     fn verify_certificate(
@@ -2065,405 +2112,4 @@ fn manifest_at_view(fixture: &Fixture, view: u64) -> wire::PayloadManifest {
         fixture.manifest.subject,
         &fixture.body,
     )
-}
-
-fn distinct_body(fixture: &Fixture) -> (wire::BlockSubject, Vec<u8>) {
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        2_000,
-        0,
-    );
-    let signature =
-        SignatureOf::try_from_hash(fixture.validator_keys[0].private_key(), header.hash())
-            .expect("distinct block signature");
-    let block = SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
-    let body = block.encode_wire().expect("distinct canonical body");
-    let subject = wire::BlockSubject {
-        parent_block_hash: None,
-        block_hash: block.hash(),
-        payload_hash: Hash::new(&body),
-    };
-    (subject, body)
-}
-
-fn timeout_at_view(fixture: &Fixture, view: u64) -> wire::TimeoutCertificate {
-    wire::TimeoutCertificate {
-        round: round(&fixture.context, view),
-        groups: vec![wire::TimeoutVoteGroup {
-            highest_prepare_qc: None,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![1],
-        }],
-    }
-}
-
-fn timeout_sign(fixture: &Fixture, view: u64) -> AdapterEffect {
-    AdapterEffect::Sign {
-        tag: tag(view),
-        request: SignRequest::TimeoutVote(wire::TimeoutVote {
-            round: round(&fixture.context, view),
-            highest_prepare_qc: None,
-            signer: 0,
-            signature: Vec::new(),
-        }),
-    }
-}
-
-fn prepare_qc_for_subject(
-    round: wire::ConsensusRound,
-    subject: wire::BlockSubject,
-) -> wire::QuorumCertificate {
-    wire::QuorumCertificate {
-        round,
-        proposal_round: round,
-        phase: wire::GlobalPhase::Prepare,
-        subject,
-        execution_commitment: fixture_execution_commitment(),
-        signers: vec![0, 1, 2],
-        aggregate_signature: vec![1],
-    }
-}
-
-fn certified_sources(fixture: &Fixture, _certificate: &wire::QuorumCertificate) -> Vec<PeerId> {
-    fixture
-        .context
-        .roster
-        .iter()
-        .map(|entry| entry.validator.clone())
-        .collect()
-}
-
-fn signed_payload_chunk(fixture: &Fixture) -> wire::PayloadChunk {
-    let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&fixture.manifest),
-        index: 0,
-        bytes: fixture.encoded_chunks[0].clone(),
-        sender: 0,
-        signature: Vec::new(),
-    };
-    chunk.signature = Signature::new(
-        fixture.validator_keys[0].private_key(),
-        &chunk
-            .signature_preimage(&fixture.context, &fixture.manifest)
-            .expect("chunk preimage"),
-    )
-    .payload()
-    .to_vec();
-    chunk
-}
-
-fn signed_certified_response(
-    fixture: &Fixture,
-    task: &BodyFetchTask,
-    manifest: wire::PayloadManifest,
-    body: Vec<u8>,
-    responder: wire::ValidatorIndex,
-) -> wire::CertifiedBodyResponse {
-    let request = task
-        .certified_request()
-        .expect("certified fetch task owns its request");
-    let mut response = wire::CertifiedBodyResponse {
-        request_hash: HashOf::new(request),
-        manifest,
-        body,
-        responder,
-        signature: Vec::new(),
-    };
-    response.signature = Signature::new(
-        fixture.validator_keys[usize::try_from(responder).expect("responder index")].private_key(),
-        &response.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    response
-}
-
-fn certified_response_ingress_ownership(
-    response: &wire::CertifiedBodyResponse,
-    responder: PeerId,
-) -> FairV2IngressOwnershipEvidence {
-    fair_transport_ingress_ownership(
-        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
-            response.clone(),
-        )),
-        responder,
-    )
-}
-
-fn certified_response_runtime_ingress_ownership(
-    fixture: &Fixture,
-    response: &wire::CertifiedBodyResponse,
-    responder: PeerId,
-) -> (
-    TempDir,
-    crate::sumeragi::FairV2Ingress,
-    Arc<super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
-    FairV2IngressOwnershipEvidence,
-) {
-    let roster = fixture
-        .context
-        .roster
-        .iter()
-        .map(|entry| entry.validator.clone())
-        .collect::<Vec<_>>();
-    let directory = TempDir::new().expect("temporary response leader-wire directory");
-    let ingress = crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-        64,
-        128 * 1024 * 1024,
-        16 * 1024 * 1024,
-        super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-        4 * 1024 * 1024,
-        4 * 1024 * 1024,
-        usize::MAX,
-        usize::MAX,
-        usize::MAX,
-        usize::MAX,
-        None,
-    );
-    ingress
-        .configure_roster_for_context(
-            roster.clone(),
-            &fixture.context.network_id,
-            fixture.context.da_layout,
-        )
-        .expect("configure response leader-wire ingress");
-    ingress.require_leader_wire_lifecycle_gate();
-    let capacity =
-        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-            roster.len(),
-            fixture.context.da_layout.max_chunk_count,
-        )
-        .expect("derive response lifecycle capacity");
-    let owner = [0xE5; 32];
-    let recovery_authority =
-        super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            fixture.context.id(),
-            fixture.context.height,
-            owner,
-            response.manifest.round.view,
-            false,
-        );
-    let (gate, restore) =
-        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-            &directory.path().join("response-leader-wire.wal"),
-            fixture.context.id(),
-            fixture.context.height,
-            owner,
-            roster.iter().cloned().collect(),
-            capacity,
-            fixture.context.da_layout.max_chunk_count,
-            recovery_authority,
-            &[],
-            &[],
-        )
-        .expect("open response leader-wire gate");
-    ingress
-        .bind_leader_wire_lifecycle_gate(
-            Arc::clone(&gate),
-            restore,
-            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(64),
-            fixture.context.id(),
-            fixture.context.height,
-        )
-        .expect("bind response leader-wire gate");
-    ingress.open().expect("open response leader-wire ingress");
-    let message = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
-    );
-    assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
-            BlockMessage::V2(message),
-            Some(responder),
-        )),
-        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
-    ));
-    let mut inbound = ingress
-        .try_recv()
-        .expect("drain exact response ingress carrier");
-    let mut ownership = inbound
-        .take_ingress_ownership()
-        .expect("response retains fair-ingress ownership");
-    ingress
-        .bind_leader_wire_runtime_ownership(&mut ownership)
-        .expect("bind response leader-wire runtime receipt");
-    (directory, ingress, gate, ownership)
-}
-
-fn payload_chunk_ingress_ownership(
-    chunk: &wire::PayloadChunk,
-    sender: PeerId,
-) -> FairV2IngressOwnershipEvidence {
-    fair_transport_ingress_ownership(
-        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone())),
-        sender,
-    )
-}
-
-fn fair_transport_ingress_ownership(
-    message: wire::ConsensusMessageV2,
-    sender: PeerId,
-) -> FairV2IngressOwnershipEvidence {
-    let mut inbound = crate::sumeragi::fair_v2_ingress_admit_for_test(InboundBlockMessage::new(
-        BlockMessage::V2(message),
-        Some(sender),
-    ));
-    inbound
-        .take_ingress_ownership()
-        .expect("real fair ingress attaches certified-response ownership")
-}
-
-fn manifest_for_payload(fixture: &Fixture, label: &'static [u8]) -> wire::PayloadManifest {
-    let body = label.to_vec();
-    let subject = wire::BlockSubject {
-        parent_block_hash: None,
-        block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
-        payload_hash: Hash::new(&body),
-    };
-    canonical_payload_manifest(&fixture.context, fixture.manifest.round, subject, &body)
-}
-
-fn pending_merge_validation(
-    fixture: &Fixture,
-) -> (
-    PendingValidation,
-    CertifiedMergeLedgerReference,
-    HashOf<MergeLedgerEntry>,
-) {
-    let parent_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge carrier parent"));
-    let round = round(&fixture.context, 3);
-    let subject = wire::BlockSubject {
-        parent_block_hash: Some(parent_hash),
-        ..fixture.manifest.subject
-    };
-    let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
-    let durable_receipt =
-        DurableBodyReceipt::for_test(fixture.context.id(), round, subject, HashOf::new(&manifest));
-    let task = BodyValidationTask::for_test(77, durable_receipt);
-    let ownership = task.ownership().clone();
-    let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"certified merge entry"));
-    let reference = CertifiedMergeLedgerReference {
-        version: 1,
-        entry_hash,
-        encoded_len: 512,
-        epoch_id: 9,
-        execution_batch_hash: None,
-        entrypoint_count: None,
-        entrypoint_merkle_root: None,
-        result_merkle_root: None,
-        base_state_height: None,
-        base_state_hash: None,
-        merge_qc: MergeQuorumCertificate::new(
-            round.view,
-            9,
-            round.height,
-            parent_hash,
-            fixture.context.network_id,
-            1,
-            HashOf::new(&Vec::<PeerId>::new()),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Hash::new(b"merge certificate message"),
-        ),
-    };
-    (
-        PendingValidation {
-            task,
-            consumer: Some(ValidationConsumer::Reducer {
-                tag: tag(3),
-                ownership,
-            }),
-        },
-        reference,
-        entry_hash,
-    )
-}
-
-fn begin_reachable_merge_validation(
-    fixture: &Fixture,
-    executor: &mut V2EffectExecutor<FakeRuntime>,
-    services: &mut FakeServices,
-    round: wire::ConsensusRound,
-    subject: wire::BlockSubject,
-) -> BodyValidationTask {
-    let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
-    let durable =
-        DurableBodyReceipt::for_test(fixture.context.id(), round, subject, HashOf::new(&manifest));
-    let key = (round, subject);
-    executor
-        .recovered_bodies
-        .insert(key, (manifest.clone(), durable.clone()));
-    executor.durable_bodies.insert(key, durable.clone());
-    executor
-        .bind_body_pipeline_owner(tag(round.view), &manifest)
-        .expect("bind the exact production validation owner");
-    executor
-        .begin_validation(
-            round,
-            subject,
-            durable,
-            ValidationConsumer::Reducer {
-                tag: tag(round.view),
-                ownership: RuntimeEffectOwnership::fresh_for_test(
-                    tag(round.view),
-                    u128::from(round.view),
-                ),
-            },
-            services,
-        )
-        .expect("start validation through the production admission path");
-    services
-        .validation_tasks
-        .last()
-        .expect("production validation task")
-        .clone()
-}
-
-fn complete_local_proposal_chain(
-    executor: &mut V2EffectExecutor<FakeRuntime>,
-    services: &mut FakeServices,
-) {
-    let store_id = services.store_tasks.last().expect("local store task").id();
-    let store_completion = services.execute_store(store_id);
-    executor
-        .complete_body_store(store_completion, services)
-        .expect("local durable store completion");
-    let validation_id = services
-        .validation_tasks
-        .last()
-        .expect("local validation task")
-        .id();
-    let validation_completion = services.execute_validation(validation_id);
-    executor
-        .complete_body_validation(validation_completion, services)
-        .expect("local validation completion");
-}
-
-fn persist_fsynced_validation_marker(
-    executor: &mut V2EffectExecutor<FakeRuntime>,
-    services: &mut FakeServices,
-    fixture: &Fixture,
-    manifest: wire::PayloadManifest,
-) {
-    executor
-        .admit_local_proposal(
-            tag(manifest.round.view),
-            manifest,
-            fixture.body.clone(),
-            services,
-        )
-        .expect("admit exact body before vote signing");
-    complete_local_proposal_chain(executor, services);
-
-    // The helper's purpose is only to cross the real body/marker fsync
-    // boundary. Keep each caller's assertions focused on the subsequent
-    // signature operation.
-    executor.runtime.completions.clear();
-    services.store_tasks.clear();
-    services.validation_tasks.clear();
-    services.statuses.clear();
 }

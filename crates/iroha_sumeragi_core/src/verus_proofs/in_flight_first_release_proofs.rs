@@ -4,6 +4,40 @@
 
 verus! {
 
+/// Verus-side lossless four-word projection of one 256-bit digest.
+#[derive(Copy, Clone)]
+pub struct ProductionDigest256Projection {
+    pub word0: u64,
+    pub word1: u64,
+    pub word2: u64,
+    pub word3: u64,
+}
+
+/// Verus-side mirror of the production V1 transition witness.
+///
+/// SHA-256 recomputation is intentionally kept in the production wrapper and
+/// its source-bound contract; the reviewed cryptography ledger row remains the
+/// trusted boundary. This mirror proves that the version, parameters, and TLA+
+/// source identity refine the same composed transition kernel.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseTransitionWitnessV1 {
+    pub schema_version: u16,
+    pub action: u8,
+    pub actor: u128,
+    pub target: u128,
+    pub before_state_digest: ProductionDigest256Projection,
+    pub after_state_digest: ProductionDigest256Projection,
+    pub source_identity: ProductionDigest256Projection,
+}
+
+/// Exact Verus mirror of the production V1 witness's structural binding.
+pub closed spec fn production_in_flight_first_release_witness_binding_kernel(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    witness: ProductionInFlightFirstReleaseTransitionWitnessV1,
+) -> bool {
+    production_in_flight_first_release_witness_binding_body!(projection, witness)
+}
+
 /// A successful primitive checker result is exactly the shared executable
 /// identity/state relation. Collection extraction and cross-store ordering are
 /// deliberately outside this theorem.
@@ -74,6 +108,35 @@ pub proof fn production_in_flight_first_release_transition_refines_named_next(
             ==> production_in_flight_first_release_transition_kernel(projection),
 {
     reveal(check_production_in_flight_first_release_transition);
+}
+
+/// A structurally authenticated V1 witness names the exact checked action,
+/// parameters, and reviewed TLA+ source while refining the same composed
+/// relation as every production mutation boundary.
+///
+/// Exact pre/post digest recomputation is deliberately a separate production
+/// obligation: the outer authenticator rebuilds the entire witness from the
+/// canonical state encoding. SHA-256 itself remains the reviewed cryptography
+/// trusted contract and is not restated as arithmetic in Verus.
+pub proof fn production_in_flight_first_release_witness_refines_named_next(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    witness: ProductionInFlightFirstReleaseTransitionWitnessV1,
+)
+    requires
+        production_in_flight_first_release_transition_kernel(projection),
+        production_in_flight_first_release_witness_binding_kernel(projection, witness),
+    ensures
+        witness.schema_version == 1u16,
+        witness.action == projection.action,
+        witness.actor == projection.actor,
+        witness.target == projection.target,
+        witness.source_identity.word0 == 0x9b9babea9e018b44u64,
+        witness.source_identity.word1 == 0xfb739f96b2690f17u64,
+        witness.source_identity.word2 == 0xe1f8d08aa23a38f4u64,
+        witness.source_identity.word3 == 0x2a16ecef1e858f7du64,
+        production_in_flight_first_release_transition_kernel(projection),
+{
+    reveal(production_in_flight_first_release_witness_binding_kernel);
 }
 
 /// Snapshot reconstruction cannot manufacture a new abstract durable owner.

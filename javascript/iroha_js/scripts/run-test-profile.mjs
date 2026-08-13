@@ -18,7 +18,9 @@ const PROFILE_FILES = Object.freeze({
   "sorafs-native": Object.freeze([
     "cancelAssetLockV1.test.js",
     "sorafsAppealFinanceValidation.test.js",
+    "sorafsFixtureBundleValidation.test.js",
     "sorafsOrchestrator.parity.test.js",
+    "sorafsPdpValidation.test.js",
   ]),
 });
 

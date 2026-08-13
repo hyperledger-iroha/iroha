@@ -291,17 +291,34 @@ Shipped today:
   checker/runner, payload-free canary builder, and operator argfile templates
   are checked in.
 
-Not shipped yet:
+Shipped operator surface:
 
-- `sorafs pdp challenge --manifest <CID> --provider <ID>`.
-- `sorafs pdp fetch --manifest <CID>`.
-- `sorafs pdp respond --challenge challenge.to --storage-path <path>`.
-- `sorafs pdp verify --challenge challenge.to --proof proof.to --manifest manifest.to`.
-- `sorafs pdp status --provider <ID> --limit 20`.
-- `sorafs pdp export --since 2026-01-01 --out pdp_export.jsonl`.
+- `sorafs_cli pdp enqueue --commitment commitment.to --challenge challenge.to
+  --expected-epoch-id <N>`.
+- `sorafs_cli pdp next --provider-id-hex <HEX32> --challenge-out challenge.to`.
+- `sorafs_cli pdp submit --challenge-id-hex <HEX32> --proof proof.to`.
+- `sorafs_cli pdp status --challenge-id-hex <HEX32>`.
+- `sorafs_cli pdp export --after-sequence <N> --limit <N>
+  --out pdp_export.json`.
 
-Do not document the unshipped `sorafs pdp ...` commands as operator-ready until
-they exist in the CLI and have focused tests.
+All five commands require `--torii-url`, the exact `--network-id`, and a
+software Ed25519 `--operator-private-key-file`. They serialize each JSON request
+once and sign those exact bytes with Torii's network-bound operator signature
+contract. This request-authentication key is distinct from the independently
+administered release-promotion signer corridor. Canonical Norito inputs, request
+bindings, bounded JSON responses, exact response schemas, and
+create-new/no-follow outputs fail closed; focused black-box tests pin all five
+routes and their signed bodies. Local diagnostic verification remains
+`sorafs-validate pdp`; proof generation from storage remains the admitted
+provider service's responsibility.
+
+On Linux, Android, macOS, and iOS, file-producing commands require an existing
+immediate output directory owned by the current effective user with exact mode
+`0700`; a retained directory descriptor anchors `openat` creation and `unlinkat`
+cleanup. Processes sharing that effective user are inside the operator trust
+boundary. Windows and other platforms fail before HTTP for `next` and `export`
+because this dependency-free CLI has no equivalent held-parent relative-create
+corridor there.
 
 ## Testing And Fixtures
 
@@ -339,8 +356,6 @@ Required before production enablement:
 - Prove restart and cross-peer exactly-once behavior for the existing durable
   proof-outcome and repair transaction forwarders, including one live lease and
   one terminal outcome.
-- SDK parity tests that verify the same PDP fixture bundle across Rust,
-  JavaScript/TypeScript, Python, Swift, Kotlin/JVM, Java Android, and C#.
 
 ## Observability
 
@@ -368,6 +383,11 @@ Completed local foundations:
 - Reserve proof-stream request and telemetry labels.
 - Generate canonical PDP fixture bundle and expanded negative fixtures.
 - Add reference validator and `sorafs-validate pdp` coverage for PDP binding.
+- Keep the canonical positive bundle and all eight negative validation outcomes
+  byte-identical across the Rust reference implementation and the JavaScript,
+  Python, Kotlin/JVM, Java Android, Swift, and C# SDK surfaces; the dedicated
+  JavaScript native parity profile executes both the PDP and heterogeneous
+  fixture-bundle suites.
 - Reject empty segment and hot-leaf Merkle paths in `PdpProofV1` and cover late
   proof, wrong provider, wrong manifest, and witness coverage mismatch paths in
   focused validator tests.
@@ -384,10 +404,13 @@ Completed local foundations:
   `valid_repair_handoff_digests`, and tethered in aggregate production
   readiness.
 
+The authenticated five-operation operator CLI and cross-SDK fixture parity are
+complete local prerequisites; neither requires deployment evidence.
+
 Remaining production gates:
 
-- Keep every canonical provider terminal archive reconciled against the native
-  proof-outcome ledger; the provider protocol's local status/export store is a
+- Keep every canonical provider terminal archive reconciled against the native proof-outcome
+  ledger; the provider protocol's local status/export store is a
   rebuildable projection only.
 - Prove the finalized native handoff across peer and process restarts. The
   deleted local manager/checkpoint format has no production compatibility
@@ -403,5 +426,3 @@ Remaining production gates:
   artifact in the emitted summary. Provider-transport latency values must be
   non-negative and proof-generation max-latency values must be positive, so
   impossible negative timings cannot satisfy rollout thresholds.
-- Ship dedicated operator CLI commands and complete cross-SDK validation
-  parity.

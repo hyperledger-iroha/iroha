@@ -96,8 +96,15 @@ def test_cooperative_cancellation_publishes_distinct_retained_evidence(
     assert value["result"] == "release-cancelled"
     assert value["reason"] == "operator-request"
     assert value["runner"]["exit_status"] == 125
-    assert value["request"]["path"] == str(request_path)
-    assert value["request"]["sha256"] == _sha256(request_path)
+    assert value["request"] == {
+        "archive_id": "release-bootstrap.cancellation-request.v1",
+        "sha256": _sha256(request_path),
+        "size_bytes": request_path.stat().st_size,
+        "mode": "0600",
+        "owner_uid": os.getuid(),
+        "nlink": 1,
+    }
+    assert str(request_path).encode() not in marker.data
     assert not (evidence / "BOOTSTRAP_RELEASE_COMPLETED.json").exists()
 
 

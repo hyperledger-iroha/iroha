@@ -285,7 +285,11 @@ def _serviced_candidate_production_source_fidelity_errors(
             "open",
             "lifecycle_capacity: usize, ) -> Result<(Self, RestoredServicedCandidates)",
         ),
-        ("store_open_with_capacities", "open_with_storage_and_capacities"),
+        ("store_open_with_capacities", "open_with_capacities"),
+        (
+            "store_open_with_storage_and_capacities",
+            "open_with_storage_and_capacities",
+        ),
         ("store_load", "load"),
         (
             "store_reserve_producer_continuation",
@@ -543,6 +547,12 @@ def _serviced_candidate_production_source_fidelity_errors(
             "BoundSafetyWalDirectory::bind(&parent)",
             "SafetyWal open",
         ),
+        "safety_open_bound": select_item(
+            "safety_wal",
+            "open_bound",
+            "recover_wal_stream(&mut file, &path, identity, WAL_RETENTION_LIMITS)",
+            "bound SafetyWal open",
+        ),
         "stream_recovery": select_item(
             "safety_wal",
             "recover_wal_stream",
@@ -785,7 +795,7 @@ if !opened.is_file()
             errors,
         )
     for key in ("adjacent_read", "adjacent_publish", "adjacent_retire"):
-        item = safety_items[key]
+        item = safety_items.get(key)
         _require_rust_token_sequence(
             paths["safety_wal"],
             item,
@@ -804,7 +814,6 @@ if !opened.is_file()
                 f"{paths['safety_wal']}:{item.line}: non-Unix adjacent "
                 "storage operation cannot fall back to path I/O"
             )
-    safety_open = safety_items["safety_open"]
     require_item_monotone_order(
         "safety_wal",
         safety_items,
@@ -812,6 +821,16 @@ if !opened.is_file()
         (
             "fs::create_dir_all(&parent)",
             "BoundSafetyWalDirectory::bind(&parent)",
+            "Self::open_bound(",
+        ),
+        "SafetyWal fixture opening must bind its directory before delegating to the shared opener",
+    )
+    safety_open_bound = safety_items["safety_open_bound"]
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "safety_open_bound",
+        (
             "directory.open_wal_leaf(&wal_name)",
             "directory.verify_leaf(&file, &wal_name)",
             "let read_metadata_before = file.metadata()",
@@ -838,7 +857,7 @@ if !opened.is_file()
         ),
     ):
         _require_rust_token_sequence(
-            paths["safety_wal"], safety_open, sequence, description, errors
+            paths["safety_wal"], safety_open_bound, sequence, description, errors
         )
     require_item_monotone_order(
         "safety_wal",
@@ -1126,7 +1145,7 @@ let record_capacity = lifecycle_capacity
     require_item_sequence(
         "store",
         store_items,
-        "store_open_with_capacities",
+        "store_open_with_storage_and_capacities",
         """
 if producer_continuation_capacity % SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE != 0 {
     return Err(
@@ -1140,7 +1159,7 @@ if producer_continuation_capacity % SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE != 0
     require_item_sequence(
         "store",
         store_items,
-        "store_open_with_capacities",
+        "store_open_with_storage_and_capacities",
         """
 let max_frame_bytes = FIXED_FRAME_HEADROOM_BYTES
     .checked_add(serviced_frame_bytes)
@@ -2669,6 +2688,17 @@ Err(error) => return Err(error),
         "source-faithful certified-request capacity deferral method",
         errors,
         expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+self.recovered_decision_fetches
+    .values()
+    .any(|owner| owner.matches_body_coordinates(round, subject))
+""",
+        "ordinary Fetch admission must reject coordinates already owned by recovered Decision Fetch",
+        errors,
     )
     _require_rust_token_sequence(
         effects_path,

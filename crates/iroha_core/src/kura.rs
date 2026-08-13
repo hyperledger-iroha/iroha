@@ -538,6 +538,9 @@ include!("kura/certified_bundle_capacity_reservation_types.rs");
 pub struct Kura {
     /// Process-local identity shared with sealed lifecycle storage authority.
     instance_identity: Arc<KuraInstanceIdentityMarker>,
+    /// Opened canonical store-root owner used to mint descriptor-relative WAL storage.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    store_root_directory: BoundProgressDirectory,
     /// The block storage
     block_store: Mutex<BlockStore>,
     /// Serializes destructive canonical-chain changes with finality association and lane relabels.
@@ -2251,6 +2254,9 @@ impl Kura {
             .map_err(|error| Error::IO(error, configured_store_dir))?;
         let store_root = store_dir.clone();
         let store_root_lock_file = Self::acquire_store_root_lock(&store_dir)?;
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        let store_root_directory =
+            Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?;
         let roster_retention = config.block_sync_roster_retention;
         let roster_sidecar_retention = config.roster_sidecar_retention;
         let roster_log_path = Self::roster_log_path(&store_root);
@@ -2606,6 +2612,8 @@ impl Kura {
         }
         let kura = Arc::new(Self {
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            store_root_directory,
             _store_root_lock_file: Some(store_root_lock_file),
             block_store: Mutex::new(block_store),
             canonical_chain_lock: Mutex::new(()),
@@ -2943,6 +2951,9 @@ impl Kura {
             .expect("create configured test lane merge ledger");
         }
         let roster_log_path = Self::roster_log_path(&store_root);
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        let store_root_directory = Self::open_bound_progress_directory(&store_root, &store_root)
+            .expect("bind temporary Kura store-root directory");
         let native_amx_evidence_prune_intent_max_bytes =
             Self::native_amx_evidence_prune_intent_max_bytes_for_retention(
                 ROSTER_SIDECAR_RETENTION,
@@ -2951,6 +2962,8 @@ impl Kura {
             .expect("default Native AMX prune-intent bound is valid");
         Arc::new(Self {
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            store_root_directory,
             _store_root_lock_file: None,
             block_store: Mutex::new(block_store),
             canonical_chain_lock: Mutex::new(()),
@@ -42839,75 +42852,6 @@ pub(crate) mod tests {
                 .len(),
             9
         );
-    }
-    #[test]
-    fn recovery_control_files_reject_cap_plus_one_before_decode() {
-        fn create_sparse(path: &std::path::Path, len: u64) {
-            std::fs::File::create(path)
-                .expect("create oversized recovery control file")
-                .set_len(len)
-                .expect("size oversized recovery control file");
-        }
-        let kura = super::Kura::blank_kura_for_testing();
-        let blocks_root = kura.active_blocks_dir.lock().clone();
-        let rollback_path = super::Kura::rollback_intent_path(&blocks_root);
-        let rollback_temp_path = rollback_path.with_extension("norito.tmp");
-        for path in [&rollback_path, &rollback_temp_path] {
-            create_sparse(
-                path,
-                u64::try_from(super::MAX_ROLLBACK_INTENT_V1_BYTES).expect("rollback cap fits u64")
-                    + 1,
-            );
-            assert!(
-                super::Kura::load_rollback_intent(&blocks_root).is_err(),
-                "main and temporary rollback intents must reject cap-plus-one metadata before reading"
-            );
-            std::fs::remove_file(path).expect("remove oversized rollback intent");
-        }
-        let association_path = kura.canonical_association_stage_path();
-        create_sparse(
-            &association_path,
-            super::MAX_CANONICAL_ASSOCIATION_STAGE_BYTES + 1,
-        );
-        assert!(
-            kura.read_canonical_association_stage().is_err(),
-            "canonical association stage must reject cap-plus-one metadata before reading"
-        );
-        std::fs::remove_file(&association_path)
-            .expect("remove oversized canonical association stage");
-        {
-            let block_store = kura.block_store.lock();
-            let rewrite_path = block_store.da_block_rewrite_stage_path();
-            create_sparse(&rewrite_path, super::MAX_DA_BLOCK_REWRITE_STAGE_BYTES + 1);
-            assert!(
-                block_store.read_da_block_rewrite_stage().is_err(),
-                "DA rewrite stage must reject cap-plus-one metadata before reading"
-            );
-            std::fs::remove_file(&rewrite_path).expect("remove oversized DA rewrite stage");
-        }
-        let claim_path = blocks_root.join("oversized-autonomous-claim.norito");
-        create_sparse(
-            &claim_path,
-            u64::try_from(super::AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES)
-                .expect("claim cap fits u64")
-                + 1,
-        );
-        assert!(
-            super::Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).is_err(),
-            "autonomous claim must reject cap-plus-one metadata before reading"
-        );
-    }
-
-    #[test]
-    fn instance_identity_names_only_the_exact_live_kura() {
-        let first = super::Kura::blank_kura_for_testing();
-        let second = super::Kura::blank_kura_for_testing();
-        let first_identity = first.instance_identity();
-
-        assert!(first_identity.matches(first.as_ref()));
-        assert!(first_identity.same_instance(&first.instance_identity()));
-        assert!(!first_identity.matches(second.as_ref()));
-        assert!(!first_identity.same_instance(&second.instance_identity()));
     }
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");

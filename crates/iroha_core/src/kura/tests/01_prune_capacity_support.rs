@@ -103,3 +103,59 @@ fn archival_roster_row_fixture(
     );
     (qc, checkpoint)
 }
+
+#[test]
+fn recovery_control_files_reject_cap_plus_one_before_decode() {
+    fn create_sparse(path: &std::path::Path, len: u64) {
+        std::fs::File::create(path)
+            .expect("create oversized recovery control file")
+            .set_len(len)
+            .expect("size oversized recovery control file");
+    }
+    let kura = super::Kura::blank_kura_for_testing();
+    let blocks_root = kura.active_blocks_dir.lock().clone();
+    let rollback_path = super::Kura::rollback_intent_path(&blocks_root);
+    let rollback_temp_path = rollback_path.with_extension("norito.tmp");
+    for path in [&rollback_path, &rollback_temp_path] {
+        create_sparse(
+            path,
+            u64::try_from(super::MAX_ROLLBACK_INTENT_V1_BYTES).expect("rollback cap fits u64") + 1,
+        );
+        assert!(
+            super::Kura::load_rollback_intent(&blocks_root).is_err(),
+            "main and temporary rollback intents must reject cap-plus-one metadata before reading"
+        );
+        std::fs::remove_file(path).expect("remove oversized rollback intent");
+    }
+    let association_path = kura.canonical_association_stage_path();
+    create_sparse(
+        &association_path,
+        super::MAX_CANONICAL_ASSOCIATION_STAGE_BYTES + 1,
+    );
+    assert!(
+        kura.read_canonical_association_stage().is_err(),
+        "canonical association stage must reject cap-plus-one metadata before reading"
+    );
+    std::fs::remove_file(&association_path).expect("remove oversized canonical association stage");
+    {
+        let block_store = kura.block_store.lock();
+        let rewrite_path = block_store.da_block_rewrite_stage_path();
+        create_sparse(&rewrite_path, super::MAX_DA_BLOCK_REWRITE_STAGE_BYTES + 1);
+        assert!(
+            block_store.read_da_block_rewrite_stage().is_err(),
+            "DA rewrite stage must reject cap-plus-one metadata before reading"
+        );
+        std::fs::remove_file(&rewrite_path).expect("remove oversized DA rewrite stage");
+    }
+    let claim_path = blocks_root.join("oversized-autonomous-claim.norito");
+    create_sparse(
+        &claim_path,
+        u64::try_from(super::AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES)
+            .expect("claim cap fits u64")
+            + 1,
+    );
+    assert!(
+        super::Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).is_err(),
+        "autonomous claim must reject cap-plus-one metadata before reading"
+    );
+}

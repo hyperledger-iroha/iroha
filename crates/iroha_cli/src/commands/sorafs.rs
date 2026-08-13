@@ -5,6 +5,7 @@ use super::{
     da::{normalize_ticket_hex, persist_manifest_bundle},
     da_common::DaManifestFetcher,
 };
+mod hedging_billing_response;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     convert::TryFrom,
@@ -20,8 +21,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::cli_output::print_with_optional_text;
-use crate::{CliOutputFormat, Run, RunContext};
+use crate::{CliOutputFormat, Run, RunContext, cli_output::print_with_optional_text};
 use base64::{
     Engine,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -599,7 +599,7 @@ impl BillingStatementsArgs {
             limit,
         };
         let client = context.client_from_config();
-        render_json_response(context, list(&client, filter)?)
+        hedging_billing_response::render(context, list(&client, filter)?, &checkpoint)
     }
 }
 /// Fetch one published billing statement.
@@ -1075,7 +1075,7 @@ impl HedgingProjectionArgs {
             limit,
         };
         let client = context.client_from_config();
-        render_json_response(context, get(&client, filter)?)
+        hedging_billing_response::render(context, get(&client, filter)?, &checkpoint)
     }
 }
 #[derive(clap::Subcommand, Debug)]
@@ -17397,14 +17397,13 @@ mod tests {
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(norito::json::to_vec(&norito::json!({
-                    "items": [],
-                    "next_after_statement_id": null
+                    "anchor": {"checkpoint_fingerprint": checkpoint.to_ascii_uppercase()},
                 }))?)
                 .expect("billing statement page response"))
         })
         .expect("billing statement list succeeds");
         assert_eq!(context.printed.len(), 1);
-        assert!(context.printed[0].contains("\"items\""));
+        assert!(context.printed[0].contains("\"anchor\""));
     }
     #[test]
     fn hedging_projection_cli_builds_read_only_exact_checkpoint_filter() {
@@ -17427,8 +17426,8 @@ mod tests {
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(norito::json::to_vec(&norito::json!({
-                    "items": [],
-                    "automatic_execution_enabled": false
+                    "anchor": {"checkpoint_fingerprint": checkpoint.to_ascii_uppercase()},
+                    "automatic_execution_enabled": false,
                 }))?)
                 .expect("hedging projection response"))
         })
@@ -17444,6 +17443,7 @@ mod tests {
             "projection output must preserve the disabled execution claim",
         );
     }
+    include!("sorafs/hedging_billing_response_tests.rs");
     #[test]
     fn billing_acknowledgement_cli_reads_bounded_binary_proof() {
         let checkpoint = "55".repeat(32);

@@ -30,6 +30,9 @@ pub mod moderation_ledger;
 /// Authoritative orderbook policy and on-chain audit records.
 pub mod orderbook;
 
+/// Strict client-side inspection for signed orderbook submissions and receipts.
+pub mod orderbook_submission;
+
 /// Pin registry manifest metadata and lifecycle records.
 pub mod pin_registry;
 

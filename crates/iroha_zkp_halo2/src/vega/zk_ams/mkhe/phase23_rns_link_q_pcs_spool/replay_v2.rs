@@ -859,6 +859,9 @@ impl FriFoldPairReaderV2 {
 static REPLAY_CHUNK_ZEROIZED_DROPS_V2: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+#[path = "replay_v2/canonical_proof_replay_v2.rs"]
+mod canonical_proof_replay_v2;
+use canonical_proof_replay_v2::*;
 #[path = "replay_v2/prover_v2.rs"]
 mod prover_v2;
 #[cfg(test)]
