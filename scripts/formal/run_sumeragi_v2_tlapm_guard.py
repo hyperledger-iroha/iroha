@@ -58,6 +58,8 @@ RESOURCE_GUARD_AUTH_FD_ENV = "IROHA_RESOURCE_GUARD_AUTH_FD"
 RESOURCE_GUARD_AUTH_TOKEN_ENV = "IROHA_RESOURCE_GUARD_AUTH_TOKEN"
 RESOURCE_GUARD_AUTH_MAGIC = "IROHA_RESOURCE_GUARD_AUTH_V1"
 SESSION_WRAPPER_FLAG = "--resource-session-wrapper"
+SESSION_GROUP_BODY_FLAG = "--resource-owned-group-body"
+OWNED_DARWIN_GROUP_FLAG = "--release-owned-darwin-process-group"
 PS = next(
     (
         str(candidate)
@@ -718,7 +720,12 @@ def _darwin_process_identity(process_id: int) -> DarwinProcessIdentity:
     if result != ctypes.sizeof(info):
         error_number = ctypes.get_errno()
         detail = os.strerror(error_number) if error_number else "short result"
-        raise GuardError(
+        error_type = (
+            DarwinProcessUnavailable
+            if error_number == errno.ESRCH
+            else GuardError
+        )
+        raise error_type(
             f"could not inspect Darwin identity for pid {process_id}: {detail}"
         )
     command_bytes = bytes(info.pbi_name) or bytes(info.pbi_comm)
@@ -829,12 +836,12 @@ def _darwin_process_group_rows(
     for attempt in range(DARWIN_STABLE_SNAPSHOT_ATTEMPTS):
         process_ids = _darwin_list_process_group_pids(process_group_id)
         if not process_ids:
-            if _process_group_exists(process_group_id):
-                raise GuardError(
-                    "Darwin scoped accounting omitted an existing process group"
-                )
-            return []
-        if process_group_id not in process_ids:
+            # Confirm absence only through a second scoped kernel query. Release
+            # accounting must never fall back to a full-host process snapshot.
+            if not _darwin_list_process_group_pids(process_group_id):
+                return []
+            continue
+        if process_group_id not in process_ids and expected_body_identity is None:
             raise GuardError("Darwin scoped accounting omitted the guarded body leader")
 
         identities: dict[int, DarwinProcessIdentity] = {}
@@ -849,7 +856,7 @@ def _darwin_process_group_rows(
                 )
                 identities[process_id] = identity
                 memory_by_pid[process_id] = _darwin_process_memory(process_id)
-        except GuardError as error:
+        except DarwinProcessUnavailable as error:
             # A normal fork/exit race changes the scoped membership. Retry only
             # for a small fixed count. Darwin can retain a just-exited PID in
             # proc_listpgrppids for one turn after proc_pidinfo stops exposing
@@ -858,9 +865,7 @@ def _darwin_process_group_rows(
             refreshed_process_ids = _darwin_list_process_group_pids(
                 process_group_id
             )
-            if not refreshed_process_ids and not _process_group_exists(
-                process_group_id
-            ):
+            if not refreshed_process_ids:
                 return []
             if attempt + 1 < DARWIN_STABLE_SNAPSHOT_ATTEMPTS:
                 continue
@@ -873,14 +878,12 @@ def _darwin_process_group_rows(
         try:
             for process_id in process_ids:
                 final_identities[process_id] = _darwin_process_identity(process_id)
-        except GuardError as error:
+        except DarwinProcessUnavailable as error:
             last_race_error = error
             refreshed_process_ids = _darwin_list_process_group_pids(
                 process_group_id
             )
-            if not refreshed_process_ids and not _process_group_exists(
-                process_group_id
-            ):
+            if not refreshed_process_ids:
                 return []
             if attempt + 1 < DARWIN_STABLE_SNAPSHOT_ATTEMPTS:
                 continue
@@ -896,8 +899,8 @@ def _darwin_process_group_rows(
                     f"Darwin PID {process_id} changed identity during accounting"
                 )
 
-        body_identity = identities[process_group_id]
-        if expected_body_identity is not None:
+        body_identity = identities.get(process_group_id)
+        if expected_body_identity is not None and body_identity is not None:
             if body_identity.stable_key() != expected_body_identity.stable_key():
                 raise GuardError("Darwin guarded body identity changed during supervision")
             if body_identity.parent_pid != expected_body_identity.parent_pid:
@@ -1062,12 +1065,22 @@ def _sample_group(
             known_owned_process_ids=known_owned_process_ids,
         )
     else:
-        group_rows = _group_rows(
-            process_group_id,
-            rows,
-            expected_body_identity=expected_body_identity,
-            known_owned_process_ids=known_owned_process_ids,
-        )
+        # Release-mode callers supply a kernel-scoped process-group snapshot.
+        # Re-walking it as a parent tree would drop surviving group members if
+        # the leader completed between observations, and must never trigger a
+        # second full-host process read.
+        if rows is None:
+            group_rows = _darwin_process_group_rows(
+                process_group_id,
+                expected_body_identity=expected_body_identity,
+            )
+        else:
+            group_rows = list(rows)
+        if any(
+            row.process_group_id != process_group_id or row.uid != os.getuid()
+            for row in group_rows
+        ):
+            raise GuardError("owned process-group sample contained a foreign process")
     rss_bytes = sum(row.rss_bytes for row in group_rows)
     scoped_footprints_available = all(
         row.physical_footprint_bytes is not None for row in group_rows
@@ -1204,10 +1217,46 @@ def _wait4_nonblocking(
     return returncode, _normalized_wait4_max_rss_bytes(usage.ru_maxrss)
 
 
+def _run_owned_darwin_group_body(argv: Sequence[str]) -> int:
+    """Create this process's owned Darwin group, then exec the guarded body."""
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--ready-fd", required=True, type=int)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    command = list(args.command)
+    if command and command[0] == "--":
+        command.pop(0)
+    try:
+        if sys.platform != "darwin":
+            raise GuardError(
+                "owned release process-group accounting is unsupported on this platform"
+            )
+        if not command:
+            raise GuardError("owned release process-group command is empty")
+        _require_pipe_descriptor(args.ready_fd, "owned-group readiness")
+        # This process changes only its own process-group membership. The
+        # lifeline wrapper remains outside the group and never signals it.
+        os.setpgid(0, 0)
+        if os.getpgrp() != os.getpid():
+            raise GuardError("owned release process group was not created exactly")
+        _write_wrapper_control(args.ready_fd, f"READY {os.getpid()}")
+        _close_descriptor(args.ready_fd)
+        args.ready_fd = -1
+        os.execvpe(command[0], command, os.environ.copy())
+    except BaseException as error:
+        print(f"owned release process-group body failed: {error}", file=sys.stderr)
+        return 1
+    finally:
+        if args.ready_fd >= 0:
+            _close_descriptor(args.ready_fd)
+
+
 def _run_session_wrapper(argv: Sequence[str]) -> int:
     """Observe the supervisor lifeline and let the complete body tree finish."""
 
     parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(OWNED_DARWIN_GROUP_FLAG, action="store_true")
     parser.add_argument("--lifeline-fd", required=True, type=int)
     parser.add_argument("--control-fd", required=True, type=int)
     parser.add_argument("--auth-fd", required=True, type=int)
@@ -1256,17 +1305,59 @@ def _run_session_wrapper(argv: Sequence[str]) -> int:
         raise GuardError("authorization descriptor environment is inconsistent")
 
     child: subprocess.Popen[bytes] | None = None
+    owned_group_reader = -1
+    owned_group_writer = -1
     try:
         if _lifeline_closed(args.lifeline_fd, 0):
             return 1
+        child_command = command
+        child_pass_fds = (args.auth_fd, *args.child_directory_fd)
+        if args.release_owned_darwin_process_group:
+            if sys.platform != "darwin":
+                raise GuardError(
+                    "owned release process-group accounting is unsupported on this platform"
+                )
+            owned_group_reader, owned_group_writer = _pipe()
+            child_command = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                SESSION_GROUP_BODY_FLAG,
+                "--ready-fd",
+                str(owned_group_writer),
+                "--",
+                *command,
+            ]
+            child_pass_fds = (*child_pass_fds, owned_group_writer)
         child = subprocess.Popen(
-            command,
+            child_command,
             stdin=subprocess.DEVNULL,
             close_fds=True,
-            pass_fds=(args.auth_fd, *args.child_directory_fd),
+            pass_fds=child_pass_fds,
             env=os.environ.copy(),
         )
         process_group_id = child.pid
+        body_identity: DarwinProcessIdentity | None = None
+        if args.release_owned_darwin_process_group:
+            _close_descriptor(owned_group_writer)
+            owned_group_writer = -1
+            readiness = SessionControl(owned_group_reader)
+            owned_group_reader = -1
+            try:
+                ready = readiness.read_line(
+                    timeout=SESSION_READY_TIMEOUT_SECONDS,
+                    description="owned process-group readiness",
+                )
+                fields = ready.split()
+                if fields != ["READY", str(process_group_id)]:
+                    raise GuardViolation(
+                        "control_output_failure",
+                        "owned process-group body emitted invalid readiness",
+                    )
+            finally:
+                readiness.close()
+            body_identity = _capture_darwin_body_identity(
+                process_group_id, os.getpid()
+            )
         _close_descriptor(args.auth_fd)
         args.auth_fd = -1
         if process_group_id <= 1:
@@ -1290,12 +1381,18 @@ def _run_session_wrapper(argv: Sequence[str]) -> int:
                     lifeline_lost = True
                 live_owned_rows: list[ProcessRow] | None = None
                 try:
-                    rows = _process_rows()
-                    live_owned_rows = _group_rows(
-                        process_group_id,
-                        rows,
-                        known_owned_process_ids=known_owned_process_ids,
-                    )
+                    if args.release_owned_darwin_process_group:
+                        live_owned_rows = _darwin_process_group_rows(
+                            process_group_id,
+                            expected_body_identity=body_identity,
+                        )
+                    else:
+                        rows = _process_rows()
+                        live_owned_rows = _group_rows(
+                            process_group_id,
+                            rows,
+                            known_owned_process_ids=known_owned_process_ids,
+                        )
                 except GuardViolation as error:
                     if error.reason == "cancellation":
                         cancellation_latched = True
@@ -1350,6 +1447,9 @@ def _run_session_wrapper(argv: Sequence[str]) -> int:
     finally:
         for descriptor in descriptors:
             _close_descriptor(descriptor)
+        for descriptor in (owned_group_reader, owned_group_writer):
+            if descriptor >= 0:
+                _close_descriptor(descriptor)
 
 
 def _spawn_guarded_session(
@@ -1357,6 +1457,8 @@ def _spawn_guarded_session(
     environment: dict[str, str],
     held_lock_descriptors: Sequence[int],
     child_directory_descriptors: Sequence[int],
+    *,
+    owned_darwin_process_group: bool = False,
 ) -> GuardedSession:
     """Spawn the lifeline wrapper and authenticate exactly one guarded body."""
 
@@ -1372,13 +1474,19 @@ def _spawn_guarded_session(
         sys.executable,
         str(Path(__file__).resolve()),
         SESSION_WRAPPER_FLAG,
-        "--lifeline-fd",
-        str(lifeline_reader),
-        "--control-fd",
-        str(control_writer),
-        "--auth-fd",
-        str(auth_reader),
     ]
+    if owned_darwin_process_group:
+        wrapper_command.append(OWNED_DARWIN_GROUP_FLAG)
+    wrapper_command.extend(
+        (
+            "--lifeline-fd",
+            str(lifeline_reader),
+            "--control-fd",
+            str(control_writer),
+            "--auth-fd",
+            str(auth_reader),
+        )
+    )
     for descriptor in held_lock_descriptors:
         wrapper_command.extend(("--held-lock-fd", str(descriptor)))
     for descriptor in child_directory_descriptors:
@@ -1429,12 +1537,17 @@ def _spawn_guarded_session(
                 "control_output_failure",
                 "session wrapper reported an invalid body root process",
             )
+        body_identity = None
+        if owned_darwin_process_group:
+            body_identity = _capture_darwin_body_identity(
+                process_group_id, wrapper.pid
+            )
         session = GuardedSession(
             wrapper,
             process_group_id,
             lifeline_writer,
             control,
-            None,
+            body_identity,
         )
         lifeline_writer = -1
         control = None
@@ -1484,6 +1597,7 @@ def _run_guarded(
     report_context: Mapping[str, object] | None = None,
     child_environment: Mapping[str, str] | None = None,
     cancellation_requested: Callable[[], bool] | None = None,
+    release_owned_darwin_process_group: bool = False,
 ) -> int:
     """Run one command under the formal resource and lifecycle policy."""
 
@@ -1503,6 +1617,10 @@ def _run_guarded(
         raise GuardError("physical-footprint interval must be positive")
     if memory_enforcement_mode not in MEMORY_ENFORCEMENT_MODES:
         raise GuardError("unknown memory enforcement mode")
+    if release_owned_darwin_process_group and sys.platform != "darwin":
+        raise GuardError(
+            "release-owned process-group accounting requires Darwin libproc"
+        )
     frozen_context: dict[str, object] | None = None
     if report_context is not None:
         try:
@@ -1597,28 +1715,42 @@ def _run_guarded(
                 "supervisor_pid": os.getpid(),
             }
         )
-        foreign = _foreign_heavy_jobs(_process_rows())
-        if foreign:
-            first = foreign[0]
-            latch_verdict("foreign_heavy_job", FOREIGN_JOB_EXIT_CODE)
-            _record_foreign_heavy_job(
-                report,
-                first,
-                phase="pre_spawn",
-                owned_process_group_id=None,
-            )
-            raise GuardError(
-                "pre-existing TLAPM/Isabelle/Poly/Kagemusha job is outside this guard "
-                f"(pid={first.pid}, pgid={first.process_group_id}, "
-                f"command={Path(first.command).name})"
-            )
+        if not release_owned_darwin_process_group:
+            foreign = _foreign_heavy_jobs(_process_rows())
+            if foreign:
+                first = foreign[0]
+                latch_verdict("foreign_heavy_job", FOREIGN_JOB_EXIT_CODE)
+                _record_foreign_heavy_job(
+                    report,
+                    first,
+                    phase="pre_spawn",
+                    owned_process_group_id=None,
+                )
+                raise GuardError(
+                    "pre-existing TLAPM/Isabelle/Poly/Kagemusha job is outside this guard "
+                    f"(pid={first.pid}, pgid={first.process_group_id}, "
+                    f"command={Path(first.command).name})"
+                )
 
-        session = _spawn_guarded_session(
-            list(command),
-            environment,
-            held_lock_descriptors,
-            child_directory_descriptors,
-        )
+        if release_owned_darwin_process_group:
+            session = _spawn_guarded_session(
+                list(command),
+                environment,
+                held_lock_descriptors,
+                child_directory_descriptors,
+                owned_darwin_process_group=True,
+            )
+            if session.body_identity is None:
+                raise GuardError("release-owned body identity was not authenticated")
+        else:
+            # Keep the stable four-argument developer hook used by the pinned
+            # Kagemusha runner. Release formal execution never uses that hook.
+            session = _spawn_guarded_session(
+                list(command),
+                environment,
+                held_lock_descriptors,
+                child_directory_descriptors,
+            )
         report.write(
             {
                 "event": "spawn",
@@ -1654,28 +1786,37 @@ def _run_guarded(
                 now = time.monotonic()
                 if now >= next_sample:
                     try:
-                        process_rows = _process_rows()
-                        owned_rows = _group_rows(
-                            session.process_group_id,
-                            process_rows,
-                            known_owned_process_ids=known_owned_process_ids,
-                        )
-                        foreign = _foreign_heavy_jobs(
-                            process_rows,
-                            owned_process_ids=known_owned_process_ids,
-                        )
-                        if foreign and "foreign_heavy_job" not in recorded_violations:
-                            first = foreign[0]
-                            latch_verdict(
-                                "foreign_heavy_job", FOREIGN_JOB_EXIT_CODE
+                        if release_owned_darwin_process_group:
+                            process_rows = _darwin_process_group_rows(
+                                session.process_group_id,
+                                expected_body_identity=session.body_identity,
                             )
-                            _record_foreign_heavy_job(
-                                report,
-                                first,
-                                phase="runtime",
-                                owned_process_group_id=session.process_group_id,
+                        else:
+                            process_rows = _process_rows()
+                            _group_rows(
+                                session.process_group_id,
+                                process_rows,
+                                known_owned_process_ids=known_owned_process_ids,
                             )
-                            recorded_violations.add("foreign_heavy_job")
+                            foreign = _foreign_heavy_jobs(
+                                process_rows,
+                                owned_process_ids=known_owned_process_ids,
+                            )
+                            if (
+                                foreign
+                                and "foreign_heavy_job" not in recorded_violations
+                            ):
+                                first = foreign[0]
+                                latch_verdict(
+                                    "foreign_heavy_job", FOREIGN_JOB_EXIT_CODE
+                                )
+                                _record_foreign_heavy_job(
+                                    report,
+                                    first,
+                                    phase="runtime",
+                                    owned_process_group_id=session.process_group_id,
+                                )
+                                recorded_violations.add("foreign_heavy_job")
                         if session.wrapper.poll() is not None:
                             record_wrapper_completion(session)
                             break
@@ -1852,7 +1993,7 @@ def _run_guarded(
                     exit_reason = "post_run_validation_error"
                     final_status = 1
                 print(f"resource guard post-run validation failed: {error}", file=sys.stderr)
-        if final_status == 0:
+        if final_status == 0 and not release_owned_darwin_process_group:
             try:
                 foreign = _foreign_heavy_jobs(_process_rows())
                 if foreign:
@@ -1942,6 +2083,7 @@ def _run_guarded(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(OWNED_DARWIN_GROUP_FLAG, action="store_true")
     parser.add_argument("--jsonl", required=True, type=Path)
     parser.add_argument("--summary", required=True, type=Path)
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -1951,6 +2093,8 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     """Acquire the host lock and supervise the requested TLAPS body."""
 
+    if len(sys.argv) > 1 and sys.argv[1] == SESSION_GROUP_BODY_FLAG:
+        return _run_owned_darwin_group_body(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == SESSION_WRAPPER_FLAG:
         return _run_session_wrapper(sys.argv[2:])
     args = _parser().parse_args()
@@ -1967,6 +2111,9 @@ def main() -> int:
                     report_path=args.jsonl,
                     summary_path=args.summary,
                     held_lock_descriptors=(heavy_lock, tlaps_lock),
+                    release_owned_darwin_process_group=(
+                        args.release_owned_darwin_process_group
+                    ),
                 )
     except LockUnavailable as error:
         print(f"TLAPS guard refused to start: {error}", file=sys.stderr)

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+
+cargo check --workspace --all-targets --message-format=short --keep-going

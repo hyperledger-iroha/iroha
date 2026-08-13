@@ -3,9 +3,12 @@ unless File.file?(version_file) && !File.symlink?(version_file)
   raise 'IrohaSwift VERSION must be a regular non-symlink file'
 end
 
-version = File.binread(version_file).strip
+version_bytes = File.binread(version_file)
+version = version_bytes.delete_suffix("\n")
 canonical_semver = /\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z/
-raise 'IrohaSwift VERSION must be canonical SemVer' unless canonical_semver.match?(version)
+unless version_bytes == "#{version}\n" && version.ascii_only? && canonical_semver.match?(version)
+  raise 'IrohaSwift VERSION must contain one canonical ASCII SemVer and a newline'
+end
 
 Pod::Spec.new do |s|
   s.name             = 'IrohaSwift'
@@ -22,11 +25,15 @@ DESC
   s.authors          = { 'Hyperledger Iroha Maintainers' => 'iroha@lists.hyperledger.org' }
   s.source           = {
     :git => 'https://github.com/hyperledger-iroha/iroha.git',
-    :tag => "iroha-swift-v#{version}"
+    :tag => "v#{version}"
   }
   s.platform         = :ios, '15.0'
   s.swift_versions   = ['5.9']
-  s.source_files     = 'Sources/IrohaSwift/**/*.{swift}'
+  s.source_files     = [
+    'Sources/IrohaSwift/**/*.swift',
+    'IrohaSwift/Sources/IrohaSwift/**/*.swift'
+  ]
+  s.dependency       'NoritoBridge', version
   s.pod_target_xcconfig = {
     'OTHER_LDFLAGS' => '-all_load'
   }

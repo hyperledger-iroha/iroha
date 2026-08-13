@@ -41,6 +41,25 @@ EXPECTED_HARNESSES = {
 GROUP_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 EXTENSION_RE = re.compile(r"^\.[A-Za-z0-9.]+$")
 REGULAR_GIT_MODES = frozenset({"100644", "100755"})
+REGENERATION_KINDS = frozenset(
+    {
+        "javascript",
+        "openapi",
+        "rust-fixtures",
+    }
+)
+RUST_FIXTURE_ARTIFACTS = (
+    PurePosixPath("native_amx_v2_grouped.json"),
+    PurePosixPath("wire_v2.tsv"),
+)
+OPENAPI_ARTIFACTS = (
+    PurePosixPath("manifest.json"),
+    PurePosixPath("torii.json"),
+    PurePosixPath("versions.json"),
+    PurePosixPath("versions/current/manifest.json"),
+    PurePosixPath("versions/current/torii.json"),
+)
+OPENAPI_PROTECTED_INPUTS = (PurePosixPath("allowed_signers.json"),)
 
 
 class ClosureError(RuntimeError):
@@ -568,6 +587,248 @@ def _records_digest(records: Sequence[tuple[PurePosixPath, str]]) -> str:
     return hashlib.sha256(manifest_bytes).hexdigest()
 
 
+def _private_external_directory(
+    repo_root: Path,
+    value: Path,
+    context: str,
+) -> Path:
+    """Validate one owner-private, canonical regeneration output root."""
+
+    if not value.is_absolute():
+        raise _fail(f"{context} must be an absolute path")
+    absolute = Path(os.path.abspath(value))
+    canonical = Path(os.path.realpath(value))
+    if absolute != canonical or not canonical.is_dir():
+        raise _fail(f"{context} must be an existing canonical directory")
+    # `/private/tmp` is the portable shared temp anchor on macOS. Authenticate
+    # every caller-owned component below that anchor; the system-owned anchor
+    # itself is intentionally not required to be mode 0700.
+    anchor = Path("/private/tmp") if canonical.is_relative_to("/private/tmp") else canonical.parent
+    current = canonical
+    while current != anchor:
+        metadata = os.lstat(current)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise _fail(f"{context} must not traverse a symlink or non-directory")
+        if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+            raise _fail(f"{context} ancestors below the filesystem root must be owned by the invoking user")
+        if stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise _fail(
+                f"{context} ancestors below the filesystem root must be "
+                "owner-private (mode 0700 or stricter)"
+            )
+        current = current.parent
+    try:
+        canonical.relative_to(repo_root)
+    except ValueError:
+        pass
+    else:
+        raise _fail(f"{context} must be outside the repository root")
+    return canonical
+
+
+def _assert_disjoint_directories(
+    left: Path,
+    right: Path,
+    left_context: str,
+    right_context: str,
+) -> None:
+    common = Path(os.path.commonpath((left, right)))
+    if common in {left, right} or os.path.samestat(os.stat(left), os.stat(right)):
+        raise _fail(f"{left_context} and {right_context} must not overlap")
+
+
+def _regular_directory_inventory(
+    root: Path,
+    context: str,
+) -> tuple[PurePosixPath, ...]:
+    """Return an exact, sorted regular-file inventory without following links."""
+
+    discovered: list[PurePosixPath] = []
+    for directory, directory_names, filenames in os.walk(root):
+        directory_names.sort()
+        filenames.sort()
+        for name in directory_names:
+            candidate = Path(directory) / name
+            metadata = os.lstat(candidate)
+            relative = candidate.relative_to(root).as_posix()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                raise _fail(f"{context} contains a non-directory or symlink: {relative}")
+        for name in filenames:
+            candidate = Path(directory) / name
+            metadata = os.lstat(candidate)
+            relative = _canonical_relative_path(
+                candidate.relative_to(root).as_posix(),
+                f"{context} artifact path",
+            )
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise _fail(
+                    f"{context} contains a non-regular or symlink artifact: "
+                    f"{relative.as_posix()}"
+                )
+            discovered.append(relative)
+    return tuple(sorted(discovered, key=PurePosixPath.as_posix))
+
+
+def _require_exact_inventory(
+    root: Path,
+    expected: Sequence[PurePosixPath],
+    context: str,
+) -> tuple[PurePosixPath, ...]:
+    observed = _regular_directory_inventory(root, context)
+    expected_ordered = tuple(sorted(expected, key=PurePosixPath.as_posix))
+    if observed != expected_ordered:
+        observed_set = set(observed)
+        expected_set = set(expected_ordered)
+        missing = sorted(
+            (path.as_posix() for path in expected_set - observed_set)
+        )
+        unexpected = sorted(
+            (path.as_posix() for path in observed_set - expected_set)
+        )
+        raise _fail(
+            f"{context} inventory is not exact: missing={missing!r} "
+            f"unexpected={unexpected!r}"
+        )
+    return observed
+
+
+def _compare_regenerated_artifacts(
+    expected_root: Path,
+    first_root: Path,
+    second_root: Path,
+    artifacts: Sequence[PurePosixPath],
+    context: str,
+) -> tuple[tuple[PurePosixPath, str], ...]:
+    records: list[tuple[PurePosixPath, str]] = []
+    for relative in artifacts:
+        expected = _stable_regular_bytes(
+            expected_root / relative,
+            f"checked-in {context} artifact {relative.as_posix()!r}",
+        )
+        first = _stable_regular_bytes(
+            first_root / relative,
+            f"first {context} regeneration {relative.as_posix()!r}",
+        )
+        second = _stable_regular_bytes(
+            second_root / relative,
+            f"second {context} regeneration {relative.as_posix()!r}",
+        )
+        if first != second:
+            raise _fail(
+                f"independent {context} regenerations disagree at "
+                f"{relative.as_posix()}"
+            )
+        if first != expected:
+            raise _fail(
+                f"checked-in {context} artifact is stale: {relative.as_posix()}"
+            )
+        records.append((relative, hashlib.sha256(first).hexdigest()))
+    return tuple(records)
+
+
+def _check_regeneration(
+    repo_root: Path,
+    kind: str,
+    first_value: Path,
+    second_value: Path,
+) -> tuple[tuple[PurePosixPath, str], ...]:
+    first_root = _private_external_directory(
+        repo_root, first_value, "first regeneration output root"
+    )
+    second_root = _private_external_directory(
+        repo_root, second_value, "second regeneration output root"
+    )
+    _assert_disjoint_directories(
+        first_root,
+        second_root,
+        "first regeneration output root",
+        "second regeneration output root",
+    )
+
+    if kind == "rust-fixtures":
+        expected_root = repo_root / "fixtures" / "sumeragi_v2"
+        _require_exact_inventory(
+            first_root, RUST_FIXTURE_ARTIFACTS, "first Rust fixture regeneration"
+        )
+        _require_exact_inventory(
+            second_root, RUST_FIXTURE_ARTIFACTS, "second Rust fixture regeneration"
+        )
+        records = _compare_regenerated_artifacts(
+            expected_root,
+            first_root,
+            second_root,
+            RUST_FIXTURE_ARTIFACTS,
+            "Rust fixture",
+        )
+    elif kind == "openapi":
+        expected_root = repo_root / "artifacts" / "openapi"
+        complete_inventory = (*OPENAPI_ARTIFACTS, *OPENAPI_PROTECTED_INPUTS)
+        _require_exact_inventory(
+            first_root, complete_inventory, "first OpenAPI regeneration"
+        )
+        _require_exact_inventory(
+            second_root, complete_inventory, "second OpenAPI regeneration"
+        )
+        _compare_regenerated_artifacts(
+            expected_root,
+            first_root,
+            second_root,
+            OPENAPI_PROTECTED_INPUTS,
+            "OpenAPI protected input",
+        )
+        package_mirror = _stable_regular_bytes(
+            repo_root / "crates" / "iroha_torii" / "assets" / "openapi" / "torii.json",
+            "package-local OpenAPI authority",
+        )
+        canonical_authority = _stable_regular_bytes(
+            expected_root / "torii.json", "checked-in canonical OpenAPI authority"
+        )
+        if package_mirror != canonical_authority:
+            raise _fail(
+                "package-local OpenAPI authority differs from the checked-in canonical authority"
+            )
+        records = _compare_regenerated_artifacts(
+            expected_root,
+            first_root,
+            second_root,
+            OPENAPI_ARTIFACTS,
+            "OpenAPI",
+        )
+    elif kind == "javascript":
+        expected_root = repo_root / "javascript" / "iroha_js" / "src"
+        expected_inventory = _regular_directory_inventory(
+            expected_root, "JavaScript source distribution authority"
+        )
+        if not expected_inventory:
+            raise _fail("JavaScript source distribution authority is empty")
+        _require_exact_inventory(
+            first_root, expected_inventory, "first JavaScript distribution"
+        )
+        _require_exact_inventory(
+            second_root, expected_inventory, "second JavaScript distribution"
+        )
+        records = _compare_regenerated_artifacts(
+            expected_root,
+            first_root,
+            second_root,
+            expected_inventory,
+            "JavaScript distribution",
+        )
+    else:
+        raise _fail(f"unknown regeneration kind {kind!r}")
+
+    # Catch additions, removals, and replacements that race the stable reads.
+    if kind == "rust-fixtures":
+        expected_inventory = RUST_FIXTURE_ARTIFACTS
+    elif kind == "openapi":
+        expected_inventory = (*OPENAPI_ARTIFACTS, *OPENAPI_PROTECTED_INPUTS)
+    else:
+        expected_inventory = tuple(path for path, _digest in records)
+    _require_exact_inventory(first_root, expected_inventory, f"final first {kind} output")
+    _require_exact_inventory(second_root, expected_inventory, f"final second {kind} output")
+    return records
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
@@ -585,6 +846,13 @@ def _parser() -> argparse.ArgumentParser:
     actions.add_argument("--print-paths", action="store_true")
     actions.add_argument("--print-records", action="store_true")
     actions.add_argument("--manifest-sha256", action="store_true")
+    actions.add_argument(
+        "--check-regeneration",
+        choices=sorted(REGENERATION_KINDS),
+        metavar="KIND",
+    )
+    parser.add_argument("--first-output-root", type=Path)
+    parser.add_argument("--second-output-root", type=Path)
     return parser
 
 
@@ -602,6 +870,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         manifest_path = repo_root / manifest_relative
         records = _validate_and_hash(repo_root, manifest_path, args.suite)
+        output_roots = (args.first_output_root, args.second_output_root)
+        if args.check_regeneration is None:
+            if any(path is not None for path in output_roots):
+                raise _fail(
+                    "regeneration output roots require --check-regeneration"
+                )
+            regeneration_records = None
+        else:
+            if any(path is None for path in output_roots):
+                raise _fail(
+                    "--check-regeneration requires both --first-output-root "
+                    "and --second-output-root"
+                )
+            regeneration_records = _check_regeneration(
+                repo_root,
+                args.check_regeneration,
+                args.first_output_root,
+                args.second_output_root,
+            )
     except ClosureError as error:
         print(f"SDK source closure error: {error}", file=sys.stderr)
         return 1
@@ -614,6 +901,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{path.as_posix()}\t{digest}")
     elif args.manifest_sha256:
         print(_records_digest(records))
+    elif args.check_regeneration is not None:
+        assert regeneration_records is not None
+        print(
+            json.dumps(
+                {
+                    "artifact_count": len(regeneration_records),
+                    "artifact_manifest_sha256": _records_digest(
+                        regeneration_records
+                    ),
+                    "kind": args.check_regeneration,
+                    "schema_version": 1,
+                    "status": "byte-identical",
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
     return 0
 
 

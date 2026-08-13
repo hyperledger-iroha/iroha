@@ -2012,7 +2012,7 @@ pub enum ReputationFinalizedArchivePageV1<T, C> {
 }
 
 /// Exact caller-supplied fence authorizing one prefix-compaction transaction.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[must_use]
 pub struct ReputationFinalizedArchiveRetentionFenceV1 {
     compact_through: ReputationFinalizedArchiveKeyV1,
@@ -2482,7 +2482,7 @@ pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Deb
 }
 
 /// Durable result of one explicit finalized-prefix compaction.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ReputationFinalizedArchiveCompactionOutcomeV1 {
     retention_floor: ReputationFinalizedArchiveKeyV1,
@@ -2525,7 +2525,7 @@ impl ReputationFinalizedArchiveCompactionOutcomeV1 {
 }
 
 /// Exact durable coverage qualified against one authenticated Kura boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ReputationFinalizedArchiveQualificationV1 {
     activation_floor: ReputationFinalizedArchiveKeyV1,
@@ -2575,7 +2575,7 @@ impl ReputationFinalizedArchiveQualificationV1 {
 }
 
 /// Result of reconciling one frozen state view into the exact archive.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ReputationFinalizedArchiveReconcileOutcomeV1 {
     insertion: ReputationFinalizedArchiveInsertOutcome,

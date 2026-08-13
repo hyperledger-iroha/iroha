@@ -2023,6 +2023,7 @@ fn state_free_preflight_fixture() -> (
             max_signed_transaction_bytes: Bytes(1024 * 1024),
             max_status_page_size: 256,
         },
+        provider_attestation_journal: None,
     };
     let source = Arc::new(TestAuthenticatedSourceInventoryV1::new(vec![
         [0x22; 32], [0x33; 32],

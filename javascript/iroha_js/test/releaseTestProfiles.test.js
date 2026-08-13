@@ -38,7 +38,9 @@ test("release test profiles separate provisioned lanes and reject skipped result
     '"integrationTorii.test.js"',
     '"sorafsChunker.oneGib.test.js"',
     '"sorafsAppealFinanceValidation.test.js"',
+    '"sorafsFixtureBundleValidation.test.js"',
     '"sorafsOrchestrator.parity.test.js"',
+    '"sorafsPdpValidation.test.js"',
     '/# (?:SKIP|TODO)(?:\\s|$)/u',
   ]) {
     assert.ok(runner.includes(required), `test profile runner must contain ${required}`);

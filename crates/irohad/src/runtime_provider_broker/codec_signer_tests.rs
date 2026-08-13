@@ -1399,7 +1399,7 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
     validate_operation_request(&request).expect("validate exact moderation signer request");
     let result =
         dispatch_server_operation(&state, &request).expect("sign exact moderation payload");
-    validate_operation_result(&request, STATUS_OK_V1, &result)
+    validate_operation_result(&request, STATUS_OK_V1, &result, &state.network_id)
         .expect("accept exact signed moderation result");
     let signed = decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
         &result,
@@ -1426,7 +1426,7 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
         let substituted = encode_canonical(&substituted, MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1)
             .expect("encode adversarial moderation signer result");
         assert_eq!(
-            validate_operation_result(&request, STATUS_OK_V1, &substituted),
+            validate_operation_result(&request, STATUS_OK_V1, &substituted, &state.network_id,),
             Err(BrokerError::Protocol)
         );
     }

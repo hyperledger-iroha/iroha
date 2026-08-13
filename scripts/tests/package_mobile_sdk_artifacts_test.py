@@ -20,6 +20,11 @@ import zipfile
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_OWNER = REPOSITORY_ROOT / "scripts/package_mobile_sdk_artifacts.sh"
 LOCK_RUNNER = REPOSITORY_ROOT / "scripts/exec_with_file_lock.py"
+PODSPEC_RENDERER = REPOSITORY_ROOT / "scripts/render_norito_bridge_podspec.py"
+PODSPEC_TEMPLATE = (
+    REPOSITORY_ROOT
+    / "crates/connect_norito_bridge/NoritoBridge.podspec.template"
+)
 VERSION = "1.0.0"
 
 
@@ -70,6 +75,13 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             encoding="utf-8",
         )
         shutil.copy2(LOCK_RUNNER, scripts / LOCK_RUNNER.name)
+        shutil.copy2(PODSPEC_RENDERER, scripts / PODSPEC_RENDERER.name)
+        swift_root = self.repository / "IrohaSwift"
+        swift_root.mkdir()
+        (swift_root / "VERSION").write_text(f"{VERSION}\n", encoding="ascii")
+        template_parent = self.repository / "crates/connect_norito_bridge"
+        template_parent.mkdir(parents=True)
+        shutil.copy2(PODSPEC_TEMPLATE, template_parent / PODSPEC_TEMPLATE.name)
         checker = scripts / "check_mobile_sdk_artifacts.sh"
         checker.write_text(
             textwrap.dedent(
@@ -135,17 +147,19 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         self,
         *,
         mode: str = "android",
+        version: str = VERSION,
         **updates: str,
     ) -> subprocess.CompletedProcess[str]:
+        platform_arguments = [] if mode == "all" else [f"--{mode}"]
         return subprocess.run(
             [
                 "/bin/bash",
                 str(self.repository / "scripts/package_mobile_sdk_artifacts.sh"),
                 "--root",
                 str(self.repository),
-                f"--{mode}",
+                *platform_arguments,
                 "--version",
-                VERSION,
+                version,
             ],
             env=self._environment(**updates),
             text=True,
@@ -159,7 +173,14 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         xcframework = artifact_root / "NoritoBridge.xcframework"
         xcframework.mkdir(parents=True)
         (xcframework / "Info.plist").write_bytes(b"canonical plist fixture\n")
-        bridge_manifest = b'{"schema_version":1}\n'
+        bridge_manifest = (
+            json.dumps(
+                {"schema_version": 1, "version": VERSION},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
         (artifact_root / "NoritoBridge.artifacts.json").write_bytes(bridge_manifest)
         (xcframework / "NoritoBridge.artifacts.json").write_bytes(bridge_manifest)
         owner = self.repository / "scripts/archive_norito_xcframework.py"
@@ -273,6 +294,22 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
     def _assert_no_publish_stage(self) -> None:
         self.assertEqual(self._publish_stages(), [])
 
+    def _inject_extra_package_file(self) -> None:
+        owner = self.repository / "scripts/package_mobile_sdk_artifacts.sh"
+        source = owner.read_text(encoding="utf-8")
+        marker = "# PACKAGE_TEST_BEFORE_STAGE_INVENTORY\n"
+        self.assertEqual(source.count(marker), 1)
+        owner.write_text(
+            source.replace(
+                marker,
+                marker
+                + '(stage / "unexpected.txt").write_text('
+                + '"unexpected\\n", encoding="utf-8")\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+
     def test_held_parent_lock_rejects_before_creating_output(self) -> None:
         lock_path = self.output.parent / ".mobile-sdk.publish.lockfile"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -302,6 +339,32 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.assertEqual(len(self._publish_stages()), 1)
         self.assertIn("retained failed package stage", result.stderr)
+
+    def test_extra_package_file_is_rejected_before_publication(self) -> None:
+        self._inject_extra_package_file()
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "package stage does not contain the exact android file set",
+            result.stderr,
+        )
+        self.assertFalse(self.output.exists())
+
+    def test_combined_package_extra_file_is_rejected_before_publication(self) -> None:
+        self._inject_extra_package_file()
+        seal_environment = self._write_fake_apple_owner()
+        result = self._package(
+            mode="all",
+            version="pr-9-deadbeef",
+            SOURCE_DATE_EPOCH="1700000000",
+            **seal_environment,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "package stage does not contain the exact all file set",
+            result.stderr,
+        )
+        self.assertFalse(self.output.exists())
 
     def test_success_publishes_only_to_absent_destination(self) -> None:
         result = self._package()
@@ -361,21 +424,83 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         )
 
     def test_apple_checker_and_archiver_share_authenticated_source_lock(self) -> None:
+        diagnostic_version = "pr-7-deadbeef"
         seal_environment = self._write_fake_apple_owner()
         result = self._package(
             mode="apple",
+            version=diagnostic_version,
             SOURCE_DATE_EPOCH="1700000000",
             **seal_environment,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        archive = self.output / f"NoritoBridge-v{VERSION}.xcframework.zip"
+        versioned_manifest = self.output / f"NoritoBridge-v{VERSION}.artifacts.json"
+        podspec = self.output / f"NoritoBridge-{VERSION}.podspec"
         self.assertTrue(
-            (self.output / f"NoritoBridge-{VERSION}.xcframework.zip").is_file()
+            archive.is_file()
         )
-        self.assertTrue(
-            (self.output / f"NoritoBridge-{VERSION}.artifacts.json").is_file()
-        )
+        self.assertTrue(versioned_manifest.is_file())
+        self.assertTrue(podspec.is_file())
         self.assertFalse((self.output / ".NoritoBridge.archive.lockfile").exists())
         self._assert_no_publish_stage()
+
+        rendered = podspec.read_text(encoding="utf-8")
+        archive_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+        self.assertIn(f"s.version          = '{VERSION}'", rendered)
+        self.assertIn(
+            f"releases/download/v{VERSION}/NoritoBridge-v{VERSION}.xcframework.zip",
+            rendered,
+        )
+        self.assertIn(f":sha256 => '{archive_sha256}'", rendered)
+
+        package_manifest = (
+            self.output / f"mobile-sdk-apple-{diagnostic_version}.artifacts.json"
+        )
+        package_payload = json.loads(package_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(package_payload["version"], diagnostic_version)
+        self.assertEqual(package_payload["apple_sdk_semver"], VERSION)
+        self.assertEqual(
+            [entry["kind"] for entry in package_payload["artifacts"]],
+            [
+                "apple-xcframework",
+                "apple-manifest",
+                "apple-cocoapods-podspec",
+            ],
+        )
+        self.assertEqual(
+            {entry["name"] for entry in package_payload["artifacts"]},
+            {archive.name, versioned_manifest.name, podspec.name},
+        )
+        checksums = self.output / f"SHA256SUMS-apple-{diagnostic_version}.txt"
+        checksum_paths = {
+            line.split("  ", 1)[1]
+            for line in checksums.read_text(encoding="utf-8").splitlines()
+        }
+        self.assertEqual(
+            checksum_paths,
+            {archive.name, versioned_manifest.name, podspec.name, package_manifest.name},
+        )
+
+    def test_apple_manifest_version_must_match_pod_version(self) -> None:
+        seal_environment = self._write_fake_apple_owner()
+        artifact_root = Path(seal_environment["MOBILE_SDK_APPLE_ARTIFACT_DIR"])
+        drifted = b'{"schema_version":1,"version":"9.9.9"}\n'
+        (artifact_root / "NoritoBridge.artifacts.json").write_bytes(drifted)
+        (artifact_root / "NoritoBridge.xcframework/NoritoBridge.artifacts.json").write_bytes(
+            drifted
+        )
+        result = self._package(
+            mode="apple",
+            version="pr-8-deadbeef",
+            SOURCE_DATE_EPOCH="1700000000",
+            **seal_environment,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "embedded NoritoBridge manifest version must equal IrohaSwift/VERSION",
+            result.stderr,
+        )
+        self.assertFalse(self.output.exists())
 
     def test_repository_local_and_implicit_outputs_are_rejected(self) -> None:
         implicit_environment = self._environment()

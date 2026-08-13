@@ -1722,7 +1722,22 @@ and rejects below-cut view-scoped admission. A `CertifiedResponse` is not
 view-scoped at this boundary: durable Decision may precede recovery of its exact
 body, so both cuts preserve the bounded response owner and defer authority to
 the outstanding signed request, QC, responder signature, canonical body, and
-manifest checks. Proposal chunks remain cut-scoped. These are source-bound
+manifest checks. Proposal chunks remain cut-scoped. The Rust refinement now
+preflights Proposal control and canonical chunks as one aggregate exact-output
+batch: it plans both FIFO owners without mutation, returns the opaque recovered
+authority under capacity pressure or typed abort, and commits both under the
+same retained mutex. The recovered authority is also joined to the exact
+body-store instance and process output guard; ordinary live Proposal output
+uses the same batch planner before consuming its first-send marker. This is a
+source-bound crash/refinement contract, not a new deductive theorem. The
+already-WAL-ahead recovered Proposal transaction now retains that batch across
+one exact LedgerV1 publication of Broadcast plus its independent next Sign;
+the assertion-only tail parks Broadcast, leaves Sign Ready, advances the
+adapter, retires the worker completion, and enqueues both fanouts. Cold-open
+authentication now has a frame-exact pair classifier and an affine
+frozen-roster reducer replay which must reproduce both durable children; the
+two-carrier census splice and Proposal chunk reconstruction remain pending.
+These are source-bound
 production-refinement contracts; the existing deductive asynchronous proof
 does not by itself prove their Rust persistence ordering. The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership

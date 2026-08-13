@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "v2_lifecycle_authority.rs"]
 mod authority;
-/// Inert coordinator cuts for adjacent direct body-pipeline transitions.
+/// Sealed coordinator cuts for adjacent direct body-pipeline transitions.
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod body_pipeline_transition;
@@ -75,6 +75,10 @@ pub(in crate::sumeragi) use launch::{
     ProductionRecoveredDecisionApplyCompletionV1, ProductionRecoveredDecisionApplyRetryV1,
     ProductionRecoveredDecisionFetchStoreSettlementFailureV1,
     ProductionRecoveredDecisionFetchStoreSettlementV1,
+    ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1,
+    ProductionRecoveredLifecycleSignBroadcastPreparationV1,
+    ProductionRecoveredLifecycleSignBroadcastSettlementV1,
+    ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1,
     ProductionV2CompletionObserverActivationPermitV1, RetainedRecoveredDecisionApplyDeferredV1,
 };
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
@@ -92,6 +96,18 @@ pub(crate) fn run_complete_tip_retirement_release_regressions() {
     ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work();
     ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner();
 }
+#[cfg(all(test, feature = "bls"))]
+/// Build one exact retired CompleteTip/H+1 pair for runner restart tests.
+pub(crate) fn complete_tip_restart_activation_fixture() -> (
+    std::sync::Arc<crate::kura::Kura>,
+    std::path::PathBuf,
+    iroha_data_model::block::consensus_v2::HeightContext,
+    RetiredRecoveredCompleteTipActivationAuthorityV1,
+) {
+    ledger::tests::durable_ready_fetch_recovery::complete_tip_restart_activation_fixture()
+}
+#[cfg(test)]
+pub(in crate::sumeragi) use ledger::LifecycleLedgerStoreV1;
 #[cfg(test)]
 pub(crate) use ledger::{
     append_same_owner_foreign_terminal_for_test,
@@ -103,6 +119,7 @@ pub(super) use open::TerminalValidateNoSuccessorClaim;
 pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};
 #[cfg(test)]
 pub(crate) use projection::CertifiedServeAdmissionBoundaryError;
+pub(in crate::sumeragi) use projection::lifecycle_context;
 pub(crate) use projection::{
     AdapterEffectAdmissionError, CertifiedServeAdmissionError,
     CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,
@@ -115,6 +132,7 @@ pub(in crate::sumeragi) use replay_authority::{
     InvalidBodyReportReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
     LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     LocalValidateReplayEvidenceV1, RecoveredDecisionApplyReplayLineageV1,
+    RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
     RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
     RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
 };
@@ -134,6 +152,8 @@ pub(in crate::sumeragi) use scheduler_inputs::{
     ProductionRecoveredDecisionFetchPersistenceErrorV1,
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
+    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+    ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
 };
 pub(crate) use schema::{
     AdmissionDecision, AdmissionRejection, AdmissionRequest, CandidateAdmission, CapacityClass,
@@ -167,11 +187,15 @@ pub(in crate::sumeragi) use selector::{
     RecoveredDecisionFetchBodyPersistencePreparationErrorV1,
     RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchExactDequeueErrorV1,
 };
-pub(in crate::sumeragi) use wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1;
 pub(in crate::sumeragi) use wal_recovery::{
     AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
     AuthenticatedRecoveredWalVoteProjection, RecoveredDecisionApplyPendingLineageV1,
     RecoveredDecisionFetchStoreAdapterAuthorityV1, RecoveredDecisionFetchStoreProjectionV1,
+};
+pub(in crate::sumeragi) use wal_recovery::{
+    RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    RecoveredLifecycleSignedBroadcastOutputAuthorityV1,
 };
 pub(in crate::sumeragi) use work_registry::RecoveredDecisionApplyRegistryProjectionPermit;
 #[cfg(test)]
@@ -717,7 +741,9 @@ impl LifecycleCoordinator {
         let Some(first_ordinal) = self.high_water.checked_add(1) else {
             return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
         };
-        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_count - 1) else {
+        let ordinal_span =
+            u128::try_from(ordinal_count - 1).expect("bounded lifecycle record count fits in u128");
+        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_span) else {
             return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
         };
         let owner = self
@@ -1901,7 +1927,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_registry_factory_rejects_unsupported_ready_work_without_mutation() {
+    fn direct_registry_factory_rejects_unsealed_fetch_ready_work_without_mutation() {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         let registry = LifecycleWorkRegistryHolder::empty();
         let (_, ordinal, _) = admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
@@ -1915,10 +1941,7 @@ mod tests {
 
         assert_eq!(
             coordinator.direct_registry_scheduler_inputs_for_test(&registry),
-            Err(ProductionSchedulerInputsError::UnsupportedReadyCarrier {
-                ordinal,
-                work_class: LifecycleWorkClass::Fetch,
-            })
+            Err(ProductionSchedulerInputsError::InvalidRecoveredDecisionFetchCarrier { ordinal })
         );
         assert_eq!(format!("{coordinator:?}"), before);
     }
@@ -1978,7 +2001,7 @@ mod tests {
             scheduler
                 .matches("AuthenticatedSchedulerInputsFactory::new()")
                 .count(),
-            3
+            8
         );
         assert!(schema.contains("_factory: &AuthenticatedSchedulerInputsFactory"));
         assert!(schema.contains("_factory: AuthenticatedSchedulerInputsFactory"));
@@ -5353,7 +5376,8 @@ mod tests {
                 terminal,
             )
         };
-        let rejected = |records, producer_debts| {
+        let rejected = |records: Vec<RecoveredLifecycleRecord>,
+                        producer_debts: BTreeMap<u128, u128>| {
             let high_water = records
                 .iter()
                 .map(|record: &RecoveredLifecycleRecord| record.ordinal)

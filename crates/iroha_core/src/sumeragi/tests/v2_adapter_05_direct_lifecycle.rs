@@ -124,6 +124,236 @@
     }
 
     #[test]
+    fn recovered_broadcast_and_sign_projection_remains_affine_and_phase_body_bound() {
+        let adapter = include_str!("../v2.rs");
+        let authority = adapter
+            .split_once("struct RecoveredLifecycleSignBroadcastAndSignAuthorityV1")
+            .expect("locate combined recovered successor authority")
+            .1
+            .split_once("/// WAL- and Ledger-authenticated input")
+            .expect("locate end of combined recovered successor authority")
+            .0;
+        for forbidden in [
+            "pub fn broadcast",
+            "pub fn next_sign",
+            "pub(in crate::sumeragi) fn broadcast",
+            "pub(in crate::sumeragi) fn next_sign",
+        ] {
+            assert!(
+                !authority.contains(forbidden),
+                "combined recovered authority exposed {forbidden}"
+            );
+        }
+        let preview = adapter
+            .split_once("pub(in crate::sumeragi) fn project_broadcast_and_sign_authority(")
+            .expect("locate combined authority mint")
+            .1
+            .split_once("/// Exercise fail-closed next-Sign substitution")
+            .expect("locate end of combined authority mint")
+            .0;
+        for required in [
+            "&mut self",
+            "self.combined_authority_minted",
+            "self.combined_authority_minted = true",
+            "expected_manifest_hash",
+            "body_authority: RecoveredLifecycleNextVoteBodyAuthorityV1",
+            "RecoveredLifecycleNextVoteBodyConsumePermitV1::new()",
+        ] {
+            assert!(
+                preview.contains(required),
+                "combined recovered authority mint omitted {required}"
+            );
+        }
+        assert!(
+            !preview.contains("validated: &ValidatedBodyReceipt"),
+            "combined authority mint must not accept a caller-supplied receipt"
+        );
+
+        let effects = include_str!("../v2_effects.rs");
+        let executor_mint = effects
+            .split_once("fn authenticate_recovered_lifecycle_next_vote_body_catalogs(")
+            .expect("locate exact next-Vote catalog mint")
+            .1
+            .split_once("impl V2EffectExecutor<SerializedV2Runtime>")
+            .expect("locate end of exact next-Vote catalog mint")
+            .0;
+        for required in [
+            "validated_bodies.get(&key) != Some(&validated)",
+            "durable_bodies.get(&key) != Some(durable)",
+            "recovered_bodies.get(&key)",
+            "RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new()",
+        ] {
+            assert!(
+                executor_mint.contains(required),
+                "next-Vote executor mint omitted {required}"
+            );
+        }
+
+        let worker = include_str!("../v2_worker.rs");
+        let service_mint = worker
+            .split_once("fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(")
+            .expect("locate one-pass next-Vote service mint")
+            .1
+            .split_once("/// Publish the live completion owner")
+            .expect("locate end of one-pass next-Vote service mint")
+            .0;
+        for required in [
+            "self.recovered_lifecycle_next_vote_body_executor_permit(executor)?",
+            "executor.prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
+        ] {
+            assert!(
+                service_mint.contains(required),
+                "next-Vote service mint omitted {required}"
+            );
+        }
+
+        let wal_recovery = include_str!("../v2_lifecycle_wal_recovery.rs");
+        let phase_projection = wal_recovery
+            .split_once("impl DurableAuthenticatedWalVoteLifecycleRepair {")
+            .expect("locate durable phase-vote repair")
+            .1
+            .split_once(
+                "/// Reconstruct a durable signed child only through this exact phase-vote WAL owner.",
+            )
+            .expect("locate end of durable phase-vote combined projection")
+            .0;
+        for required in [
+            "project_authenticated_signed_broadcast_and_sign",
+            "next_sign.matches_verified_height(verified)",
+            "next_sign.matches_phase_vote_repair(self)",
+            "RecoveredLifecycleSignedBroadcastAndSignProjectionV1",
+        ] {
+            assert!(
+                phase_projection.contains(required),
+                "phase-vote combined projection omitted {required}"
+            );
+        }
+        for forbidden in ["fn into_parts", "fn broadcast(", "fn next_sign("] {
+            assert!(
+                !phase_projection.contains(forbidden),
+                "phase-vote combined projection exposed {forbidden}"
+            );
+        }
+
+        let cold_authority = adapter
+            .split_once(
+                "struct RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1",
+            )
+            .expect("locate cold combined adapter authority")
+            .1
+            .split_once("impl RecoveredLifecycleSignColdAdapterAuthorityV1")
+            .expect("locate end of cold combined adapter authority")
+            .0;
+        for required in [
+            "broadcast: AdapterEffect",
+            "next_sign: AdapterEffect",
+            "RecoveredLifecycleSignBroadcastProjectionPermitV1",
+            "ConsensusMessageV2Payload::Proposal(proposal)",
+            "ConsensusMessageV2Payload::Vote(vote)",
+            "GlobalPhase::Prepare => tag.view() == next_vote.round.view",
+            "GlobalPhase::Commit => tag.view() >= next_vote.round.view",
+            "relation_is_exact.then_some(Self",
+        ] {
+            assert!(
+                cold_authority.contains(required),
+                "cold combined adapter authority omitted {required}"
+            );
+        }
+        for forbidden in [
+            "fn into_parts",
+            "fn broadcast(",
+            "fn next_sign(",
+            "pub(crate) fn from_recovered_wal",
+        ] {
+            assert!(
+                !cold_authority.contains(forbidden),
+                "cold combined adapter authority exposed {forbidden}"
+            );
+        }
+
+        let cold_confirm = adapter
+            .split_once(
+                "fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
+            )
+            .expect("locate cold combined adapter replay")
+            .1
+            .split_once("/// Seal every adapter-owned input")
+            .expect("locate end of cold combined adapter replay")
+            .0;
+        let verify = cold_confirm
+            .find("verified.verify_consensus_message(message)")
+            .expect("reverify the signed Broadcast under the frozen roster");
+        let awaiting = cold_confirm
+            .find("adapter.reducer.awaiting_signature()")
+            .expect("rejoin the historical reducer Sign fence");
+        let replay = cold_confirm
+            .find("next_reducer.step(event.clone())")
+            .expect("replay the historical signature on cloned state");
+        let children = cold_confirm
+            .find("replayed_broadcast != broadcast")
+            .expect("compare the exact durable child pair");
+        let commit = cold_confirm
+            .find("adapter.reducer = next_reducer")
+            .expect("commit the exact cold reducer projection last");
+        assert!(verify < awaiting && awaiting < replay && replay < children && children < commit);
+        for forbidden in ["publish_status", ".append(", "broadcast_consensus", "enqueue("] {
+            assert!(
+                !cold_confirm.contains(forbidden),
+                "cold combined adapter replay leaked {forbidden}"
+            );
+        }
+
+        let combined_projection = wal_recovery
+            .split_once("impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1")
+            .expect("locate combined executable projection")
+            .1
+            .split_once("fn project_recovered_signed_broadcast(")
+            .expect("locate end of combined executable projection")
+            .0;
+        for required in [
+            "project_cold_adapter_replay_authority",
+            "self.cold_adapter_authority_minted",
+            "project_cold_adapter_next_sign(",
+            "RecoveredLifecycleSignBroadcastProjectionPermitV1::new()",
+            "self.cold_adapter_authority_minted = true",
+        ] {
+            assert!(
+                combined_projection.contains(required),
+                "combined cold adapter projection omitted {required}"
+            );
+        }
+        assert!(
+            combined_projection.contains(
+                "candidates.get(&self.broadcast.candidate.key) == Some(&self.broadcast.candidate)"
+            ),
+            "combined cold census must retain its exact Broadcast among unrelated carriers"
+        );
+        assert!(
+            !combined_projection.contains("candidates.len() == 2"),
+            "combined cold census must not reject unrelated authenticated carriers"
+        );
+
+        let replay_authority = include_str!("../v2_lifecycle_replay_authority.rs");
+        let cold_next_sign = replay_authority
+            .split_once("fn project_cold_adapter_next_sign(")
+            .expect("locate cold next-Sign comparison projection")
+            .1
+            .split_once("/// Return the exact installed effect digest")
+            .expect("locate end of cold next-Sign comparison projection")
+            .0;
+        for required in [
+            "self.is_exact(verified)",
+            "RecoveredLifecycleSignBroadcastProjectionPermitV1",
+            "self.seal.effect.clone()",
+        ] {
+            assert!(
+                cold_next_sign.contains(required),
+                "cold next-Sign projection omitted {required}"
+            );
+        }
+    }
+
+    #[test]
     fn direct_body_stored_preview_is_inert_and_commits_one_validate_successor() {
         let directory = TempDir::new().expect("temporary direct-body-stored directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");

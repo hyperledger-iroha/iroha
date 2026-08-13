@@ -215,6 +215,8 @@ Opaque continuations use one shared bounded canonical Norito/base64url codec.
 The server validates the complete `(epoch, issued_at, challenge_id)` anchor
 against retained authority, while the CLI rejects non-canonical cursors and
 response cursors whose generation does not match their page.
+The report client likewise rejects a structurally valid response unless its
+embedded `cycle` exactly equals the requested `--week` before rendering output.
 
 The proof and verdict mutation routes use the canonical `x-iroha-operator-*`
 request-signature envelope. Its domain commits the exact genesis-derived

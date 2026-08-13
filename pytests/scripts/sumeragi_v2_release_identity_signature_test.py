@@ -446,6 +446,7 @@ def make_case(
     evidence.chmod(0o700)
     outputs = {
         "attestation": evidence / "signature-attestation.json",
+        "private_provenance": evidence / "bootstrap-private-provenance.json",
         "transcript": evidence / "verify-transcript.json",
         "raw_commit": evidence / "commit.raw",
         "cargo_lock": evidence / "Cargo.lock",
@@ -534,6 +535,8 @@ def command_for(
         digests["revocation"],
         "--attestation-output",
         str(outputs["attestation"]),
+        "--bootstrap-private-provenance-output",
+        str(outputs["private_provenance"]),
         "--verify-transcript-output",
         str(outputs["transcript"]),
         "--raw-commit-output",
@@ -607,13 +610,6 @@ def test_accepts_closed_fake_ssh_signature_and_binds_every_artifact(
         expected_mode = TOOL_MODE if name in {"git", "ssh_keygen"} else DATA_MODE
         assert stat.S_IMODE(path.stat().st_mode) == expected_mode, name
 
-    transcript_bytes = case["outputs"]["transcript"].read_bytes()
-    transcript = json.loads(transcript_bytes)
-    assert transcript_bytes == canonical_json(transcript)
-    assert transcript["schema_version"] == 2
-    assert transcript["candidate_commit_oid"] == case["identity"]["head_commit"]
-    assert transcript["environment"]["HOME"] == str(case["evidence"])
-    assert "LD_PRELOAD" not in transcript["environment"]
     expected_archives = {
         "cargo_lock": case["outputs"]["cargo_lock"].name,
         "git": case["outputs"]["git"].name,
@@ -623,8 +619,29 @@ def test_accepts_closed_fake_ssh_signature_and_binds_every_artifact(
         "ssh_revocation": case["outputs"]["revocation"].name,
         "verify_transcript": case["outputs"]["transcript"].name,
     }
-    assert transcript["archive_names"] == expected_archives
-    for command in transcript["commands"].values():
+    expected_archive_ids = {
+        "cargo_lock": "release-identity.cargo-lock.v1",
+        "git": "release-identity.git.v1",
+        "raw_commit": "release-identity.raw-commit.v1",
+        "ssh_allowed_signers": "release-identity.ssh-allowed-signers.v1",
+        "ssh_keygen": "release-identity.ssh-keygen.v1",
+        "ssh_revocation": "release-identity.ssh-revocation.v1",
+        "verify_transcript": "release-identity.verify-transcript.v1",
+    }
+
+    private_bytes = case["outputs"]["private_provenance"].read_bytes()
+    private = json.loads(private_bytes)
+    assert private_bytes == canonical_json(private)
+    assert private["format"].endswith("bootstrap-private-provenance")
+    assert private["schema_version"] == 1
+    assert private["candidate"]["root_path"] == str(case["root"].resolve())
+    assert private["candidate"]["identity_source_path"] == str(
+        case["identity_path"].resolve()
+    )
+    assert private["archive_names"] == expected_archives
+    assert private["execution"]["environment"]["HOME"] == str(case["evidence"])
+    assert "LD_PRELOAD" not in private["execution"]["environment"]
+    for command in private["execution"]["commands"].values():
         assert command["argv"][-1] == case["identity"]["head_commit"]
         assert command["argv"][-1] != "HEAD"
         assert command["replay_argv"][-1] == case["identity"]["head_commit"]
@@ -634,34 +651,67 @@ def test_accepts_closed_fake_ssh_signature_and_binds_every_artifact(
         assert command["stdout_sha256"] == sha256(
             base64.b64decode(command["stdout_base64"])
         )
-    assert any(value == "gpg.format=ssh" for value in transcript["policy_overrides"])
+    assert any(
+        value == "gpg.format=ssh"
+        for value in private["execution"]["policy_overrides"]
+    )
     assert any(
         value == "gpg.minTrustLevel=fully"
-        for value in transcript["policy_overrides"]
+        for value in private["execution"]["policy_overrides"]
     )
     assert all(
-        ".stage." not in value for value in transcript["replay"]["policy_overrides"]
+        ".stage." not in value
+        for value in private["execution"]["replay"]["policy_overrides"]
     )
-    assert transcript["replay"]["environment"]["HOME"] == "${EVIDENCE_DIRECTORY}"
     assert (
-        transcript["replay"]["environment"]["XDG_CONFIG_HOME"]
-        == "${EVIDENCE_DIRECTORY}"
+        private["execution"]["replay"]["environment"]["HOME"]
+        == "$" + "{EVIDENCE_DIRECTORY}"
+    )
+    assert (
+        private["execution"]["replay"]["environment"]["XDG_CONFIG_HOME"]
+        == "$" + "{EVIDENCE_DIRECTORY}"
     )
     for policy_name in ("ssh_allowed_signers", "ssh_revocation"):
-        policy = transcript["policies"][policy_name]
+        policy = private["policies"][policy_name]
         assert policy["protected_sha256"] == policy["observed_sha256"]
-        assert policy["archive_name"] in expected_archives.values()
+        assert policy["archive_id"] == expected_archive_ids[policy_name]
+
+    transcript_bytes = case["outputs"]["transcript"].read_bytes()
+    transcript = json.loads(transcript_bytes)
+    assert transcript_bytes == canonical_json(transcript)
+    assert transcript == {
+        "archive_ids": expected_archive_ids,
+        "candidate_commit_oid": case["identity"]["head_commit"],
+        "format": "iroha-sumeragi-v2-release-identity-transcript",
+        "operations": transcript["operations"],
+        "schema_version": 3,
+    }
+    expected_operations = {
+        "show_signature_metadata": ("git.show-signature-metadata.ssh.v1", 0),
+        "verify_commit": ("git.verify-commit.ssh.v1", 0),
+        "ssh_keygen_usage": ("ssh-keygen.usage-probe.v1", 1),
+    }
+    for name, (operation_id, status) in expected_operations.items():
+        operation = transcript["operations"][name]
+        assert operation["operation_id"] == operation_id
+        assert operation["exit_status"] == status
+        for stream in ("stdout", "stderr"):
+            assert len(operation[f"{stream}_sha256"]) == 64
+            assert operation[f"{stream}_size_bytes"] >= 0
 
     attestation_bytes = case["outputs"]["attestation"].read_bytes()
     attestation = json.loads(attestation_bytes)
     assert attestation_bytes == canonical_json(attestation)
-    assert attestation["schema_version"] == 2
-    assert attestation["release_identity"] == case["identity"]
-    assert attestation["verification"] == {
-        "allowed_signers_principal": PRINCIPAL,
-        "primary_key_fingerprint": "",
-        "signer_fingerprint": FINGERPRINT,
-        "status": "G",
+    assert attestation["format"] == "iroha-sumeragi-v2-release-identity-attestation"
+    assert attestation["schema_version"] == 3
+    assert attestation["candidate"] == {
+        "cargo_lock_sha256": case["identity"]["cargo_lock_sha256"],
+        "commit_oid": case["identity"]["head_commit"],
+        "release_identity_sha256": sha256(case["identity_path"].read_bytes()),
+        "source_manifest_sha256": case["identity"][
+            "workspace_source_manifest_sha256"
+        ],
+        "tree_oid": case["identity"]["head_tree"],
     }
     expected_evidence = {
         "cargo_lock": case["lock_bytes"],
@@ -672,14 +722,35 @@ def test_accepts_closed_fake_ssh_signature_and_binds_every_artifact(
         "ssh_revocation": case["revocation_bytes"],
         "verify_transcript": transcript_bytes,
     }
-    assert set(attestation["evidence"]) == set(expected_evidence)
+    assert set(attestation["archives"]) == set(expected_evidence)
     for name, data in expected_evidence.items():
-        artifact = attestation["evidence"][name]
+        artifact = attestation["archives"][name]
         assert artifact["sha256"] == sha256(data), name
         assert artifact["size_bytes"] == len(data), name
-        assert artifact["archive_name"] == expected_archives[name]
+        assert artifact["archive_id"] == expected_archive_ids[name]
         expected_mode = "0500" if name in {"git", "ssh_keygen"} else "0400"
         assert artifact["mode"] == expected_mode, name
+
+    forbidden = (
+        str(case["root"].resolve()),
+        str(case["evidence"].resolve()),
+        str(case["git_bin"].resolve()),
+        str(case["ssh_keygen"].resolve()),
+        str(case["allowed_signers"].resolve()),
+        str(case["revocation"].resolve()),
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "scaling",
+        "source_path",
+        "archive_name",
+        "argv",
+        PRINCIPAL,
+        FINGERPRINT,
+    )
+    for artifact_bytes in (attestation_bytes, transcript_bytes):
+        rendered = artifact_bytes.decode("utf-8")
+        for secret in forbidden:
+            assert secret not in rendered
 
 
 @pytest.mark.parametrize("status", ["N", "U", "B", "E", "X", "Y", "R"])
@@ -1430,6 +1501,7 @@ def _real_signed_case(
     evidence.chmod(0o700)
     outputs = {
         "attestation": evidence / "signature-attestation.json",
+        "private_provenance": evidence / "bootstrap-private-provenance.json",
         "transcript": evidence / "verify-transcript.json",
         "raw_commit": evidence / "commit.raw",
         "cargo_lock": evidence / "Cargo.lock",

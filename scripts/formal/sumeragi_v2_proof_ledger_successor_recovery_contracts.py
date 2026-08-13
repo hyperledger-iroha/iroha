@@ -53,6 +53,20 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"time(s); found {observed}"
             )
 
+    def require_literal_count(
+        path: Path,
+        label: str,
+        body: str,
+        literal: str,
+        expected: int,
+    ) -> None:
+        observed = mask_rust_comments(body).count(literal)
+        if observed != expected:
+            errors.append(
+                f"{path}: {label} must contain exact production literal "
+                f"{literal!r} exactly {expected} time(s); found {observed}"
+            )
+
     def require_order(
         path: Path,
         label: str,
@@ -291,8 +305,11 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "authority.into_canonical_predecessor_storage(local_signer)?",
                 ".retire()?",
                 "Self::RecoveredCompleteTip { authority: retired }",
-                "V2RunnerError::CompleteTipSuccessorLifecycleOwnerRequired",
+                "authority.authorizes_retained_successor()",
+                "authority.authorizes_successor_status(successor)",
+                "V2RunnerError::CompleteTipSuccessorAuthorityInvalid",
                 "predecessor: authority.predecessor()",
+                "super::status::activate_recovered_complete_tip_v2_height(authority, successor)?;",
                 "super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;",
             ),
         )
@@ -307,9 +324,10 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
                 "return Err(V2RunnerError::SuccessorRefinementRejected)",
                 "let _authorized_lifecycle = checked_lifecycle.into_projection()",
+                "Ok(match authority",
                 "into_canonical_predecessor_storage(local_signer)",
                 ".retire()",
-                "Ok(match authority",
+                "Self::RecoveredCompleteTip { authority: retired }",
             ),
         )
         reject_tokens(
@@ -334,12 +352,13 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             "open_ingress_for_active_height",
             open_ingress,
             (
-                "activation.preflight_ingress_open()?",
-                "output_guard.acquire()",
+                "output_guard.begin_fail_stop_operation()",
+                "activation.preflight_ingress_open(successor)?",
                 "block_ingress.open()",
-                "ingress_ready.store(true, Ordering::Release)",
                 "activation.publish(successor)",
                 "close_ingress_for_rollover(ingress_ready, block_ingress)",
+                "ingress_ready.store(true, Ordering::Release)",
+                "ingress_activation.complete()",
             ),
         )
         run_inner = run_inner_item.source if run_inner_item is not None else ""
@@ -349,18 +368,18 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             run_inner,
             (
                 "PendingSuccessorActivation::recovered(authority, &common_config.key_pair)",
-                "activation.preflight_ingress_open()?",
+                "activation.preflight_recovered_startup()?",
                 "guard.complete()",
             ),
         )
         require_order(
             runner_path,
-            "run_inner CompleteTip fail-closed owner preflight",
+            "run_inner CompleteTip restart authority preflight",
             run_inner,
             (
                 "let recovered_activation_guard = recovered_successor_activation",
                 "PendingSuccessorActivation::recovered(authority, &common_config.key_pair)",
-                "activation.preflight_ingress_open()?",
+                "activation.preflight_recovered_startup()?",
                 "guard.complete()",
                 "SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(",
             ),
@@ -550,18 +569,6 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "set_v2_status_at(successor, now);",
             ),
         )
-        reject_tokens(
-            status_path,
-            "no proof-free recovered status publication",
-            status_source,
-            (
-                "fn activate_recovered_v2_successor_height_at(",
-                "fn activate_recovered_v2_successor_height(",
-                "fn activate_retired_complete_tip_v2_height_at(",
-                "fn activate_retired_complete_tip_v2_height(",
-                "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
-            ),
-        )
         require_order(
             status_path,
             "publish_recovered_v2_successor_height_at",
@@ -624,7 +631,51 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             "typed recovered status publishers",
             status_source,
             "publish_recovered_v2_successor_height_at(",
-            2,
+            3,
+        )
+        complete_tip_activation = region(
+            status_path,
+            status_source,
+            "activate_recovered_complete_tip_v2_height",
+            "fn activate_recovered_complete_tip_v2_height_at(",
+            "\nfn activate_snapshot_bootstrap_v2_height_at(",
+        )
+        require_tokens(
+            status_path,
+            "activate_recovered_complete_tip_v2_height",
+            complete_tip_activation,
+            (
+                "authority.authorizes_successor_status(&successor)",
+                "V2SuccessorActivationError::RecoveredCompleteTipAuthorityMismatch",
+                "let predecessor = authority.predecessor().refinement_projection();",
+                "let expected_successor_context_id = successor.height_context_id;",
+                "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
+                "CanonicalIdentityProjection::zero()",
+                "drop(authority);",
+                "pub(crate) fn activate_recovered_complete_tip_v2_height(",
+                "activate_recovered_complete_tip_v2_height_at(authority, successor, Instant::now())",
+            ),
+        )
+        require_order(
+            status_path,
+            "activate_recovered_complete_tip_v2_height",
+            complete_tip_activation,
+            (
+                "authority.authorizes_successor_status(&successor)",
+                "authority.predecessor().refinement_projection()",
+                "publish_recovered_v2_successor_height_at(",
+                "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
+                "drop(authority)",
+            ),
+        )
+        reject_tokens(
+            status_path,
+            "activate_recovered_complete_tip_v2_height",
+            complete_tip_activation,
+            (
+                "authority.into_parts()",
+                "production_recovered_successor_trace_refines_indexed_activation_kernel(",
+            ),
         )
         snapshot_public = region(
             status_path,
@@ -771,8 +822,24 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             genesis_context_path,
             "signed genesis bootstrap seal retention",
             genesis_bootstrap,
+            ("signed_block: genesis.0.clone()",),
+        )
+        genesis_bootstrap_owner = region(
+            genesis_context_path,
+            genesis_context_source,
+            "move-only authenticated genesis owner extraction",
+            "impl GenesisV2Bootstrap {",
+            "\n/// Extract the only voting roster source accepted at fresh genesis:",
+        )
+        require_order(
+            genesis_context_path,
+            "signed genesis bootstrap seal retention",
+            genesis_bootstrap_owner,
             (
-                "signed_block: genesis.0.clone()",
+                "impl GenesisV2Bootstrap",
+                "fn into_parts( self, )",
+                "self.verified_context",
+                "self.staged_nexus_amx_context",
                 "self.authenticated_genesis",
             ),
         )
@@ -945,15 +1012,17 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "self.path == root.join(LEDGER_FILE)",
                     "pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(",
                     "complete_tip.authorizes_predecessor_storage_inputs(",
-                    "CertifiedServePayloadStoreV1::open( predecessor_root, verified_predecessor.context(), )?",
-                    "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer, )?",
-                    "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads, )?",
+                    "CertifiedServePayloadStoreV1::open( predecessor_root, verified_predecessor.context() )?",
+                    "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer )?",
+                    "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads )?",
                     "payload_store.retire_authenticated_cut(serve_payloads, &retained_serve_payloads)?",
                     "reconcile_complete_tip_serve_retirement(",
                     ".stage_complete_tip_all_row_retirement(serve_reconciliation)?",
                     ".persist_exact_successor(&terminal.ledger, &retired)?",
                     "successor.open_initialized_or_descendant(retired.high_water())?",
                     "RetiredRecoveredCompleteTipActivationAuthorityV1",
+                    "predecessor_store: LifecycleLedgerStoreV1",
+                    "predecessor_ledger: LifecycleLedgerV1",
                     "successor_store: LifecycleLedgerStoreV1",
                     "successor_ledger: LifecycleLedgerV1",
                     "fn bind_successor_owner(",
@@ -966,6 +1035,49 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "adapter_startup.authorizes_verified_context(&owner.verified)",
                     "self.complete_tip.authorizes_successor_kura(owner.kura_binding.as_ref())",
                     "serve_payloads: recovery.into_serve_payloads()",
+                ),
+            )
+            restart_publication = region(
+                ledger_path,
+                ledger_source,
+                "CompleteTip restart publication authority",
+                "fn successor_descends_from_retirement(",
+                "\n    fn exactly_matches_successor_owner(",
+            )
+            require_order(
+                ledger_path,
+                "CompleteTip restart publication authority",
+                restart_publication,
+                (
+                    "self.successor_ledger.context() == self.successor_store.context",
+                    "self.successor_ledger.frame_identity() == self.successor_frame_identity",
+                    "self.successor_ledger.records.is_empty()",
+                    "self.successor_ledger.high_water == self.retained_high_water",
+                    "record.ordinal() > self.retained_high_water",
+                    "fn authorizes_retained_successor(&self) -> bool",
+                    "self.predecessor_ledger.frame_identity() == self.predecessor_frame_identity",
+                    ".is_authorized_complete_tip_predecessor_target(&self.complete_tip)",
+                    "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+                    "self.successor_descends_from_retirement()",
+                    "self.complete_tip.authorizes_successor_lifecycle_target(",
+                    "self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)",
+                    "fn authorizes_successor_status(",
+                    "self.authorizes_retained_successor()",
+                    "self.complete_tip.successor_context_id() == successor.height_context_id",
+                    ".checked_add(1)",
+                    "Some(successor.height)",
+                    "successor.last_committed_height == self.complete_tip.predecessor().height()",
+                ),
+            )
+            reject_tokens(
+                ledger_path,
+                "CompleteTip restart publication authority",
+                restart_publication,
+                (
+                    "#[cfg(test)]",
+                    "into_parts",
+                    "fn root(",
+                    "fn ledger(",
                 ),
             )
             successor_owner_bind = region(
@@ -987,13 +1099,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "if !self.exactly_matches_successor_owner(&mut owner)",
                     "BoundRecoveredCompleteTipSuccessorOwnerV1 { owner, retirement: self, }",
                     "struct BoundRecoveredCompleteTipSuccessorOwnerV1 { owner: ProductionLifecycleOwnerV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
-                    "COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_BEGIN",
+                    "impl BoundRecoveredCompleteTipSuccessorOwnerV1",
                     "fn launch( self, inputs: super::launch::ProductionLifecycleLaunchInputsV1, )",
                     "let Self { owner, retirement } = self",
                     "let launched = owner.launch(inputs)?",
                     "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
                     "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: super::launch::LaunchedProductionLifecycleV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
-                    "COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END",
                 ),
             )
             reject_tokens(
@@ -1094,11 +1205,14 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1",
                     "body_store: super::v2_body_store::QuarantinedV2BodyStore",
                     "if !self.effects.is_empty()",
+                    "let RecoveredLifecycleOwnerFactoryInputsV1 { adapter_owner, storage, state, queue, kura, provider_ingest_finalized_archive, reputation_finalized_archive, block_cadence, events_sender, local_signer, } = factory_inputs",
                     "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
                     "storage.context_id != context.id() || storage.height != context.height",
                     "body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )",
                     "self.adapter.wal.matches_path(&storage.wal_path)",
                     "let apply_service = super::v2_apply::V2ApplyService::new(",
+                    "storage.genesis_account.clone()",
+                    "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
                     "body_store.into_revalidated_lifecycle_startup( &apply_service, &context, validation_authority )",
                     "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, chunk_root, lifecycle_root, .. } = storage",
                     "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
@@ -1131,6 +1245,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "wal_path: PathBuf",
                     "chunk_root: PathBuf",
                     "struct RecoveredLifecycleOwnerKuraBindingV1 {",
+                    "fn matches_identity(&self, identity: &KuraInstanceIdentity) -> bool",
                     "fn storage_paths_for_launch(",
                     "struct RecoveredLifecycleOwnerFactoryInputsV1",
                     "adapter_owner: Arc<AuthenticatedRecoveredAdapterFactoryOwnerV1>",
@@ -1154,12 +1269,26 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network()",
                     "fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup()",
                     "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-                    "a caller-promoted marker cannot enter production quarantine",
-                    "pre-promoted marker rejection must precede lifecycle-store creation",
-                    "a body store outside the Kura layout must fail closed",
-                    "a wrong body signature policy must fail closed",
+                    "fn recovered_wal_sign_status_publication_is_exact_last_and_unwired()",
+                    "assert!(context_binding < body_root)",
+                    "assert!(body_root < wal_path)",
+                    "assert!(wal_path < apply_service)",
+                    "assert!(authenticated_roots < kura_binding)",
                 ),
             )
+            for literal in (
+                '"a caller-promoted marker cannot enter production quarantine"',
+                '"pre-promoted marker rejection must precede lifecycle-store creation"',
+                '"a body store outside the Kura layout must fail closed"',
+                '"a wrong body signature policy must fail closed"',
+            ):
+                require_literal_count(
+                    adapter_path,
+                    "recovery-minted lifecycle storage authority regressions",
+                    adapter_source,
+                    literal,
+                    1,
+                )
             reject_tokens(
                 adapter_path,
                 "sealed recovered lifecycle factory inputs",
@@ -1299,6 +1428,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         body_pipeline_path, body_pipeline_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs"
         )
+        replay_authority_path, replay_authority_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"
+        )
+        runtime_path, runtime_source = load(
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+        )
         effects_path, effects_source = load(
             "crates/iroha_core/src/sumeragi/v2_effects.rs"
         )
@@ -1326,6 +1461,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             and wal_recovery_source
             and selector_source
             and body_pipeline_source
+            and replay_authority_source
+            and runtime_source
             and effects_source
             and transport_source
             and lifecycle_open_source
@@ -1348,7 +1485,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "begin_fail_stop_operation()",
                     "Self::launch_local_identity_matches( &context.roster, &inputs.local_peer, inputs.local_validator, &inputs.key_pair, )",
                     "binding.matches_launch_identity(inputs.kura.as_ref(), &inputs.key_pair)",
-                    "service.matches_lifecycle_launch(",
+                    "service.matches_lifecycle_launch( &inputs.state, &inputs.kura, &context, &validator_set_pops, )",
                     "binding.storage_paths_for_launch(inputs.kura.as_ref())",
                     "prepare_leader_wire_launch(launch_storage.wal_path())",
                     "ProductionV2Services::restore_lifecycle_ordinal_source(",
@@ -1363,6 +1500,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
                     "executor.install_authenticated_genesis_body(authenticated_genesis.signed_block())",
                     "ProductionV2Services::start_with_apply_service(",
+                    "ProductionLifecycleApplyServiceLaunchPermitV1",
+                    "apply_service,",
                 ),
             )
             runner_dependency_permit = region(
@@ -1575,6 +1714,28 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "let durable = rustix::fs::statat(",
                     "fn write_all(&mut self, bytes: &[u8])",
                     "fn sync_data(&mut self)",
+                    "BoundSafetyWalDirectory::from_kura_authority(kura, authority)",
+                ),
+            )
+            require_literal_count(
+                safety_wal_path,
+                "opened safety-WAL exact Kura identity rejection",
+                safety_wal_source,
+                '"safety-WAL authority belongs to a different Kura instance"',
+                1,
+            )
+            require_tokens(
+                kura_path,
+                "Kura-root safety-WAL authority",
+                kura_source,
+                (
+                    "struct KuraSafetyWalDirectoryAuthority",
+                    "fn mint_safety_wal_directory_authority(",
+                    "rustix::fs::openat(&root.file, STORE_ROOT_LOCK_FILE_NAME",
+                    "Self::sidecar_file_metadata_unchanged(&lock_before, &linked_metadata)",
+                    "rustix::fs::mkdirat(&parent.file, name, rustix::fs::Mode::RWXU)",
+                    "Self::open_bound_progress_child_directory(",
+                    "kura_identity: self.instance_identity()",
                 ),
             )
             reject_tokens(
@@ -1599,6 +1760,37 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "self.storage.read_bounded(self.max_frame_bytes)",
                     "self.storage.publish_atomic(&frame, self.max_frame_bytes)",
                 ),
+            )
+            serviced_candidate_open = _require_qualified_rust_item(
+                adjacent_store_path,
+                adjacent_store_source,
+                "ServicedCandidateStore",
+                "open_with_safety_wal_authority",
+                errors,
+                "typed WAL-adjacent production stores omits production refinement tokens in the serviced-candidate constructor",
+            )
+            _require_rust_token_sequence(
+                adjacent_store_path,
+                serviced_candidate_open,
+                "storage: SafetyWalServicedCandidateStoreAuthority",
+                "typed WAL-adjacent production stores omits production refinement tokens in the serviced-candidate constructor",
+                errors,
+            )
+            leader_wire_open = _require_qualified_rust_item(
+                adjacent_store_path,
+                adjacent_store_source,
+                "LeaderWireLifecycleStoreGate",
+                "open_with_safety_wal_authority",
+                errors,
+                "typed WAL-adjacent production stores omits production refinement tokens in the leader-wire constructor",
+                expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+            )
+            _require_rust_token_sequence(
+                adjacent_store_path,
+                leader_wire_open,
+                "storage: SafetyWalLeaderWireStoreAuthority",
+                "typed WAL-adjacent production stores omits production refinement tokens in the leader-wire constructor",
+                errors,
             )
             reject_tokens(
                 adapter_path,
@@ -1631,7 +1823,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 scheduler_source,
                 "lifecycle-owned recovered Sign dispatch",
                 "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
-                "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch request.",
+                "/// Refanout one durable recovered signed Broadcast at the live Completion cursor.",
             )
             require_order(
                 scheduler_path,
@@ -1814,11 +2006,15 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "RecoveredLifecycleSignAdapterCompletionAuthorityV1 {",
                 ),
             )
-            reject_tokens(
+            require_tokens(
                 worker_path,
-                "unpublished recovered Sign completion acknowledgement",
-                worker_source,
-                ("fn acknowledge_recovered_lifecycle_sign(",),
+                "post-publication recovered Sign completion acknowledgement",
+                parked_sign_completion,
+                (
+                    "fn acknowledge_after_publication(self)",
+                    "self.queue.acknowledge_recovered_lifecycle_sign(key)",
+                    "self.guarded.acknowledge_after_publication()",
+                ),
             )
             recovered_sign_preview = region(
                 adapter_path,
@@ -1846,6 +2042,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 recovered_sign_preview,
                 (
                     "SignRequest::Proposal(_), Some((persist_tag, entry)), None",
+                    "SignRequest::Proposal(_), None, Some(AdapterEffect::Sign { request: SignRequest::Vote(vote), .. })",
+                    "vote.phase == wire::GlobalPhase::Prepare",
                     "SignRequest::Vote(_) | SignRequest::TimeoutVote(_), None, possible_next_sign",
                     "next_reducer.pending_persistence_record().is_none()",
                     "next_reducer.awaiting_signature()",
@@ -1868,7 +2066,1179 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 adapter_path,
                 "recovered Sign adapter preview behavior regression",
                 adapter_source,
-                ("fn recovered_timeout_signature_preview_is_exact_and_drop_inert()",),
+                (
+                    "fn recovered_timeout_signature_preview_is_exact_and_drop_inert()",
+                    "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
+                ),
+            )
+            next_vote_service_join = region(
+                worker_path,
+                worker_source,
+                "single-preview recovered next-Vote body service join",
+                "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(",
+                "/// Publish the live completion owner",
+            )
+            require_order(
+                worker_path,
+                "single-preview recovered next-Vote body service join",
+                next_vote_service_join,
+                (
+                    "self.recovered_lifecycle_next_vote_body_executor_permit(executor)?",
+                    "executor.prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "single-preview recovered next-Vote body service join",
+                next_vote_service_join,
+                (
+                    "ValidatedBodyReceipt",
+                    "V2BodyStore",
+                    "prepare_recovered_lifecycle_sign_completion(completion)",
+                    "into_parts",
+                ),
+            )
+            next_vote_executor_join = region(
+                effects_path,
+                effects_source,
+                "single-preview recovered next-Vote body executor join",
+                "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body(",
+                "/// Publish executor-retained owners",
+            )
+            require_order(
+                effects_path,
+                "single-preview recovered next-Vote body executor join",
+                next_vote_executor_join,
+                (
+                    "service.consume_for_executor(",
+                    "runtime.prepare_recovered_lifecycle_sign_completion(completion)",
+                    "preview.project_broadcast_and_sign_body_lookup(",
+                    "authenticate_recovered_lifecycle_next_vote_body_catalogs(",
+                    "Ok((preview, body))",
+                ),
+            )
+            next_vote_catalog_join = region(
+                effects_path,
+                effects_source,
+                "exact recovered next-Vote body catalog join",
+                "fn authenticate_recovered_lifecycle_next_vote_body_catalogs(",
+                "impl V2EffectExecutor<SerializedV2Runtime>",
+            )
+            require_tokens(
+                effects_path,
+                "exact recovered next-Vote body catalog join",
+                next_vote_catalog_join,
+                (
+                    "validated_bodies.get(&key) != Some(&validated)",
+                    "durable_bodies.get(&key) != Some(durable)",
+                    "recovered_bodies.get(&key)",
+                    "HashOf::new(manifest) != durable.manifest_hash()",
+                    "lookup.matches_recovered_body(manifest, recovered_durable)",
+                    "RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new()",
+                ),
+            )
+            next_vote_body_authority = region(
+                adapter_path,
+                adapter_source,
+                "opaque recovered next-Vote body authority",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyAuthorityV1 {",
+                "/// Closed reducer successor shape produced by one exact recovered signature.",
+            )
+            require_tokens(
+                adapter_path,
+                "opaque recovered next-Vote body authority",
+                next_vote_body_authority,
+                (
+                    "body_store_identity.same_instance(expected_body_store_identity)",
+                    "lookup.matches_adapter_successor(next_sign, expected_proposal_manifest_hash)",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "opaque recovered next-Vote body authority",
+                next_vote_body_authority,
+                (
+                    "impl Clone for RecoveredLifecycleNextVoteBodyAuthorityV1",
+                    "fn into_parts(",
+                    "fn validated(",
+                    "fn body_store_identity(",
+                    "fn lookup(",
+                ),
+            )
+            combined_adapter_projection = region(
+                adapter_path,
+                adapter_source,
+                "affine recovered Broadcast-and-next-Sign adapter projection",
+                "pub(in crate::sumeragi) fn project_broadcast_and_sign_authority(",
+                "/// Exercise fail-closed next-Sign substitution",
+            )
+            require_order(
+                adapter_path,
+                "affine recovered Broadcast-and-next-Sign adapter projection",
+                combined_adapter_projection,
+                (
+                    "self.combined_authority_minted",
+                    "body_authority.consume_for_adapter(",
+                    "self.adapter.authenticate_recovered_lifecycle_next_vote(",
+                    "self.combined_authority_minted = true",
+                    "RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {",
+                ),
+            )
+            proposal_output_authority = region(
+                adapter_path,
+                adapter_source,
+                "opaque recovered Proposal exact-output authority",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputAuthorityV1 {",
+                "/// Adapter-authenticated combined successor of one recovered signature.",
+            )
+            require_tokens(
+                adapter_path,
+                "opaque recovered Proposal exact-output authority",
+                proposal_output_authority,
+                (
+                    "body_store_identity: V2BodyStoreInstanceIdentity",
+                    "output_guard: Arc<super::output_guard::ConsensusOutputGuard>",
+                    "fn consume_for_service(",
+                    "fn from_service_retry(",
+                    "Self::validated(",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "opaque recovered Proposal exact-output authority",
+                proposal_output_authority,
+                (
+                    "impl Clone for RecoveredLifecycleProposalExactOutputAuthorityV1",
+                    "fn into_parts(",
+                    "fn proposal(",
+                    "fn payload(",
+                    "fn body_store_identity(",
+                    "fn output_guard(",
+                ),
+            )
+            proposal_output_projection = region(
+                adapter_path,
+                adapter_source,
+                "affine recovered Proposal exact-output projection",
+                "pub(in crate::sumeragi) fn project_proposal_exact_output_authority(",
+                "fn broadcast_proposal_manifest_hash(",
+            )
+            require_order(
+                adapter_path,
+                "affine recovered Proposal exact-output projection",
+                proposal_output_projection,
+                (
+                    "self.proposal_output_authority_minted",
+                    "self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
+                    "payload.manifest() == &signed.manifest",
+                    "self.next_vote_body_store_identity.as_ref()",
+                    "self.next_vote_output_guard.as_ref()",
+                    "self.proposal_output_authority_minted = true",
+                    "RecoveredLifecycleProposalExactOutputAuthorityV1 {",
+                ),
+            )
+            proposal_batch_preflight = region(
+                worker_path,
+                worker_source,
+                "mutation-free atomic Proposal fanout preflight",
+                "fn prepare_atomic_fanout_batch(",
+                "/// Commit a batch prepared while this exact mutex guard remained held.",
+            )
+            require_order(
+                worker_path,
+                "mutation-free atomic Proposal fanout preflight",
+                proposal_batch_preflight,
+                (
+                    "let mut additions = BTreeMap",
+                    "aggregate.checked_add(count)",
+                    "self.ownership_capacity_available(&additions)?",
+                    "self.ownership_state_after_additions(&additions)?",
+                    "let project_ids = |first: ExactFanoutFifoId|",
+                    "self.source_fifo_owners.clone()",
+                    "Some(existing_ids)",
+                    "source_fifo_owners.entry(source).or_default().insert(fifo_id)",
+                    "PendingExactOutputBatchPlan {",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "mutation-free atomic Proposal fanout preflight",
+                proposal_batch_preflight,
+                (
+                    "self.fanouts.extend(",
+                    "self.source_fifo_owners =",
+                    "self.reservation_owner_counts =",
+                    "self.ownership_units =",
+                    "rebase_source_fifo(",
+                    "allocate_fanout_fifo_id(",
+                    ".enqueue(",
+                    "next_fanout_index =",
+                ),
+            )
+            proposal_batch_commit = region(
+                worker_path,
+                worker_source,
+                "assertion-only atomic Proposal fanout commit",
+                "fn commit_atomic_fanout_batch(&mut self, plan: PendingExactOutputBatchPlan)",
+                "fn is_pending(&self)",
+            )
+            require_order(
+                worker_path,
+                "assertion-only atomic Proposal fanout commit",
+                proposal_batch_commit,
+                (
+                    "assert_eq!(self.fanouts.len(), existing_fanout_count",
+                    "if let Some(rebased) = rebased_existing_fifo_ids",
+                    "fanout.fifo_id = Some(fifo_id)",
+                    "self.fanouts.extend(fanouts)",
+                    "self.source_fifo_owners = source_fifo_owners",
+                    "self.reservation_owner_counts = reservation_owner_counts",
+                    "self.ownership_units = ownership_units",
+                    "self.shared_ownership_units = shared_ownership_units",
+                    "self.next_fanout_fifo_id = next_fanout_fifo_id",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "assertion-only atomic Proposal fanout commit",
+                proposal_batch_commit,
+                ("?", "drive_pending_exact_output", ".enqueue("),
+            )
+            proposal_reservation_fields = region(
+                worker_path,
+                worker_source,
+                "fail-stop-first recovered Proposal reservation ownership",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputReservationV1<'service> {",
+                "#[cfg_attr(not(test), allow(dead_code))]\nimpl RecoveredLifecycleProposalExactOutputReservationV1<'_> {",
+            )
+            require_order(
+                worker_path,
+                "fail-stop-first recovered Proposal reservation ownership",
+                proposal_reservation_fields,
+                (
+                    "operation: Option<ConsensusFailStopOperation<'service>>",
+                    "pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>",
+                    "batch: Option<PendingExactOutputBatchPlan>",
+                    "authority: Option<super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1>",
+                ),
+            )
+            proposal_reservation_impl = region(
+                worker_path,
+                worker_source,
+                "sealed recovered Proposal reservation methods",
+                "impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {",
+                "/// Result of reserving exact output for one recovered Decision Fetch request.",
+            )
+            proposal_reservation_abort = region(
+                worker_path,
+                proposal_reservation_impl,
+                "retry-safe recovered Proposal reservation abort",
+                "pub(in crate::sumeragi) fn abort_before_publication(",
+                "/// Install both preflighted fanouts in one assertion-only publication tail.",
+            )
+            require_order(
+                worker_path,
+                "retry-safe recovered Proposal reservation abort",
+                proposal_reservation_abort,
+                (
+                    "drop(self.pending.take())",
+                    "drop(self.batch.take())",
+                    ".complete()",
+                    "self.authority.take()",
+                ),
+            )
+            proposal_reservation_commit = proposal_reservation_impl.split(
+                "/// Install both preflighted fanouts in one assertion-only publication tail.",
+                1,
+            )[-1]
+            require_order(
+                worker_path,
+                "assertion-only recovered Proposal reservation commit",
+                proposal_reservation_commit,
+                (
+                    "let mut pending = self.pending.take()",
+                    "let operation = self.operation.take()",
+                    "let batch = self.batch.take()",
+                    "let authority = self.authority.take()",
+                    "pending.commit_atomic_fanout_batch(batch)",
+                    "drop(pending)",
+                    "drop(authority)",
+                    "operation.complete()",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "sealed recovered Proposal reservation methods",
+                proposal_reservation_abort + proposal_reservation_commit,
+                ("drive_pending_exact_output", ".enqueue("),
+            )
+            proposal_output_capture = region(
+                worker_path,
+                worker_source,
+                "retry-safe recovered Proposal exact-output capture",
+                "pub(in crate::sumeragi) fn capture_recovered_lifecycle_proposal_exact_output(",
+                "/// Consume one carrier-derived recovered Fetch through this exact service key.",
+            )
+            require_order(
+                worker_path,
+                "retry-safe recovered Proposal exact-output capture",
+                proposal_output_capture,
+                (
+                    "self.proposal_work_retired",
+                    "authority.consume_for_service(RecoveredLifecycleProposalExactOutputPermitV1::new())",
+                    "tag != self.active_tag",
+                    "self.local_validator != Some(proposal.proposer)",
+                    "proposal.manifest != *payload.manifest()",
+                    "identity.same_instance(&body_store_identity)",
+                    "Arc::ptr_eq(&self.output_guard, &authority_output_guard)",
+                    "message.validate_version()",
+                    "proposal.validate(&self.context)",
+                    "RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(",
+                    "payload.into_parts()",
+                    "manifest.validate(&self.context)",
+                    "chunk.signature_preimage(&self.context, &manifest)",
+                    "Signature::try_new(self.key_pair.private_key(), &preimage)",
+                    "let peers = self.remote_voters()",
+                    "let control = PendingExactFanout::claimed(",
+                    "ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope())",
+                    "let chunks = PendingExactFanout::claimed(",
+                    "ExactOutputRolloverClaim::PayloadChunks",
+                    "control.into_iter().chain(chunks)",
+                    "begin_fail_stop_operation()",
+                    "let pending = self.lock_pending_exact_output()?",
+                    "pending.prepare_atomic_fanout_batch(fanouts)",
+                    "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(retry_authority)",
+                    "RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(",
+                    "authority: Some(retry_authority)",
+                ),
+            )
+            require_token_count(
+                worker_path,
+                "fail-stop recovered Proposal capture errors",
+                proposal_output_capture,
+                "drop(operation)",
+                2,
+            )
+            reject_tokens(
+                worker_path,
+                "all-voter recovered Proposal retransmission policy",
+                proposal_output_capture,
+                ("fast_path_proposals", "remote_voters_for_indices"),
+            )
+            broadcast_consensus = region(
+                worker_path,
+                worker_source,
+                "production consensus broadcast",
+                "fn broadcast_consensus(",
+                "fn sign_body_request(",
+            )
+            proposal_live_atomic = region(
+                worker_path,
+                broadcast_consensus,
+                "live Proposal control-plus-chunk atomic transfer",
+                "if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {",
+                "let control = vec![Self::preencode_v2_network_message(message)?]",
+            )
+            require_order(
+                worker_path,
+                "live Proposal control-plus-chunk atomic transfer",
+                proposal_live_atomic,
+                (
+                    "self.outbound_chunks.get(&manifest_hash)",
+                    "let first_fast_path_send = !self.fast_path_proposals.contains(&proposal.round)",
+                    "PendingExactFanout::claimed(",
+                    "ExactOutputRolloverClaim::PayloadChunks",
+                    "self.enqueue_atomic_fanout_batch_while_guarded(",
+                    "ownership == ExactFanoutOwnership::Owned && first_fast_path_send",
+                    "self.fast_path_proposals.insert(proposal.round)",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "live Proposal control-plus-chunk atomic transfer",
+                proposal_live_atomic,
+                (
+                    "enqueue_exact_fanout_while_guarded(",
+                    "self.fast_path_proposals.insert(proposal.round);\n            let payload_targets",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "atomic Proposal output behavior regressions",
+                worker_source,
+                (
+                    "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
+                    "fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit()",
+                    "fn armed_recovered_proposal_output_reservation_fails_stop_on_drop()",
+                    "fn proposal_broadcast_reports_source_retained_until_corridor_acceptance()",
+                ),
+            )
+            proposal_output_behavior = region(
+                worker_path,
+                worker_source,
+                "recovered Proposal atomic output behavior",
+                "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
+                "fn prepare_and_commit_votes_reach_every_remote_voter_across_views()",
+            )
+            require_tokens(
+                worker_path,
+                "recovered Proposal atomic output behavior",
+                proposal_output_behavior,
+                (
+                    "after, before",
+                    "vec![Some(expected_batch_first_fifo), expected_batch_first_fifo.checked_add(1)]",
+                    "fanout.peers.iter().cloned().collect::<BTreeSet<_>>()",
+                    "wire::ConsensusMessageV2Payload::PayloadChunk(chunk)",
+                    "chunk.validate(&service.context, manifest)",
+                    "Signature::try_from_bytes(&chunk.signature)",
+                    "signature.verify(signer.public_key()",
+                    "capture_recovered_lifecycle_proposal_exact_output(retirement_authority).is_err()",
+                ),
+            )
+            require_order(
+                worker_path,
+                "post-Decision live Proposal output fence",
+                broadcast_consensus,
+                (
+                    "self.proposal_work_retired",
+                    "wire::ConsensusMessageV2Payload::Proposal(_)",
+                    "begin_fail_stop_operation()",
+                    "if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload",
+                ),
+            )
+            next_vote_candidate_projection = region(
+                replay_authority_path,
+                replay_authority_source,
+                "full executable recovered next-WAL-Vote candidate",
+                "pub(in crate::sumeragi) fn into_candidate_projection(",
+                "/// Rejoin the retained body marker to one exact recovered phase-vote repair.",
+            )
+            require_order(
+                replay_authority_path,
+                "full executable recovered next-WAL-Vote candidate",
+                next_vote_candidate_projection,
+                (
+                    "self.wal_identity.is_exact()",
+                    "self.matches_verified_height(verified)",
+                    "PendingRuntimeEffectBinding::from_exact_recovered_next_wal_vote(",
+                    "self.replay_evidence.project_recovered_vote_candidate(",
+                    "RecoveredLifecycleNextWalVoteCandidateProjectionV1 {",
+                    "projection.is_exact(verified)",
+                ),
+            )
+            require_tokens(
+                runtime_path,
+                "runtime-private recovered next-WAL-Vote candidate mint",
+                runtime_source,
+                (
+                    "fn project_recovered_lifecycle_next_wal_vote_candidate(",
+                    "RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1::new()",
+                    "RecoveredWalCandidateProjectionPermit::new()",
+                ),
+            )
+            require_tokens(
+                wal_recovery_path,
+                "WAL-bound recovered Broadcast-and-next-Sign projection",
+                wal_recovery_source,
+                (
+                    "fn project_authenticated_signed_broadcast_and_sign(",
+                    "next_sign.matches_verified_height(verified)",
+                    "next_sign.matches_phase_vote_repair(self)",
+                    "project_recovered_lifecycle_next_wal_vote_candidate(verified, next_sign)",
+                    "combined.children_are_exact(verified)",
+                ),
+            )
+            combined_cold_projection = region(
+                wal_recovery_path,
+                wal_recovery_source,
+                "affine recovered Broadcast-and-next-Sign cold adapter projection",
+                "impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {",
+                "fn project_recovered_signed_broadcast(",
+            )
+            require_order(
+                wal_recovery_path,
+                "affine recovered Broadcast-and-next-Sign cold adapter projection",
+                combined_cold_projection,
+                (
+                    "self.cold_adapter_authority_minted",
+                    "self.children_are_exact(verified)",
+                    "self.next_sign.project_cold_adapter_next_sign(",
+                    "RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(",
+                    "self.cold_adapter_authority_minted = true",
+                    "candidates.get(&self.broadcast.candidate.key) == Some(&self.broadcast.candidate)",
+                    "self.next_sign.owns_spliced_candidate(candidates)",
+                ),
+            )
+            reject_tokens(
+                wal_recovery_path,
+                "affine recovered Broadcast-and-next-Sign cold adapter projection",
+                combined_cold_projection,
+                (
+                    "fn into_parts(",
+                    "pub fn broadcast(",
+                    "pub fn next_sign(",
+                    "candidates.len() == 2",
+                ),
+            )
+            next_vote_cold_projection = region(
+                replay_authority_path,
+                replay_authority_source,
+                "sealed recovered next-WAL-Vote cold adapter projection",
+                "pub(super) fn project_cold_adapter_next_sign(",
+                "/// Return the exact installed effect digest",
+            )
+            require_order(
+                replay_authority_path,
+                "sealed recovered next-WAL-Vote cold adapter projection",
+                next_vote_cold_projection,
+                (
+                    "RecoveredLifecycleSignBroadcastProjectionPermitV1",
+                    "self.is_exact(verified)",
+                    "self.seal.effect.clone()",
+                ),
+            )
+            combined_cold_authority = region(
+                adapter_path,
+                adapter_source,
+                "opaque recovered Broadcast-and-next-Sign cold adapter authority",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {",
+                "impl RecoveredLifecycleSignColdAdapterAuthorityV1",
+            )
+            require_tokens(
+                adapter_path,
+                "opaque recovered Broadcast-and-next-Sign cold adapter authority",
+                combined_cold_authority,
+                (
+                    "broadcast: AdapterEffect",
+                    "next_sign: AdapterEffect",
+                    "RecoveredLifecycleSignBroadcastProjectionPermitV1",
+                    "ConsensusMessageV2Payload::Proposal(proposal)",
+                    "ConsensusMessageV2Payload::Vote(vote)",
+                    "GlobalPhase::Prepare => tag.view() == next_vote.round.view",
+                    "GlobalPhase::Commit => tag.view() >= next_vote.round.view",
+                    "relation_is_exact.then_some(Self",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "opaque recovered Broadcast-and-next-Sign cold adapter authority",
+                combined_cold_authority,
+                (
+                    "fn into_parts(",
+                    "fn broadcast(",
+                    "fn next_sign(",
+                    "impl Clone for RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1",
+                ),
+            )
+            combined_cold_adapter = region(
+                adapter_path,
+                adapter_source,
+                "recovered Broadcast-and-next-Sign cold adapter replay",
+                "pub(in crate::sumeragi) fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
+                "/// Seal every adapter-owned input required by the adjacent gate open.",
+            )
+            require_order(
+                adapter_path,
+                "recovered Broadcast-and-next-Sign cold adapter replay",
+                combined_cold_adapter,
+                (
+                    "verified.verify_consensus_message(message)",
+                    "adapter.reducer.awaiting_signature()",
+                    "next_reducer.step(event.clone())",
+                    "replayed_broadcast != broadcast",
+                    "replayed_next_sign != next_sign",
+                    "adapter.reducer = next_reducer",
+                    "adapter.registry = next_registry",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "recovered Broadcast-and-next-Sign cold adapter replay",
+                combined_cold_adapter,
+                ("publish_status", ".append(", "broadcast_consensus", "enqueue("),
+            )
+            combined_ledger_classifier = region(
+                ledger_path,
+                ledger_source,
+                "frame-bound recovered Broadcast-and-next-Sign ledger classifier",
+                "pub(in crate::sumeragi) fn recovered_lifecycle_signed_broadcast_and_sign_pairs(",
+                "/// Stage the exact all-row tombstone successor for CompleteTip retirement.",
+            )
+            require_tokens(
+                ledger_path,
+                "frame-bound recovered Broadcast-and-next-Sign ledger classifier",
+                combined_ledger_classifier,
+                (
+                    "self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?",
+                    "let ledger_frame_identity = self.frame_identity()",
+                    "RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1::new(&self.records)",
+                    "index.unique_parent_index(broadcast_ordinal)",
+                    "index.owner_record_count(next_sign_owner) != 1",
+                    "index.has_incoming_edge(next_sign_ordinal)",
+                    "let next_sign_ordinal = broadcast_ordinal.checked_add(1)?",
+                    "signed_broadcast_continuation_is_exact(",
+                    "recovered_broadcast_and_next_sign_keys_are_exact(",
+                    "next_sign_owner.first_admission_ordinal() != next_sign_ordinal",
+                    "parent_record_count == 2",
+                    "parent_record_count == 3",
+                    "DurableContinuationEdge::ValidateToSignPrepare",
+                    "ledger_frame_identity",
+                ),
+            )
+            combined_ledger_enumerator = region(
+                ledger_path,
+                ledger_source,
+                "linear recovered Broadcast-and-next-Sign ledger enumeration",
+                "pub(in crate::sumeragi) fn recovered_lifecycle_signed_broadcast_and_sign_pairs(",
+                "fn project_recovered_lifecycle_signed_broadcast_and_sign_at(",
+            )
+            require_order(
+                ledger_path,
+                "linear recovered Broadcast-and-next-Sign ledger enumeration",
+                combined_ledger_enumerator,
+                (
+                    "self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?",
+                    "let ledger_frame_identity = self.frame_identity()",
+                    "RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1::new(&self.records)",
+                    "self.records.iter()",
+                    "project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(",
+                    "&index",
+                ),
+            )
+            require_token_count(
+                ledger_path,
+                "linear recovered Broadcast-and-next-Sign ledger enumeration",
+                combined_ledger_enumerator,
+                "self.frame_identity()",
+                1,
+            )
+            reject_tokens(
+                ledger_path,
+                "frame-bound recovered Broadcast-and-next-Sign ledger classifier",
+                combined_ledger_classifier,
+                ("high_water == next_sign_ordinal", "persist_exact_successor"),
+            )
+            combined_ledger_reauth = region(
+                ledger_path,
+                ledger_source,
+                "single-hash recovered Broadcast-and-next-Sign ledger reauthentication",
+                "pub(in crate::sumeragi) fn exactly_matches_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {",
+                "/// Complete version-one durable lifecycle ledger.",
+            )
+            require_tokens(
+                ledger_path,
+                "single-hash recovered Broadcast-and-next-Sign ledger reauthentication",
+                combined_ledger_reauth,
+                (
+                    "project_recovered_lifecycle_signed_broadcast_and_sign_at(self.broadcast_ordinal)",
+                    "== Some(self)",
+                ),
+            )
+            reject_tokens(
+                ledger_path,
+                "single-hash recovered Broadcast-and-next-Sign ledger reauthentication",
+                combined_ledger_reauth,
+                ("ledger.frame_identity()",),
+            )
+            combined_registry_prepare = region(
+                registry_path,
+                registry_source,
+                "opaque recovered Broadcast-and-next-Sign registry preparation",
+                "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor<",
+                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor",
+            )
+            require_order(
+                registry_path,
+                "opaque recovered Broadcast-and-next-Sign registry preparation",
+                combined_registry_prepare,
+                (
+                    "adapter.dispatch_key() != key",
+                    "sign.matches_claimed_record(",
+                    "adapter.project_broadcast_and_sign_authority(body)",
+                    ".project_authenticated_signed_broadcast_and_sign(verified, projection_authority)",
+                    "PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor {",
+                ),
+            )
+            reject_tokens(
+                registry_path,
+                "unpublished recovered Broadcast-and-next-Sign registry preparation",
+                combined_registry_prepare,
+                (
+                    "ValidatedBodyReceipt",
+                    "into_parts",
+                    "entries.insert",
+                    "entries.remove",
+                    "persist_exact_successor",
+                ),
+            )
+            combined_transition = region(
+                body_pipeline_path,
+                body_pipeline_source,
+                "inert recovered Broadcast-and-next-Sign coordinator staging",
+                "fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+                "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]\nfn stage_body_stage_transition_with_payload_relation(",
+            )
+            require_order(
+                body_pipeline_path,
+                "inert recovered Broadcast-and-next-Sign coordinator staging",
+                combined_transition,
+                (
+                    "stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast)",
+                    "first.child_ordinal.checked_add(1)",
+                    "staged.reduce_admit(AdmissionRequest::Candidate(next_sign))",
+                    "next_sign_owner == broadcast_owner",
+                    "staged.high_water != next_sign_ordinal",
+                    "capacity_generation_before[&CapacityClass::Effect].saturating_add(1)",
+                    "capacity_used_before[&CapacityClass::Consensus].saturating_add(1)",
+                    "Ok(StagedRecoveredLifecycleSignBroadcastAndSignTransition {",
+                ),
+            )
+            reject_tokens(
+                body_pipeline_path,
+                "inert recovered Broadcast-and-next-Sign coordinator staging",
+                combined_transition,
+                (
+                    "persist_exact_successor",
+                    "commit_after_publication",
+                    "registry.entries",
+                ),
+            )
+            combined_transition_publication = region(
+                body_pipeline_path,
+                body_pipeline_source,
+                "durable recovered Broadcast-and-next-Sign publication",
+                "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
+                "fn map_sealed_successor_projection_error(",
+            )
+            require_order(
+                body_pipeline_path,
+                "durable recovered Broadcast-and-next-Sign publication",
+                combined_transition_publication,
+                (
+                    "persist_exact_staged_successor(&self.staged)",
+                    "successor.commit_after_publication()",
+                    "*coordinator = staged",
+                    "if publication_is_vote",
+                    "ready_index.contains(&next_sign_ordinal)",
+                    "adapter.commit_after_durable_vote_broadcast_and_sign()",
+                ),
+            )
+            require_tokens(
+                body_pipeline_path,
+                "Proposal publication parks only its durable Broadcast debt",
+                combined_transition_publication,
+                (
+                    "ready_index.remove(&broadcast_ordinal)",
+                    "LifecycleState::Waiting(broadcast_wait)",
+                    "adapter.commit_after_durable_broadcast_and_sign()",
+                ),
+            )
+            combined_transition_tail = combined_transition_publication.split(
+                "successor.commit_after_publication()", 1
+            )[-1]
+            reject_tokens(
+                body_pipeline_path,
+                "infallible recovered Proposal two-child publication tail",
+                combined_transition_tail,
+                ("return", "is_err", "Result"),
+            )
+            combined_adapter_commit = region(
+                adapter_path,
+                adapter_source,
+                "durable recovered Proposal adapter two-child commit",
+                "pub(in crate::sumeragi) fn commit_after_durable_broadcast_and_sign(self)",
+                "/// Borrow-bound adapter successor for one registry-owned recovered Apply",
+            )
+            require_order(
+                adapter_path,
+                "durable recovered Proposal adapter two-child commit",
+                combined_adapter_commit,
+                (
+                    "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
+                    "next_sign: Some(_)",
+                    "combined_authority_minted: true",
+                    "proposal_output_authority_minted: true",
+                    "outbound_payload: Some(_)",
+                    "adapter.reducer = next_reducer",
+                    "adapter.registry = next_registry",
+                ),
+            )
+            combined_vote_adapter_commit = region(
+                adapter_path,
+                adapter_source,
+                "durable recovered Vote adapter two-child commit",
+                "pub(in crate::sumeragi) fn commit_after_durable_vote_broadcast_and_sign(self)",
+                "/// Borrow-bound adapter successor for one registry-owned recovered Apply",
+            )
+            require_order(
+                adapter_path,
+                "durable recovered Vote adapter two-child commit",
+                combined_vote_adapter_commit,
+                (
+                    "self.is_vote_broadcast_and_sign()",
+                    "next_sign: Some(_)",
+                    "combined_authority_minted: true",
+                    "proposal_output_authority_minted: false",
+                    "outbound_payload: None",
+                    "adapter.reducer = next_reducer",
+                    "adapter.registry = next_registry",
+                ),
+            )
+            require_tokens(
+                registry_validate_path,
+                "follow-on recovered WAL Vote remains an executable Sign carrier",
+                registry_validate_source,
+                (
+                    "ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(sign)",
+                    "PreparedRecoveredLifecycleSignCarrier::NextWalVote(sign)",
+                ),
+            )
+            recovered_sign_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed recovered Sign-to-Broadcast settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(",
+                "/// Settle a recovered Prepare Vote into Broadcast plus Commit Sign.",
+            )
+            require_order(
+                launch_path,
+                "restart-closed recovered Sign-to-Broadcast settlement",
+                recovered_sign_settlement,
+                (
+                    "recovered_lifecycle_sign_completion.take()",
+                    "prepare_recovered_lifecycle_sign_completion(authority)",
+                    "prepare_recovered_lifecycle_sign_broadcast_successor(",
+                    "prepare_recovered_lifecycle_sign_broadcast_transition(",
+                    "output_guard.begin_fail_stop_operation()",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "completion.acknowledge_after_publication()",
+                    "operation.complete()",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "restart-closed recovered Sign-to-Broadcast settlement",
+                recovered_sign_settlement,
+                (
+                    "ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired",
+                    "ProductionRecoveredLifecycleSignBroadcastSettlementV1::Applied",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "durable recovered Sign-to-Broadcast settlement leaves output to its child",
+                recovered_sign_settlement,
+                (
+                    "capture_recovered_lifecycle_signed_broadcast_refanout",
+                    "output.commit_after_publication()",
+                    "TurnOutcome::Terminal",
+                ),
+            )
+            recovered_sign_tail = recovered_sign_settlement.split(
+                "transition.commit_after_publication();", 1
+            )[-1]
+            reject_tokens(
+                launch_path,
+                "infallible recovered Sign-to-Broadcast post-fsync tail",
+                recovered_sign_tail,
+                ("return", "Result", "is_err"),
+            )
+            recovered_vote_two_child_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed recovered Vote Broadcast-and-next-Sign settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
+                "/// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.",
+            )
+            require_order(
+                launch_path,
+                "restart-closed recovered Vote Broadcast-and-next-Sign settlement",
+                recovered_vote_two_child_settlement,
+                (
+                    "recovered_lifecycle_sign_completion.take()",
+                    "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
+                    "preview.is_vote_broadcast_and_sign_shape()",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+                    "output_guard.begin_fail_stop_operation()",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "completion.acknowledge_after_publication()",
+                    "operation.complete()",
+                    "ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::Applied",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "Vote settlement leaves durable output to typed refanout",
+                recovered_vote_two_child_settlement,
+                (
+                    "project_proposal_exact_output_authority",
+                    "capture_recovered_lifecycle_proposal_exact_output",
+                    "output.commit_after_publication()",
+                    "TurnOutcome::Terminal",
+                ),
+            )
+            recovered_vote_two_child_tail = recovered_vote_two_child_settlement.split(
+                "transition.commit_after_publication();", 1
+            )[-1]
+            reject_tokens(
+                launch_path,
+                "infallible recovered Vote two-child post-fsync tail",
+                recovered_vote_two_child_tail,
+                ("return", "Result", "is_err", "?"),
+            )
+            recovered_proposal_two_child_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
+                "/// Refanout one durable recovered signed Broadcast",
+            )
+            require_order(
+                launch_path,
+                "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
+                recovered_proposal_two_child_settlement,
+                (
+                    "recovered_lifecycle_sign_completion.take()",
+                    "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
+                    "preview.project_proposal_exact_output_authority()",
+                    "capture_recovered_lifecycle_proposal_exact_output(output_authority)",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "completion.acknowledge_after_publication()",
+                    "output.commit_after_publication()",
+                    "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied",
+                ),
+            )
+            require_token_count(
+                launch_path,
+                "typed recovered Proposal pre-fsync output release",
+                recovered_proposal_two_child_settlement,
+                "output.abort_before_publication()",
+                2,
+            )
+            require_tokens(
+                launch_path,
+                "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
+                recovered_proposal_two_child_settlement,
+                (
+                    "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
+                    "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable",
+                    "*recovered_lifecycle_sign_completion = Some(completion)",
+                    "drop(output)",
+                    "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired",
+                ),
+            )
+            recovered_proposal_two_child_tail = recovered_proposal_two_child_settlement.split(
+                "transition.commit_after_publication();", 1
+            )[-1]
+            reject_tokens(
+                launch_path,
+                "infallible recovered Proposal two-child post-fsync tail",
+                recovered_proposal_two_child_tail,
+                ("return", "Result", "is_err", "?"),
+            )
+            recovered_broadcast_refanout = region(
+                scheduler_path,
+                scheduler_source,
+                "restart-safe recovered signed-Broadcast refanout",
+                "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+                "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch",
+            )
+            require_order(
+                scheduler_path,
+                "restart-safe recovered signed-Broadcast refanout",
+                recovered_broadcast_refanout,
+                (
+                    "services.matches_lifecycle_body_store(body_store_identity)",
+                    "if exact_ready != self.coordinator.ready_index",
+                    "work_class == LifecycleWorkClass::Broadcast",
+                    "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
+                    "attest_ready_recovered_lifecycle_signed_broadcast",
+                    "for ready_ordinal in &exact_ready",
+                    "attest_ready_recovered_lifecycle_sign(",
+                    "self.coordinator.plan_turn(inputs)",
+                    "project_claimed_recovered_lifecycle_signed_broadcast_output",
+                    "capture_recovered_lifecycle_signed_broadcast_refanout(authority)",
+                    "let wait_source = super::WaitSource::Recovery(wait_digest)",
+                    "settle_turn(lease, super::TurnOutcome::Blocked(wait))",
+                    "output.commit_after_publication()",
+                ),
+            )
+            require_tokens(
+                scheduler_path,
+                "restart-safe recovered signed-Broadcast refanout",
+                recovered_broadcast_refanout,
+                (
+                    "rollback_unpublished_turn(&lease)",
+                    "close_admission_for_restart()",
+                    "ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::CapacityUnavailable",
+                    "ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired",
+                    "ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned",
+                    "attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(",
+                ),
+            )
+            reject_tokens(
+                scheduler_path,
+                "volatile recovered signed-Broadcast refanout wait",
+                recovered_broadcast_refanout,
+                (
+                    "persist_exact_successor",
+                    "TurnOutcome::Terminal",
+                    "exact_ready.len() == 2",
+                    "exact_ready.len() != 2",
+                ),
+            )
+            require_tokens(
+                registry_validate_path,
+                "retained recovered Broadcast-and-next-Vote pair seal",
+                registry_validate_source,
+                (
+                    "fn recovered_lifecycle_signed_broadcast_declares_next_vote(",
+                    "fn recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(",
+                    "broadcast.paired_next_sign != Some((next_address, next_digest))",
+                    "DurableRecoveredLifecycleNextWalVoteSign(next_sign)",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "durable recovered signed-Broadcast service capture",
+                worker_source,
+                (
+                    "fn capture_recovered_lifecycle_signed_broadcast_refanout(",
+                    "authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new())",
+                    "PendingExactFanout::claimed(",
+                    "pending.can_enqueue(fanout)",
+                    "fn capture_recovered_lifecycle_cold_proposal_message(",
+                    "output.consume_for_service(RecoveredLifecycleProposalExactOutputPermitV1::new())",
+                    "self.proposal_work_retired",
+                    "pending.prepare_atomic_fanout_batch(fanouts)",
+                    "cold_durable_proposal_refanout_atomically_owns_control_and_chunks",
+                ),
+            )
+            require_tokens(
+                ledger_path,
+                "cold recovered signed-Broadcast ledger join",
+                ledger_source,
+                (
+                    "fn authenticate_recovered_control_signed_broadcast(",
+                    "fn authenticate_recovered_phase_signed_broadcast_repair(",
+                    "project_recovered_signed_broadcast_child(self.context())",
+                    "recover_durable_signed_broadcast(verified, child)",
+                    "broadcast.exactly_matches_record(",
+                ),
+            )
+            require_tokens(
+                wal_recovery_path,
+                "cold recovered signed-Broadcast WAL and roster join",
+                wal_recovery_source,
+                (
+                    "fn recover_durable_signed_broadcast(",
+                    "verified.verify_consensus_message(message)",
+                    "fn project_cold_adapter_authority(",
+                    "RecoveredLifecycleSignColdAdapterAuthorityV1::from_recovered_wal(",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "cold recovered signed-Broadcast reducer fast-forward",
+                adapter_source,
+                (
+                    "fn advance_recovered_lifecycle_signed_broadcast(",
+                    "verify_individual_signature(",
+                    "let [reducer::Effect::Broadcast(message)] = core_effects.as_slice()",
+                    "replayed != broadcast",
+                    "next_reducer.pending_persistence_record().is_some()",
+                    "next_reducer.awaiting_signature().is_some()",
+                    "Proposal cold replay requires its body and Prepare WAL successor",
+                ),
+            )
+            require_tokens(
+                lifecycle_open_path,
+                "cold recovered signed-Broadcast storage census",
+                lifecycle_open_source,
+                (
+                    "PhaseBroadcast(",
+                    "PhaseBroadcastAndSign(",
+                    "PhaseBroadcastAndNextSign(",
+                    "ControlBroadcast(",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_sign_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup",
+                ),
+            )
+            require_tokens(
+                ledger_path,
+                "cold recovered phase Broadcast-and-Sign ledger join",
+                ledger_source,
+                (
+                    "fn authenticate_recovered_phase_signed_broadcast_and_sign(",
+                    "combined.broadcast_exactly_matches(&broadcast)",
+                    "combined.exactly_matches_fresh_records(",
+                    "fn revalidates_recovered_phase_signed_broadcast_and_sign(",
+                ),
+            )
+            require_tokens(
+                registry_path,
+                "cold recovered phase Broadcast-and-Sign registry join",
+                registry_source,
+                (
+                    "fn prepare_cold_adapter_startup(",
+                    "authenticate_recovered_lifecycle_next_vote_body(&mut preview)",
+                    "project_authenticated_cold_signed_broadcast_and_sign(verified, seal)",
+                    "authenticate_recovered_phase_signed_broadcast_and_sign(",
+                    "advance_recovered_lifecycle_signed_broadcast_and_sign(",
+                    "fn install_recovered_broadcast_and_next_vote(",
+                    "paired_next_sign: Some((next_sign_address, next_sign_digest))",
+                    "fn phase_broadcast_and_next_vote_projection(",
+                    "owns_recovered_phase_broadcast_and_next_sign(",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "cold recovered phase owner handoff",
+                adapter_source,
+                (
+                    "install_recovered_sign(&body_store)",
+                    "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
+                ),
+            )
+            recovered_phase_broadcast_assembly = region(
+                lifecycle_open_path,
+                lifecycle_open_source,
+                "cold recovered phase-Broadcast storage assembly",
+                "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
+                "/// Assemble the exact standalone control Sign with every durable Fetch.",
+            )
+            require_tokens(
+                lifecycle_open_path,
+                "cold recovered phase-Broadcast storage assembly",
+                recovered_phase_broadcast_assembly,
+                (
+                    "RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast)",
+                    "assemble_storage_only_with_terminal_validate_outcomes(",
+                ),
+            )
+            recovered_control_broadcast_assembly = region(
+                lifecycle_open_path,
+                lifecycle_open_source,
+                "cold recovered control-Broadcast storage assembly",
+                "fn assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup(",
+                "/// Assemble the standalone Decision Fetch with every durable body-backed Fetch.",
+            )
+            require_tokens(
+                lifecycle_open_path,
+                "cold recovered control-Broadcast storage assembly",
+                recovered_control_broadcast_assembly,
+                (
+                    "RecoveredWalStartupProjectionV1::ControlBroadcast(control, broadcast)",
+                    "assemble_storage_only_with_terminal_validate_outcomes(",
+                ),
             )
             require_tokens(
                 worker_path,
@@ -2429,6 +3799,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "Arc::ptr_eq(&self.0, &other.0)",
                     "fn instance_identity(&self) -> KuraInstanceIdentity",
                     "fn instance_identity_names_only_the_exact_live_kura()",
+                    "store_root_directory: BoundProgressDirectory",
+                    "Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?",
                 ),
             )
         payload_store_path, payload_store_source = load(
@@ -2471,7 +3843,6 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 (
                     "fn authenticate_for_complete_tip_retirement(",
                     ".certificate .signers .binary_search(&persisted_responder)",
-                    '"persisted response signer lost certified local retention authority"',
                     "body_revalidated: body_store.is_some()",
                     "fn permits_payload_store_ahead_terminal_rebind(&self) -> bool",
                     "fn retirement_rejects_completed_metadata_from_a_noncertified_responder()",
@@ -2482,6 +3853,20 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "fn authenticated_cut_rejects_store_directory_symlink_replacement()",
                 ),
             )
+            payload_authentication = _require_rust_item(
+                payload_store_path,
+                payload_store_source,
+                "authenticate_inner",
+                errors,
+            )
+            if payload_authentication is not None:
+                require_literal_count(
+                    payload_store_path,
+                    "CompleteTip body-independent Completed metadata authority",
+                    payload_authentication.source,
+                    '"persisted response signer lost certified local retention authority"',
+                    1,
+                )
             require_tokens(
                 lifecycle_open_path,
                 "CompleteTip bodyless completion promotion guard",

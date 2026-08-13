@@ -19,6 +19,8 @@ use super::{
     ProductionRecoveredDecisionFetchPersistenceErrorV1,
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
+    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+    ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
     work_registry::RecoveredDecisionApplyTerminalPublicationError,
 };
 use crate::{
@@ -39,7 +41,7 @@ use crate::{
             PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
-            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleSignBroadcastOutputCaptureV1,
+            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleProposalExactOutputCaptureV1,
         },
     },
 };
@@ -229,23 +231,67 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchStoreSettlementV1 {
     Applied,
 }
 
-/// Pre-publication preparation result for a recovered signed Broadcast.
+/// Pre-publication adapter preparation for a recovered signed Broadcast.
 ///
-/// This bounded seam proves the adapter and exact-output halves together but
-/// intentionally does not fsync or acknowledge the worker. The future ledger
-/// transaction must additionally seal the registry replacement and cold-open
-/// Broadcast carrier before it can consume this authority.
+/// This bounded seam proves the exact single-Broadcast reducer shape but does
+/// not fsync, publish output, or acknowledge the worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Sign Broadcast preparation result must be observed"]
 pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastPreparationV1 {
     /// No parked recovered Sign completion is present.
     None,
-    /// Exact output capacity is unavailable; the guarded completion is retained.
-    CapacityUnavailable,
-    /// The guarded completion, adapter preview, and exact-output corridor join exactly.
+    /// The guarded completion and adapter preview join the bounded shape exactly.
     Prepared,
     /// The completion or reducer successor is outside the single-Broadcast cut.
     Retry,
+}
+
+/// Result of durably settling one recovered Sign into its exact Broadcast child.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "recovered Sign Broadcast settlement result must be observed"]
+pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastSettlementV1 {
+    /// No parked recovered Sign completion is currently present.
+    None,
+    /// A pre-publication owner changed; every durable owner remains unchanged.
+    Retry,
+    /// LedgerV1 publication was attempted and process restart is now required.
+    RestartRequired,
+    /// Sign, Broadcast, adapter, registry, and worker owners advanced.
+    ///
+    /// The live Broadcast remains the durable output-debt source for the
+    /// separate restart-safe refanout transaction.
+    Applied,
+}
+
+/// Result of atomically settling a recovered Proposal into Broadcast plus Sign.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "recovered Proposal two-child settlement result must be observed"]
+pub(in crate::sumeragi) enum ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1 {
+    /// No parked recovered Sign completion is currently present.
+    None,
+    /// Every pre-fsync owner remains unchanged and the completion was reparked.
+    Retry,
+    /// The aggregate Proposal control-and-chunk output corridor is currently full.
+    CapacityUnavailable,
+    /// Durable publication was attempted or output admission closed; restart is required.
+    RestartRequired,
+    /// Ledger, coordinator, registry, adapter, worker, and exact output advanced.
+    Applied,
+}
+
+/// Result of settling one recovered Prepare Vote into Broadcast plus Commit Sign.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "recovered Vote two-child settlement result must be observed"]
+pub(in crate::sumeragi) enum ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1 {
+    /// No parked recovered Sign completion is currently present.
+    None,
+    /// Every pre-fsync owner remains unchanged and the completion was reparked.
+    Retry,
+    /// Durable publication was attempted or output admission closed; restart is required.
+    RestartRequired,
+    /// Ledger, coordinator, registry, adapter, and worker ownership advanced.
+    /// The Ready Broadcast remains the durable source for typed refanout.
+    Applied,
 }
 
 /// Stable pre-fsync settlement diagnostic; it contains no completion parts.
@@ -632,9 +678,9 @@ impl LaunchedProductionLifecycleV1 {
 
     /// Park at most one guarded recovered Sign completion under this owner.
     ///
-    /// No settlement or publication method exists yet: the durable
-    /// Signed-to-successor family is not restart-closed. Repeated calls retain
-    /// the existing token and generic completion drains cannot acknowledge it.
+    /// Repeated calls retain the existing token and generic completion drains
+    /// cannot acknowledge it. The bounded Vote/Timeout completion may enter
+    /// the durable Broadcast settlement; other successor shapes remain guarded.
     pub(in crate::sumeragi) fn retain_recovered_lifecycle_sign_completion(
         &mut self,
     ) -> Result<bool, String> {
@@ -649,18 +695,16 @@ impl LaunchedProductionLifecycleV1 {
         Ok(true)
     }
 
-    /// Preflight the parked Sign's adapter successor and exact network fanout.
+    /// Preflight the parked Sign's exact adapter successor.
     ///
-    /// This deliberately drops both publication-inert previews before
-    /// returning. It is a bounded prerequisite for the later registry/Ledger
-    /// transaction, proving that the exact service corridor can be reserved
-    /// without acknowledging the guarded completion or mutating the adapter.
+    /// This deliberately drops the publication-inert preview before returning.
+    /// Output is owned by the durable Broadcast child only after LedgerV1
+    /// publication, through the separate typed refanout transaction.
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_broadcast(
         &mut self,
     ) -> ProductionRecoveredLifecycleSignBroadcastPreparationV1 {
         let Self {
             executor,
-            services,
             recovered_lifecycle_sign_completion,
             ..
         } = self;
@@ -677,21 +721,506 @@ impl LaunchedProductionLifecycleV1 {
         if preview.shape() != super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast {
             return ProductionRecoveredLifecycleSignBroadcastPreparationV1::Retry;
         }
-        let output = preview.project_broadcast_output_authority();
-        let capture = match services.capture_recovered_lifecycle_sign_broadcast_output(output) {
-            Ok(capture) => capture,
-            Err(_) => return ProductionRecoveredLifecycleSignBroadcastPreparationV1::Retry,
+        drop(preview);
+        ProductionRecoveredLifecycleSignBroadcastPreparationV1::Prepared
+    }
+
+    /// Settle the parked recovered Sign into one durable signed Broadcast.
+    ///
+    /// The claimed Sign carrier, adapter preview, and Broadcast child remain
+    /// borrow-bound until the staged LedgerV1 successor is fsynced. Only
+    /// assertion-only in-memory moves follow publication. The live Broadcast
+    /// then becomes the sole restart-recoverable source for typed refanout.
+    /// Proposal and follow-on-Sign reducer shapes remain outside this bounded
+    /// transaction and fail-stop for restart.
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(
+        &mut self,
+    ) -> ProductionRecoveredLifecycleSignBroadcastSettlementV1 {
+        let Self {
+            owner,
+            executor,
+            services,
+            recovered_lifecycle_sign_completion,
+            ..
+        } = self;
+        let Some(completion) = recovered_lifecycle_sign_completion.take() else {
+            return ProductionRecoveredLifecycleSignBroadcastSettlementV1::None;
         };
-        match capture {
-            RecoveredLifecycleSignBroadcastOutputCaptureV1::Unavailable => {
-                ProductionRecoveredLifecycleSignBroadcastPreparationV1::CapacityUnavailable
-            }
-            RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(reservation) => {
-                reservation.abort_before_publication();
-                drop(preview);
-                ProductionRecoveredLifecycleSignBroadcastPreparationV1::Prepared
-            }
+
+        macro_rules! retry {
+            () => {{
+                assert!(recovered_lifecycle_sign_completion.is_none());
+                *recovered_lifecycle_sign_completion = Some(completion);
+                return ProductionRecoveredLifecycleSignBroadcastSettlementV1::Retry;
+            }};
         }
+        macro_rules! restart {
+            () => {{
+                owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                drop(completion);
+                return ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired;
+            }};
+        }
+
+        if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
+            restart!();
+        }
+        let Some(lease) = owner.coordinator.active_lease.clone() else {
+            restart!();
+        };
+        let Some(authority) = completion.project_adapter_completion_authority() else {
+            restart!();
+        };
+        let preview = match executor.prepare_recovered_lifecycle_sign_completion(authority) {
+            Ok(preview) => preview,
+            Err(_) => restart!(),
+        };
+        if preview.shape() != super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast {
+            drop(preview);
+            restart!();
+        }
+        let key = preview.dispatch_key();
+        let successor = match owner
+            .registry
+            .registry_mut()
+            .prepare_recovered_lifecycle_sign_broadcast_successor(
+                &owner.coordinator,
+                &lease,
+                &owner.verified,
+                key,
+                preview,
+            ) {
+            Ok(successor) => successor,
+            Err(_) => retry!(),
+        };
+        let transition = match owner
+            .coordinator
+            .prepare_recovered_lifecycle_sign_broadcast_transition(
+                &lease,
+                &owner.verified,
+                successor,
+            ) {
+            Ok(transition) => transition,
+            Err(_) => retry!(),
+        };
+        let output_guard = services.lifecycle_output_guard();
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            drop(transition);
+            restart!();
+        };
+
+        if transition.persist_exact_successor().is_err() {
+            drop(transition);
+            owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            assert!(recovered_lifecycle_sign_completion.is_none());
+            *recovered_lifecycle_sign_completion = Some(completion);
+            drop(operation);
+            return ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired;
+        }
+
+        transition.commit_after_publication();
+        completion.acknowledge_after_publication();
+        operation.complete();
+        ProductionRecoveredLifecycleSignBroadcastSettlementV1::Applied
+    }
+
+    /// Settle a recovered Prepare Vote into Broadcast plus Commit Sign.
+    ///
+    /// The next Vote body/WAL authority and both registry children remain
+    /// borrow-bound through one LedgerV1 fsync. No network output is published
+    /// here: the resulting Broadcast stays Ready and the typed refanout driver
+    /// must transfer that durable debt before the adjacent Commit Sign runs.
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn settle_recovered_lifecycle_vote_broadcast_and_sign(
+        &mut self,
+    ) -> ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1 {
+        let Self {
+            owner,
+            executor,
+            services,
+            recovered_lifecycle_sign_completion,
+            ..
+        } = self;
+        let Some(completion) = recovered_lifecycle_sign_completion.take() else {
+            return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::None;
+        };
+
+        macro_rules! retry {
+            () => {{
+                assert!(recovered_lifecycle_sign_completion.is_none());
+                *recovered_lifecycle_sign_completion = Some(completion);
+                return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::Retry;
+            }};
+        }
+        macro_rules! restart {
+            () => {{
+                owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                drop(completion);
+                return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired;
+            }};
+        }
+
+        if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
+            restart!();
+        }
+        let Some(lease) = owner.coordinator.active_lease.clone() else {
+            restart!();
+        };
+        let Some(authority) = completion.project_adapter_completion_authority() else {
+            restart!();
+        };
+        let (preview, body) = match services
+            .prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)
+        {
+            Ok(prepared) => prepared,
+            Err(_) => restart!(),
+        };
+        if !preview.is_vote_broadcast_and_sign_shape() {
+            drop(body);
+            drop(preview);
+            restart!();
+        }
+        let key = preview.dispatch_key();
+        let successor = match owner
+            .registry
+            .registry_mut()
+            .prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(
+                &owner.coordinator,
+                &lease,
+                &owner.verified,
+                key,
+                preview,
+                body,
+            ) {
+            Ok(successor) => successor,
+            Err(_) => retry!(),
+        };
+        let transition = match owner
+            .coordinator
+            .prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(&lease, successor)
+        {
+            Ok(transition) => transition,
+            Err(_) => retry!(),
+        };
+        let output_guard = services.lifecycle_output_guard();
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            drop(transition);
+            restart!();
+        };
+        if transition.persist_exact_successor().is_err() {
+            drop(transition);
+            owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            assert!(recovered_lifecycle_sign_completion.is_none());
+            *recovered_lifecycle_sign_completion = Some(completion);
+            drop(operation);
+            return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired;
+        }
+
+        transition.commit_after_publication();
+        completion.acknowledge_after_publication();
+        operation.complete();
+        ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::Applied
+    }
+
+    /// Fsync an initial Proposal `PrepareIntent`, then publish both successors.
+    ///
+    /// The Proposal control message and canonical chunks are reserved before
+    /// the WAL append.  A successful append changes the retry boundary: every
+    /// later failure closes output and requires cold recovery, whose exact
+    /// WAL-before-Ledger and two-child Ledger cuts are authenticated by the
+    /// same Proposal/Prepare body and replay seals.
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_prepare_wal(
+        &mut self,
+    ) -> ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1 {
+        let Self {
+            owner,
+            executor,
+            services,
+            recovered_lifecycle_sign_completion,
+            ..
+        } = self;
+        let Some(completion) = recovered_lifecycle_sign_completion.take() else {
+            return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
+        };
+
+        macro_rules! restart {
+            () => {{
+                owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                drop(completion);
+                return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
+            }};
+        }
+
+        if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
+            restart!();
+        }
+        let Some(lease) = owner.coordinator.active_lease.clone() else {
+            restart!();
+        };
+        let Some(authority) = completion.project_adapter_completion_authority() else {
+            restart!();
+        };
+        let (mut preview, body) = match services
+            .prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)
+        {
+            Ok(prepared) => prepared,
+            Err(_) => restart!(),
+        };
+        if preview.shape()
+            != super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
+        {
+            drop(body);
+            drop(preview);
+            restart!();
+        }
+        let key = preview.dispatch_key();
+        let output_authority = match preview.project_proposal_exact_output_authority() {
+            Ok(authority) => authority,
+            Err(_) => {
+                drop(body);
+                drop(preview);
+                restart!();
+            }
+        };
+        let output = match services
+            .capture_recovered_lifecycle_proposal_exact_output(output_authority)
+        {
+            Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(output)) => output,
+            Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)) => {
+                drop(authority);
+                drop(body);
+                drop(preview);
+                assert!(recovered_lifecycle_sign_completion.is_none());
+                *recovered_lifecycle_sign_completion = Some(completion);
+                return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable;
+            }
+            Err(_) => {
+                drop(body);
+                drop(preview);
+                restart!();
+            }
+        };
+
+        if preview
+            .append_recovered_lifecycle_proposal_prepare_wal()
+            .is_err()
+        {
+            drop(body);
+            drop(preview);
+            drop(output);
+            restart!();
+        }
+        let successor = match owner
+            .registry
+            .registry_mut()
+            .prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(
+                &owner.coordinator,
+                &lease,
+                &owner.verified,
+                key,
+                preview,
+                body,
+            ) {
+            Ok(successor) => successor,
+            Err(_) => {
+                drop(output);
+                restart!();
+            }
+        };
+        let transition = match owner
+            .coordinator
+            .prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(&lease, successor)
+        {
+            Ok(transition) => transition,
+            Err(_) => {
+                drop(output);
+                restart!();
+            }
+        };
+        if transition.persist_exact_successor().is_err() {
+            drop(transition);
+            owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            assert!(recovered_lifecycle_sign_completion.is_none());
+            drop(output);
+            drop(completion);
+            return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
+        }
+
+        transition.commit_after_publication();
+        completion.acknowledge_after_publication();
+        output.commit_after_publication();
+        ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
+    }
+
+    /// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.
+    ///
+    /// The signed Proposal and its canonical chunks reserve one aggregate
+    /// exact-output batch before the two-child LedgerV1 successor is fsynced.
+    /// Publication then installs both registry children, advances the adapter,
+    /// acknowledges the worker, and finally enqueues both fanouts. The
+    /// Broadcast is parked only in process-local state while the output owner
+    /// is live; LedgerV1 remains the restart source for that output debt.
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(
+        &mut self,
+    ) -> ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1 {
+        let Self {
+            owner,
+            executor,
+            services,
+            recovered_lifecycle_sign_completion,
+            ..
+        } = self;
+        let Some(completion) = recovered_lifecycle_sign_completion.take() else {
+            return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
+        };
+
+        macro_rules! retry {
+            () => {{
+                assert!(recovered_lifecycle_sign_completion.is_none());
+                *recovered_lifecycle_sign_completion = Some(completion);
+                return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Retry;
+            }};
+        }
+        macro_rules! restart {
+            () => {{
+                owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                drop(completion);
+                return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
+            }};
+        }
+
+        if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
+            restart!();
+        }
+        let Some(lease) = owner.coordinator.active_lease.clone() else {
+            restart!();
+        };
+        let Some(authority) = completion.project_adapter_completion_authority() else {
+            restart!();
+        };
+        let (mut preview, body) = match services
+            .prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)
+        {
+            Ok(prepared) => prepared,
+            Err(_) => restart!(),
+        };
+        if preview.shape()
+            != super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+        {
+            drop(body);
+            drop(preview);
+            restart!();
+        }
+        let key = preview.dispatch_key();
+        let output_authority = match preview.project_proposal_exact_output_authority() {
+            Ok(authority) => authority,
+            Err(_) => {
+                drop(body);
+                drop(preview);
+                restart!();
+            }
+        };
+        let output = match services
+            .capture_recovered_lifecycle_proposal_exact_output(output_authority)
+        {
+            Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(output)) => output,
+            Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)) => {
+                drop(authority);
+                drop(body);
+                drop(preview);
+                assert!(recovered_lifecycle_sign_completion.is_none());
+                *recovered_lifecycle_sign_completion = Some(completion);
+                return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable;
+            }
+            Err(_) => {
+                drop(body);
+                drop(preview);
+                restart!();
+            }
+        };
+        let successor = match owner
+            .registry
+            .registry_mut()
+            .prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(
+                &owner.coordinator,
+                &lease,
+                &owner.verified,
+                key,
+                preview,
+                body,
+            ) {
+            Ok(successor) => successor,
+            Err(_) => {
+                drop(output.abort_before_publication());
+                retry!();
+            }
+        };
+        let transition = match owner
+            .coordinator
+            .prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(&lease, successor)
+        {
+            Ok(transition) => transition,
+            Err(_) => {
+                drop(output.abort_before_publication());
+                retry!();
+            }
+        };
+
+        if transition.persist_exact_successor().is_err() {
+            drop(transition);
+            owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            assert!(recovered_lifecycle_sign_completion.is_none());
+            *recovered_lifecycle_sign_completion = Some(completion);
+            drop(output);
+            return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
+        }
+
+        transition.commit_after_publication();
+        completion.acknowledge_after_publication();
+        output.commit_after_publication();
+        ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
+    }
+
+    /// Refanout one durable recovered signed Broadcast at the Completion cursor.
+    ///
+    /// Success parks only the live coordinator row. LedgerV1 deliberately
+    /// remains Ready, so a hard crash reconstructs the exact output debt while
+    /// the current process lets the exact-output corridor own all retries.
+    #[cfg(not(test))]
+    pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
+        &mut self,
+        runner: LifecycleCurrentRunnerTurn<'_>,
+    ) -> Result<
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+    > {
+        self.owner
+            .refanout_recovered_lifecycle_signed_broadcast(&self.services, runner)
+    }
+
+    /// Exercise durable recovered Broadcast refanout with a fixture-owned cursor.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
+        &mut self,
+        runner: LifecycleRunnerRankSnapshot,
+    ) -> Result<
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+    > {
+        self.owner
+            .refanout_recovered_lifecycle_signed_broadcast(&self.services, runner)
     }
 
     /// Reserve, claim, and queue the recovered Apply at the live Completion cursor.
@@ -1332,6 +1861,10 @@ mod tests {
         let source = include_str!("v2_lifecycle_launch.rs");
         let adapter_source = include_str!("v2.rs");
         let safety_wal_source = include_str!("safety_wal.rs");
+        let kura_source = concat!(
+            include_str!("../kura.rs"),
+            include_str!("../kura/bound_progress_and_retained_support.rs")
+        );
         let adjacent_store_source = include_str!("serviced_candidate_store.rs");
         let worker_source = include_str!("v2_worker.rs");
         let runner_source = include_str!("v2_runner.rs");
@@ -1596,8 +2129,14 @@ mod tests {
             .expect("adapter recovery open ends before projections")
             .0;
         let safety_open = adapter_open
-            .find("let wal = SafetyWal::open(")
-            .expect("adapter opens SafetyWal first");
+            .find("let (wal_path, wal) = match wal_target")
+            .expect("adapter selects one sealed WAL open target first");
+        let kura_open = adapter_open
+            .find("SafetyWal::open_with_kura_authority(")
+            .expect("production adapter consumes the Kura-root authority");
+        let fixture_open = adapter_open
+            .find("SafetyWalOpenTarget::FixturePath(wal_path)")
+            .expect("legacy pathname opening is explicitly test-only");
         let serviced_mint = adapter_open
             .find("wal.mint_serviced_candidate_store_authority(&wal_path)?")
             .expect("adapter mints the fixed serviced-candidate authority");
@@ -1607,7 +2146,8 @@ mod tests {
         let wal_replay = adapter_open
             .find("let entries = wal\n            .recovered_records()")
             .expect("adapter replays the bound WAL after adjacent recovery");
-        assert!(safety_open < serviced_mint && serviced_mint < serviced_open);
+        assert!(safety_open < kura_open && kura_open < fixture_open);
+        assert!(fixture_open < serviced_mint && serviced_mint < serviced_open);
         assert!(serviced_open < wal_replay);
 
         for capability in [
@@ -1639,19 +2179,48 @@ mod tests {
             "self.directory.verify_leaf(self.file, self.wal_name)",
             "let durable = rustix::fs::statat(",
             "promoted adjacent snapshot changed across directory sync",
-            "TODO: Mint this capability from an opened Kura-root directory handle",
+            "BoundSafetyWalDirectory::from_kura_authority(kura, authority)",
+            "safety-WAL authority belongs to a different Kura instance",
+            "#[cfg(test)]\n    fn bind(expected_path: &Path)",
+            "#[cfg(test)]\n    pub(crate) fn open(",
         ] {
             assert!(
                 safety_wal_source.contains(required),
                 "opened WAL-directory authority omitted {required}"
             );
         }
+        for required in [
+            "store_root_directory: BoundProgressDirectory",
+            "Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?",
+            "KuraSafetyWalDirectoryAuthority",
+            "#[derive(Debug)]\n#[must_use = \"the Kura-bound safety-WAL directory authority must open one WAL\"]",
+        ] {
+            assert!(
+                kura_source.contains(required),
+                "Kura storage owner omitted {required}"
+            );
+        }
+        assert!(!kura_source.contains("impl Clone for KuraSafetyWalDirectoryAuthority"));
+        assert!(!kura_source.contains("impl Copy for KuraSafetyWalDirectoryAuthority"));
+        for required in [
+            "pub(crate) fn mint_safety_wal_directory_authority(",
+            "rustix::fs::openat(\n                &root.file,\n                STORE_ROOT_LOCK_FILE_NAME,",
+            "Self::sidecar_file_metadata_unchanged(&lock_before, &linked_metadata)",
+            "rustix::fs::mkdirat(&parent.file, name, rustix::fs::Mode::RWXU)",
+            "Self::open_bound_progress_child_directory(",
+            "kura_identity: self.instance_identity()",
+        ] {
+            assert!(
+                kura_source.contains(required),
+                "Kura-root WAL authority omitted {required}"
+            );
+        }
         assert_eq!(
             safety_wal_source
                 .matches("Err(SafetyWalError::UnsupportedStorageBinding {")
                 .count(),
-            2,
-            "both non-Unix adjacent authority mints must reject before constructing a wrapper"
+            3,
+            "the production Kura-root open and both adjacent authority mints must reject on non-Unix"
         );
         assert_eq!(
             safety_wal_source
@@ -1675,6 +2244,8 @@ mod tests {
             .find("LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(")
             .expect("legacy runner opens only through the typed authority");
         assert!(runner_leader_mint < runner_gate_open);
+        assert!(runner_source.contains("kura\n            .mint_safety_wal_directory_authority()"));
+        assert!(runner_source.contains("kura.as_ref(),\n                wal_authority,"));
         assert!(
             take < executor
                 && executor < genesis_gate
@@ -1890,7 +2461,7 @@ mod tests {
             .expect("production owner has one recovered Sign dispatch transaction")
             .1
             .split_once(
-                "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch request.",
+                "/// Refanout one durable recovered signed Broadcast at the live Completion cursor.",
             )
             .expect("recovered Sign dispatch stays a bounded source region")
             .0;
@@ -2131,6 +2702,117 @@ mod tests {
             "a non-Completion runner cursor cannot claim or mutate a recovered Sign owner"
         ));
 
+        let settlement = launch_source
+            .split_once("pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(")
+            .expect("recovered Sign has one durable Broadcast settlement")
+            .1
+            .split_once("/// Settle a recovered Prepare Vote into Broadcast plus Commit Sign.")
+            .expect("recovered Sign settlement stays a bounded source region")
+            .0;
+        let completion = settlement
+            .find("recovered_lifecycle_sign_completion.take()")
+            .expect("settlement takes the guarded completion once");
+        let preview = settlement
+            .find("prepare_recovered_lifecycle_sign_completion(authority)")
+            .expect("settlement previews the exact signed reducer successor");
+        let registry = settlement
+            .find("prepare_recovered_lifecycle_sign_broadcast_successor(")
+            .expect("settlement seals the exact registry child");
+        let transition = settlement
+            .find("prepare_recovered_lifecycle_sign_broadcast_transition(")
+            .expect("settlement stages one exact LedgerV1 successor");
+        let operation = settlement
+            .find("output_guard.begin_fail_stop_operation()")
+            .expect("settlement arms the shared output guard before fsync");
+        let fsync = settlement
+            .find("transition.persist_exact_successor().is_err()")
+            .expect("settlement fsyncs the exact successor");
+        let coordinator_commit = settlement
+            .find("transition.commit_after_publication();")
+            .expect("coordinator, registry, and adapter commit after fsync");
+        let worker_commit = settlement
+            .find("completion.acknowledge_after_publication();")
+            .expect("the worker owner retires last");
+        let operation_commit = settlement
+            .find("operation.complete();")
+            .expect("the fail-stop operation completes after every owner commit");
+        assert!(
+            completion < preview
+                && preview < registry
+                && registry < transition
+                && transition < operation
+                && operation < fsync
+                && fsync < coordinator_commit
+                && coordinator_commit < worker_commit
+                && worker_commit < operation_commit
+        );
+        assert!(!settlement.contains("capture_recovered_lifecycle_signed_broadcast_refanout"));
+        assert!(!settlement.contains("commit_after_publication();\n        output"));
+        let tail = &settlement[coordinator_commit..];
+        assert!(!tail.contains("return "));
+        assert!(!tail.contains(".is_err()"));
+
+        let refanout = scheduler_source
+            .split_once("fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(")
+            .expect("durable Broadcast has one typed refanout transaction")
+            .1
+            .split_once("/// Sign, reserve, claim, and publish the sole recovered Decision Fetch")
+            .expect("durable Broadcast refanout stays a bounded source region")
+            .0;
+        let census = refanout
+            .find("if exact_ready != self.coordinator.ready_index")
+            .expect("refanout authenticates the complete Ready census");
+        let target = refanout
+            .find("work_class == LifecycleWorkClass::Broadcast")
+            .expect("refanout selects one Broadcast without requiring a two-row census");
+        let retained_pair = refanout
+            .find("recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal")
+            .expect("pair recognition comes from the Broadcast carrier's retained child seal");
+        let attest = refanout
+            .find("attest_ready_recovered_lifecycle_signed_broadcast")
+            .expect("refanout authenticates the durable Ready carrier");
+        let full_rows = refanout
+            .find("for ready_ordinal in &exact_ready")
+            .expect("all unrelated Ready work remains in scheduler ranking");
+        let ordinary_sign = refanout
+            .find("attest_ready_recovered_lifecycle_sign(")
+            .expect("an unrelated adjacent Sign uses its ordinary carrier attestation");
+        let claim = refanout
+            .find("self.coordinator.plan_turn(inputs)")
+            .expect("refanout claims through the lifecycle scheduler");
+        let projection = refanout
+            .find("project_claimed_recovered_lifecycle_signed_broadcast_output")
+            .expect("refanout rechecks the claimed durable carrier");
+        let capture = refanout
+            .find("capture_recovered_lifecycle_signed_broadcast_refanout(authority)")
+            .expect("refanout reserves the exact network corridor");
+        let wait = refanout
+            .find("settle_turn(lease, super::TurnOutcome::Blocked(wait))")
+            .expect("successful refanout parks only volatile scheduler state");
+        let commit = refanout
+            .find("output.commit_after_publication()")
+            .expect("fanout commits only after the durable row is parked");
+        assert!(
+            census < target
+                && target < retained_pair
+                && retained_pair < attest
+                && attest < full_rows
+                && full_rows < ordinary_sign
+                && ordinary_sign < claim
+                && claim < projection
+                && projection < capture
+                && capture < wait
+        );
+        assert!(wait < commit);
+        assert!(refanout.contains("rollback_unpublished_turn(&lease)"));
+        assert!(
+            refanout.contains("attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(")
+        );
+        assert!(!refanout.contains("exact_ready.len() == 2"));
+        assert!(!refanout.contains("exact_ready.len() != 2"));
+        assert!(!refanout.contains("persist_exact_successor"));
+        assert!(!refanout.contains("TurnOutcome::Terminal"));
+
         let launched = launch_source
             .split_once("pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {")
             .expect("launched stack has one retained-owner declaration")
@@ -2148,6 +2830,142 @@ mod tests {
             .find("leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1")
             .unwrap();
         assert!(services < completion && completion < ingress);
+        assert_recovered_vote_broadcast_and_sign_settlement_is_restart_closed();
+        assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart_closed();
+    }
+
+    fn assert_recovered_vote_broadcast_and_sign_settlement_is_restart_closed() {
+        let source = include_str!("v2_lifecycle_launch.rs");
+        let settlement = source
+            .split_once(
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
+            )
+            .expect("recovered Prepare Vote has one combined settlement")
+            .1
+            .split_once(
+                "/// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.",
+            )
+            .expect("combined Vote settlement stays bounded")
+            .0;
+        let completion = settlement
+            .find("recovered_lifecycle_sign_completion.take()")
+            .expect("take the guarded worker completion once");
+        let body = settlement
+            .find("prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)")
+            .expect("join the exact launched body owner");
+        let mode = settlement
+            .find("preview.is_vote_broadcast_and_sign_shape()")
+            .expect("accept only Prepare-Broadcast then Commit-Sign");
+        let registry = settlement
+            .find("prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(")
+            .expect("seal the exact two-child registry successor");
+        let transition = settlement
+            .find("prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(")
+            .expect("stage the exact two-child Ledger successor");
+        let operation = settlement
+            .find("output_guard.begin_fail_stop_operation()")
+            .expect("arm fail-stop output before fsync");
+        let fsync = settlement
+            .find("transition.persist_exact_successor().is_err()")
+            .expect("fsync the two-child successor once");
+        let transition_commit = settlement
+            .find("transition.commit_after_publication();")
+            .expect("publish coordinator, registry, and adapter after fsync");
+        let worker_commit = settlement
+            .find("completion.acknowledge_after_publication();")
+            .expect("retire the guarded worker after publication");
+        let operation_commit = settlement
+            .find("operation.complete();")
+            .expect("complete fail-stop ownership last");
+        assert!(
+            completion < body
+                && body < mode
+                && mode < registry
+                && registry < transition
+                && transition < operation
+                && operation < fsync
+                && fsync < transition_commit
+                && transition_commit < worker_commit
+                && worker_commit < operation_commit
+        );
+        assert!(!settlement.contains("project_proposal_exact_output_authority"));
+        assert!(!settlement.contains("capture_recovered_lifecycle_proposal_exact_output"));
+        assert!(!settlement.contains("output.commit_after_publication()"));
+        let tail = &settlement[transition_commit..];
+        assert!(!tail.contains("return "));
+        assert!(!tail.contains(".is_err()"));
+        assert!(!tail.contains('?'));
+    }
+
+    fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart_closed() {
+        let source = include_str!("v2_lifecycle_launch.rs");
+        let settlement = source
+            .split_once(
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
+            )
+            .expect("recovered Proposal has one combined settlement")
+            .1
+            .split_once("/// Refanout one durable recovered signed Broadcast")
+            .expect("combined Proposal settlement stays bounded")
+            .0;
+        let completion = settlement
+            .find("recovered_lifecycle_sign_completion.take()")
+            .expect("take the guarded worker completion once");
+        let body = settlement
+            .find("prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)")
+            .expect("join the exact launched body owner");
+        let output_projection = settlement
+            .find("preview.project_proposal_exact_output_authority()")
+            .expect("project output only from the same adapter preview");
+        let output_capture = settlement
+            .find("capture_recovered_lifecycle_proposal_exact_output(output_authority)")
+            .expect("reserve Proposal control and chunks atomically");
+        let registry = settlement
+            .find("prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(")
+            .expect("seal the exact two-child registry successor");
+        let transition = settlement
+            .find("prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(")
+            .expect("stage the exact two-child Ledger successor");
+        let fsync = settlement
+            .find("transition.persist_exact_successor().is_err()")
+            .expect("fsync the two-child successor once");
+        let transition_commit = settlement
+            .find("transition.commit_after_publication();")
+            .expect("publish coordinator, registry, and adapter after fsync");
+        let worker_commit = settlement
+            .find("completion.acknowledge_after_publication();")
+            .expect("retire the guarded worker after publication");
+        let output_commit = settlement
+            .find("output.commit_after_publication();")
+            .expect("enqueue the reserved atomic batch last");
+        assert!(
+            completion < body
+                && body < output_projection
+                && output_projection < output_capture
+                && output_capture < registry
+                && registry < transition
+                && transition < fsync
+                && fsync < transition_commit
+                && transition_commit < worker_commit
+                && worker_commit < output_commit
+        );
+        assert_eq!(
+            settlement
+                .matches("output.abort_before_publication()")
+                .count(),
+            2,
+            "every fallible post-reservation pre-fsync branch must release the batch"
+        );
+        assert!(
+            settlement
+                .contains("RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)")
+        );
+        assert!(settlement.contains("*recovered_lifecycle_sign_completion = Some(completion)"));
+        assert!(settlement.contains("drop(output);"));
+        let tail = &settlement[transition_commit..];
+        assert!(!tail.contains("return "));
+        assert!(!tail.contains(".is_err()"));
+        assert!(!tail.contains("?"));
     }
 
     #[test]

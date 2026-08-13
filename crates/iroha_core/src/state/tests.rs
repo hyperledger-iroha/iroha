@@ -11116,7 +11116,7 @@ fn autoscale_drain_state_for_test(
         version: 1,
         intent: LaneDrainIntentV1 {
             version: 1,
-            network_id: DEFAULT_TEST_NETWORK_ID,
+            network_id: *DEFAULT_TEST_NETWORK_ID,
             lane_id,
             dataspace_id,
             lane_incarnation,
@@ -15969,346 +15969,55 @@ fn autoscale_transition_failed_internal_lifecycle_does_not_record_cooldown() {
     );
 }
 
-#[test]
-fn autoscale_transition_scale_out_requires_complete_historical_window() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            3,
-            100,
-        ))
-        .expect("apply autoscale history guard test nexus config");
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-
-    let mut state_block = state.block(second.header());
-    state_block.add_committed_fragments(100);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE],
-        "autoscale must not synthesize a hot window from missing canonical runtime history"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "incomplete sample windows must not record an autoscale transition"
-    );
-}
-
-#[test]
-fn autoscale_transition_scale_out_rejects_missing_middle_history_block() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    let mut nexus = autoscale_transition_test_nexus(vec![LaneConfig::default()], 1, 3, 100);
-    nexus.autoscale.scale_out_window_blocks = nonzero!(2_u16);
-    state
-        .set_nexus(nexus)
-        .expect("apply autoscale middle-history guard test nexus config");
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let missing_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    let third = autoscale_signed_block_with_committed_fragments(Some(&missing_second), 300, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
-    let mut state_block = state.block(third.header());
-    state_block.add_committed_fragments(100);
-    let committed_third = ValidBlock::new_unverified_for_tests(third)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_third);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus.lane_catalog.lanes(),
-        &[LaneConfig::default()],
-        "autoscale scale-out must not synthesize samples across a canonical history gap"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "missing middle history must not record a scale-out transition"
-    );
-}
-
-#[test]
-fn autoscale_transition_scale_out_rejects_non_monotonic_timestamps() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            3,
-            100,
-        ))
-        .expect("apply autoscale timestamp guard test nexus config");
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 200, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 150, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
-    let mut state_block = state.block(second.header());
-    state_block.add_committed_fragments(100);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus.lane_catalog.lanes(),
-        &[LaneConfig::default()],
-        "non-monotonic timestamps must not be clamped into a hot scale-out sample"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "invalid timestamp samples must not record a scale-out transition"
-    );
-}
-
-#[test]
-fn autoscale_transition_scale_out_rejects_invalid_runtime_thresholds() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            3,
-            100,
-        ))
-        .expect("apply autoscale invalid-threshold expansion guard test nexus config");
-    state.nexus.write().autoscale.scale_out_latency_ratio = f64::NAN;
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
-    let mut state_block = state.block(second.header());
-    state_block.add_committed_fragments(100);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE],
-        "invalid runtime thresholds must not become permissive scale-out thresholds"
-    );
-    assert_eq!(nexus.autoscale.last_transition_height, 0);
-}
-
-#[test]
-fn autoscale_transition_scale_out_rejects_sub_permille_runtime_thresholds() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            3,
-            100,
-        ))
-        .expect("apply autoscale sub-permille guard test nexus config");
-    {
-        let mut nexus = state.nexus.write();
-        nexus.autoscale.scale_out_latency_ratio = 0.0004;
-        nexus.autoscale.scale_in_latency_ratio = 0.0002;
-        nexus.autoscale.scale_out_utilization_ratio = 0.0004;
-        nexus.autoscale.scale_in_utilization_ratio = 0.0002;
-    }
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
-    let mut state_block = state.block(second.header());
-    state_block.add_committed_fragments(100);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus.lane_catalog.lanes(),
-        &[LaneConfig::default()],
-        "sub-permille runtime thresholds must not become zero-threshold hot scale-out"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "invalid runtime thresholds must not record an autoscale transition"
-    );
-}
-
-#[test]
-fn autoscale_transition_scale_out_rejects_quantized_hysteresis_collapse() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            3,
-            100,
-        ))
-        .expect("apply autoscale quantized-hysteresis guard test nexus config");
-    {
-        let mut nexus = state.nexus.write();
-        nexus.autoscale.scale_out_latency_ratio = 1.00049;
-        nexus.autoscale.scale_in_latency_ratio = 1.0004;
-    }
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 250, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
-    let mut state_block = state.block(second.header());
-    state_block.add_committed_fragments(100);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus.lane_catalog.lanes(),
-        &[LaneConfig::default()],
-        "thresholds that collapse after permille rounding must not permit hot scale-out"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "collapsed effective hysteresis must not record an autoscale transition"
-    );
-}
-
-#[test]
-fn autoscale_transition_scale_out_rejects_runtime_max_lanes_above_safety_cap() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES,
-            100,
-        ))
-        .expect("apply autoscale runtime-cap guard test nexus config");
-    {
-        let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
-        state.nexus.write().autoscale.max_lanes =
-            NonZeroU32::new(cap.saturating_add(1)).expect("cap + 1 remains nonzero");
-    }
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
-    let mut state_block = state.block(second.header());
-    state_block.add_committed_fragments(100);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus.lane_catalog.lanes(),
-        &[LaneConfig::default()],
-        "corrupted runtime max_lanes above the safety cap must not permit hot scale-out"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "invalid runtime lane bounds must not record an autoscale transition"
-    );
-}
-
-#[test]
-fn autoscale_transition_scale_out_rejects_runtime_elastic_range_corruption() {
-    struct CorruptionCase {
-        name: &'static str,
-        lane: LaneConfig,
-        extra_dataspace: Option<DataSpaceId>,
-    }
-
-    let mut malformed = autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
+fn assert_autoscale_rejects_runtime_elastic_range_corruption(
+    direction: AutoscaleElasticRangeDirection,
+) {
+    let scale_in = matches!(direction, AutoscaleElasticRangeDirection::ScaleIn);
+    let mut malformed = autoscale_test_lane(LaneId::new(2));
     malformed.alias = "malformed-elastic-lane".to_owned();
     let other_dataspace = DataSpaceId::new(9);
     let cases = [
-        CorruptionCase {
-            name: "manual-in-range",
-            lane: LaneConfig {
-                id: LaneId::new(2),
-                alias: "manual-elastic-range".to_owned(),
-                ..LaneConfig::default()
-            },
-            extra_dataspace: None,
-        },
-        CorruptionCase {
-            name: "malformed-managed",
-            lane: malformed,
-            extra_dataspace: None,
-        },
-        CorruptionCase {
-            name: "off-default-managed",
-            lane: autoscale_elastic_lane_config(LaneId::new(2), other_dataspace, 1),
-            extra_dataspace: Some(other_dataspace),
-        },
-        CorruptionCase {
-            name: "out-of-range-managed",
-            lane: autoscale_elastic_lane_config(LaneId::new(4), DataSpaceId::UNIVERSAL, 1),
-            extra_dataspace: None,
-        },
+        (
+            "manual-in-range",
+            test_lane(LaneId::new(2), "manual-elastic-range".to_owned()),
+            None,
+        ),
+        ("malformed-managed", malformed, None),
+        (
+            "off-default-managed",
+            autoscale_elastic_lane_config(LaneId::new(2), other_dataspace, 1),
+            Some(other_dataspace),
+        ),
+        (
+            "out-of-range-managed",
+            autoscale_test_lane(LaneId::new(if scale_in { 3 } else { 4 })),
+            None,
+        ),
     ];
 
-    for case in cases {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+    for (name, lane, extra_dataspace) in cases {
+        let (mut state, kura) = blank_state_and_kura_for_testing();
         state
             .set_nexus(autoscale_transition_test_nexus(
                 vec![LaneConfig::default()],
                 1,
-                4,
-                100,
+                if scale_in { 3 } else { 4 },
+                if scale_in { 200 } else { 100 },
             ))
-            .unwrap_or_else(|err| {
-                panic!("{}: apply autoscale test nexus config: {err}", case.name)
-            });
+            .unwrap_or_else(|err| panic!("{name}: apply autoscale test nexus config: {err}"));
+        if scale_in {
+            add_internal_autoscale_lanes_for_testing(
+                &state,
+                vec![autoscale_test_lane(LaneId::new(1))],
+            );
+        }
         {
             let mut nexus = state.nexus.write();
-            if let Some(dataspace) = case.extra_dataspace {
+            if let Some(dataspace) = extra_dataspace {
                 nexus.dataspace_catalog = dataspace_catalog_with_extra(dataspace);
             }
             let mut lanes = nexus.lane_catalog.lanes().to_vec();
-            lanes.push(case.lane.clone());
+            lanes.push(lane.clone());
             let lane_count = lanes
                 .iter()
                 .map(|lane| lane.id.as_u32())
@@ -16319,7 +16028,7 @@ fn autoscale_transition_scale_out_rejects_runtime_elastic_range_corruption() {
                 NonZeroU32::new(lane_count).expect("nonzero lane count"),
                 lanes,
             )
-            .unwrap_or_else(|err| panic!("{}: corrupted test catalog: {err}", case.name));
+            .unwrap_or_else(|err| panic!("{name}: corrupted test catalog: {err}"));
             nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
         }
 
@@ -16328,519 +16037,62 @@ fn autoscale_transition_scale_out_rejects_runtime_elastic_range_corruption() {
         store_committed_autoscale_history_block_for_test(&state, &kura, &first);
 
         let mut state_block = state.block(second.header());
-        state_block.add_committed_fragments(100);
-        let committed_second = ValidBlock::new_unverified_for_tests(second)
-            .commit_unchecked()
-            .unpack(|_| {});
+        if !scale_in {
+            state_block.add_committed_fragments(100);
+        }
+        let committed_second = commit_unchecked_for_testing(second);
         state_block.maybe_apply_nexus_autoscale(&committed_second);
 
         let nexus = state_block.nexus.clone();
-        let actual_lane_ids = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<BTreeSet<_>>();
+        let actual_lane_ids = nexus_lane_id_set_for_test(&nexus);
+        let mut expected_lane_ids = BTreeSet::from([LaneId::SINGLE, lane.id]);
+        if scale_in {
+            expected_lane_ids.insert(LaneId::new(1));
+        }
         assert_eq!(
             actual_lane_ids,
-            BTreeSet::from([LaneId::SINGLE, case.lane.id]),
-            "{} corruption must not let hot scale-out add another elastic lane",
-            case.name
-        );
-        assert_eq!(
-            nexus.autoscale.last_transition_height, 0,
-            "{} corruption must not record a scale-out transition",
-            case.name
-        );
-    }
-}
-
-#[test]
-fn autoscale_transition_scale_in_fails_closed_when_default_route_misbound() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 1);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            2,
-            200,
-        ))
-        .expect("apply autoscale default-route contraction guard test nexus config");
-    state
-        .apply_lane_lifecycle_with_options(
-            &iroha_data_model::nexus::LaneLifecyclePlan {
-                additions: vec![elastic_lane],
-                retire: Vec::new(),
-            },
-            false,
-            true,
-        )
-        .expect("seed internally managed elastic lane");
-    {
-        let mut nexus = state.nexus.write();
-        nexus.routing_policy.default_dataspace = DataSpaceId::new(9);
-    }
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
-    let mut state_block = state.block(second.header());
-    insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE, LaneId::new(1)],
-        "autoscale scale-in must not retire lanes when the default route no longer resolves"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "invalid default-route capacity must not record a scale-in transition"
-    );
-}
-
-#[test]
-fn autoscale_transition_scale_in_rejects_runtime_elastic_range_corruption() {
-    struct CorruptionCase {
-        name: &'static str,
-        lane: LaneConfig,
-        extra_dataspace: Option<DataSpaceId>,
-    }
-
-    let mut malformed = autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
-    malformed.alias = "malformed-elastic-lane".to_owned();
-    let other_dataspace = DataSpaceId::new(9);
-    let cases = [
-        CorruptionCase {
-            name: "manual-in-range",
-            lane: LaneConfig {
-                id: LaneId::new(2),
-                alias: "manual-elastic-range".to_owned(),
-                ..LaneConfig::default()
-            },
-            extra_dataspace: None,
-        },
-        CorruptionCase {
-            name: "malformed-managed",
-            lane: malformed,
-            extra_dataspace: None,
-        },
-        CorruptionCase {
-            name: "off-default-managed",
-            lane: autoscale_elastic_lane_config(LaneId::new(2), other_dataspace, 1),
-            extra_dataspace: Some(other_dataspace),
-        },
-        CorruptionCase {
-            name: "out-of-range-managed",
-            lane: autoscale_elastic_lane_config(LaneId::new(3), DataSpaceId::UNIVERSAL, 1),
-            extra_dataspace: None,
-        },
-    ];
-
-    for case in cases {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        state
-            .set_nexus(autoscale_transition_test_nexus(
-                vec![LaneConfig::default()],
-                1,
-                3,
-                200,
-            ))
-            .unwrap_or_else(|err| {
-                panic!("{}: apply autoscale test nexus config: {err}", case.name)
-            });
-        state
-            .apply_lane_lifecycle_with_options(
-                &iroha_data_model::nexus::LaneLifecyclePlan {
-                    additions: vec![autoscale_elastic_lane_config(
-                        LaneId::new(1),
-                        DataSpaceId::UNIVERSAL,
-                        1,
-                    )],
-                    retire: Vec::new(),
-                },
-                false,
-                true,
-            )
-            .unwrap_or_else(|err| {
-                panic!("{}: seed internally managed elastic lane: {err}", case.name)
-            });
-        {
-            let mut nexus = state.nexus.write();
-            if let Some(dataspace) = case.extra_dataspace {
-                nexus.dataspace_catalog = dataspace_catalog_with_extra(dataspace);
+            expected_lane_ids,
+            "{}",
+            if scale_in {
+                format!(
+                    "{name} corruption must not let cold scale-in retire a healthy managed lane"
+                )
+            } else {
+                format!("{name} corruption must not let hot scale-out add another elastic lane")
             }
-            let mut lanes = nexus.lane_catalog.lanes().to_vec();
-            lanes.push(case.lane.clone());
-            let lane_count = lanes
-                .iter()
-                .map(|lane| lane.id.as_u32())
-                .max()
-                .expect("corruption test catalog is non-empty")
-                .saturating_add(1);
-            nexus.lane_catalog = LaneCatalog::new(
-                NonZeroU32::new(lane_count).expect("nonzero lane count"),
-                lanes,
-            )
-            .unwrap_or_else(|err| panic!("{}: corrupted test catalog: {err}", case.name));
-            nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
-        }
-
-        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
-        let mut state_block = state.block(second.header());
-        let committed_second = ValidBlock::new_unverified_for_tests(second)
-            .commit_unchecked()
-            .unpack(|_| {});
-        state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-        let nexus = state_block.nexus.clone();
-        let actual_lane_ids = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            actual_lane_ids,
-            BTreeSet::from([LaneId::SINGLE, LaneId::new(1), case.lane.id]),
-            "{} corruption must not let cold scale-in retire a healthy managed lane",
-            case.name
         );
         assert_eq!(
-            nexus.autoscale.last_transition_height, 0,
-            "{} corruption must not record a scale-in transition",
-            case.name
+            nexus.autoscale.last_transition_height,
+            0,
+            "{name} corruption must not record a {} transition",
+            if scale_in { "scale-in" } else { "scale-out" }
         );
     }
 }
 
-#[test]
-fn autoscale_transition_scale_in_requires_complete_historical_window() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 1);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            2,
-            200,
-        ))
-        .expect("apply autoscale history contraction guard test nexus config");
-    state
-        .apply_lane_lifecycle_with_options(
-            &iroha_data_model::nexus::LaneLifecyclePlan {
-                additions: vec![elastic_lane],
-                retire: Vec::new(),
-            },
-            false,
-            true,
-        )
-        .expect("seed internally managed elastic lane");
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-
-    let mut state_block = state.block(second.header());
-    insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE, LaneId::new(1)],
-        "autoscale scale-in must not synthesize a cold window from missing canonical runtime history"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "incomplete scale-in sample windows must not record an autoscale transition"
-    );
+fn autoscale_transition_runtime_elastic_range_corruption_matrix() {
+    for direction in [
+        AutoscaleElasticRangeDirection::ScaleOut,
+        AutoscaleElasticRangeDirection::ScaleIn,
+    ] {
+        assert_autoscale_rejects_runtime_elastic_range_corruption(direction);
+    }
 }
 
-#[test]
-fn autoscale_transition_scale_in_rejects_missing_middle_history_block() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 1);
-    let mut nexus = autoscale_transition_test_nexus(vec![LaneConfig::default()], 1, 2, 200);
-    nexus.autoscale.scale_in_window_blocks = nonzero!(2_u16);
-    state
-        .set_nexus(nexus)
-        .expect("apply autoscale middle-history contraction guard test nexus config");
-    state
-        .apply_lane_lifecycle_with_options(
-            &iroha_data_model::nexus::LaneLifecyclePlan {
-                additions: vec![elastic_lane],
-                retire: Vec::new(),
-            },
-            false,
-            true,
-        )
-        .expect("seed internally managed elastic lane");
 
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let missing_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    let third = autoscale_signed_block_with_committed_fragments(Some(&missing_second), 300, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
 
-    let mut state_block = state.block(third.header());
-    let committed_third = ValidBlock::new_unverified_for_tests(third)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_third);
 
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE, LaneId::new(1)],
-        "autoscale scale-in must not synthesize samples across a canonical history gap"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "missing middle history must not record a scale-in transition"
-    );
-}
 
-#[test]
-fn autoscale_transition_scale_in_rejects_non_monotonic_timestamps() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 1);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            2,
-            200,
-        ))
-        .expect("apply autoscale timestamp contraction guard test nexus config");
-    state
-        .apply_lane_lifecycle_with_options(
-            &iroha_data_model::nexus::LaneLifecyclePlan {
-                additions: vec![elastic_lane],
-                retire: Vec::new(),
-            },
-            false,
-            true,
-        )
-        .expect("seed internally managed elastic lane");
 
-    let first = autoscale_signed_block_with_committed_fragments(None, 200, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 150, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
 
-    let mut state_block = state.block(second.header());
-    insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
 
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE, LaneId::new(1)],
-        "non-monotonic timestamps must not be clamped into a cold scale-in sample"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "invalid timestamp samples must not record a scale-in transition"
-    );
-}
 
-#[test]
-fn autoscale_transition_scale_in_rejects_invalid_runtime_thresholds() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 1);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            2,
-            200,
-        ))
-        .expect("apply autoscale invalid-threshold contraction guard test nexus config");
-    state
-        .apply_lane_lifecycle_with_options(
-            &iroha_data_model::nexus::LaneLifecyclePlan {
-                additions: vec![elastic_lane],
-                retire: Vec::new(),
-            },
-            false,
-            true,
-        )
-        .expect("seed internally managed elastic lane");
-    state.nexus.write().autoscale.scale_in_utilization_ratio = f64::INFINITY;
 
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
 
-    let mut state_block = state.block(second.header());
-    insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
 
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE, LaneId::new(1)],
-        "invalid runtime thresholds must not become permissive scale-in thresholds"
-    );
-    assert_eq!(nexus.autoscale.last_transition_height, 0);
-}
 
-#[test]
-fn autoscale_transition_scale_in_counts_current_committed_fragments_as_load() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 1);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default()],
-            1,
-            2,
-            200,
-        ))
-        .expect("apply autoscale current-fragment contraction guard test nexus config");
-    state
-        .apply_lane_lifecycle_with_options(
-            &iroha_data_model::nexus::LaneLifecyclePlan {
-                additions: vec![elastic_lane],
-                retire: Vec::new(),
-            },
-            false,
-            true,
-        )
-        .expect("seed internally managed elastic lane");
 
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
 
-    let mut state_block = state.block(second.header());
-    state_block.add_committed_fragments(100);
-    let committed_second = ValidBlock::new_unverified_for_tests(second)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_second);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE, LaneId::new(1)],
-        "current committed fragments must prevent scale-in under hidden block-local load"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "suppressed scale-in under current committed-fragment load must not record a transition"
-    );
-}
-
-#[test]
-fn autoscale_transition_scale_in_counts_historical_committed_fragments_as_load() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-    let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 1);
-    let mut nexus = autoscale_transition_test_nexus(vec![LaneConfig::default()], 1, 2, 200);
-    nexus.autoscale.scale_in_window_blocks = nonzero!(2_u16);
-    state
-        .set_nexus(nexus)
-        .expect("apply autoscale historical-fragment contraction guard test nexus config");
-    state
-        .apply_lane_lifecycle_with_options(
-            &iroha_data_model::nexus::LaneLifecyclePlan {
-                additions: vec![elastic_lane],
-                retire: Vec::new(),
-            },
-            false,
-            true,
-        )
-        .expect("seed internally managed elastic lane");
-
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 100);
-    let third = autoscale_signed_block_with_committed_fragments(Some(&second), 300, 0);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-    store_committed_autoscale_history_block_for_test(&state, &kura, &second);
-
-    let mut state_block = state.block(third.header());
-    let committed_third = ValidBlock::new_unverified_for_tests(third)
-        .commit_unchecked()
-        .unpack(|_| {});
-    state_block.maybe_apply_nexus_autoscale(&committed_third);
-
-    let nexus = state_block.nexus.clone();
-    assert_eq!(
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| lane.id)
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE, LaneId::new(1)],
-        "persisted committed fragments must prevent scale-in under recent hidden load"
-    );
-    assert_eq!(
-        nexus.autoscale.last_transition_height, 0,
-        "suppressed scale-in under historical committed-fragment load must not record a transition"
-    );
-}
 
 #[test]
 fn autoscale_transition_scale_in_ignores_unrelated_manual_lanes_at_min_capacity() {

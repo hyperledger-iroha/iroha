@@ -22,6 +22,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
+import tarfile
 import tempfile
 import time
 from typing import Any, BinaryIO
@@ -77,6 +79,17 @@ _SIGNATURE_ARCHIVE_NAMES = {
     "git": "identity-git",
     "ssh_keygen": "identity-ssh-keygen",
 }
+_SIGNATURE_ARCHIVE_IDS = {
+    "cargo_lock": "release-identity.cargo-lock.v1",
+    "git": "release-identity.git.v1",
+    "raw_commit": "release-identity.raw-commit.v1",
+    "ssh_allowed_signers": "release-identity.ssh-allowed-signers.v1",
+    "ssh_keygen": "release-identity.ssh-keygen.v1",
+    "ssh_revocation": "release-identity.ssh-revocation.v1",
+    "verify_transcript": "release-identity.verify-transcript.v1",
+}
+_SIGNATURE_ATTESTATION_FORMAT = "iroha-sumeragi-v2-release-identity-attestation"
+_SIGNATURE_TRANSCRIPT_FORMAT = "iroha-sumeragi-v2-release-identity-transcript"
 _SIGNATURE_DATA_MODE = 0o400
 _SIGNATURE_TOOL_MODE = 0o500
 _SIGNATURE_DIRECTORY_MODE = 0o700
@@ -85,7 +98,10 @@ _MAX_RAW_COMMIT_BYTES = 16 * 1024 * 1024
 _MAX_LOCK_BYTES = 128 * 1024 * 1024
 _MAX_POLICY_BYTES = 16 * 1024 * 1024
 _MAX_HELPER_BYTES = 16 * 1024 * 1024
+_MAX_SDK_MANIFEST_BYTES = 256 * 1024 * 1024
 _MAX_TOOL_BYTES = 512 * 1024 * 1024
+_MAX_FRAMEWORK_RUNTIME_BYTES = 4 * 1024 * 1024 * 1024
+_MAX_FRAMEWORK_RUNTIME_MEMBERS = 250_000
 _MAX_RUNNER_TOOL_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_REPLAY_OUTPUT_BYTES = 4 * 1024 * 1024
 _MAX_LOCALNET_MANIFEST_INDEX_BYTES = 1024 * 1024
@@ -105,6 +121,21 @@ _MAX_PREBUILT_BINARY_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_RELEASE_TSV_BYTES = 16 * 1024 * 1024
 _MAX_RELEASE_TEXT_BYTES = 256 * 1024 * 1024
 _MAX_RELEASE_JSON_BYTES = 128 * 1024 * 1024
+_MAX_SDK_INVENTORY_BYTES = 256 * 1024 * 1024
+_MAX_SDK_ARCHIVE_BYTES = 64 * 1024 * 1024 * 1024
+_MAX_SDK_RECORDS = 250_000
+_SDK_GRADLE_DISTRIBUTION_URL = (
+    "https://services.gradle.org/distributions/gradle-9.3.0-bin.zip"
+)
+_SDK_GRADLE_WRAPPER_CACHE_KEY = "79n14ral3mx1ozqr3csh2u872"
+_SDK_GRADLE_LAUNCHER_ARCHIVE_NAME = (
+    "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
+    f"{_SDK_GRADLE_WRAPPER_CACHE_KEY}/gradle-9.3.0/bin/gradle"
+)
+_SDK_SOURCE_MANIFEST_FORMAT = "iroha-sumeragi-v2-sdk-dependency-sources"
+_SDK_SOURCE_INVENTORY_FORMAT = (
+    "iroha-sumeragi-v2-sdk-dependency-source-inventory"
+)
 _MAX_TLAPS_RESOURCE_RECORDS = 1_000_000
 _PREBUILT_MANIFEST_NAME = ".sumeragi-v2-prebuilt-binaries.tsv"
 _PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
@@ -146,7 +177,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "a7690b9ff5910c1d32b7b6a0671d85f5392f787a2c2bb328f5bb279963d4dda3"
+    "d6f00da22fd0a17d07615d8892a2680124d267f5c3174c9a538792c5f9f1cd32"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -163,9 +194,21 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
         _SIGNATURE_DATA_MODE,
     ),
     "runtime_helper": ("copy-release-runtime.py", _SIGNATURE_DATA_MODE),
+    "sdk_dependency_bundle_manifest": (
+        "sdk-dependency-bundle-manifest.json",
+        _SIGNATURE_DATA_MODE,
+    ),
     "revocation": ("bootstrap-revocation", _SIGNATURE_DATA_MODE),
     "runner_tool_manifest": ("runner-tool-manifest.json", _SIGNATURE_DATA_MODE),
     "ssh_keygen": ("ssh-keygen", _SIGNATURE_TOOL_MODE),
+}
+_RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
+    "write_sumeragi_v2_release_receipt_corridor_log.py": (
+        "bc6c901f9e011b38ba49392e99457bfd21eb365c8744c144887907229a2ee117"
+    ),
+    "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
+        "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+    ),
 }
 _BOOTSTRAP_IDENTITY_ARCHIVES = {
     "cargo_lock": ("identity-Cargo.lock", _SIGNATURE_DATA_MODE),
@@ -1540,6 +1583,60 @@ def _decode_command_record(value: Any, name: str) -> dict[str, Any]:
     return record
 
 
+def _decode_sanitized_operation(
+    value: Any,
+    name: str,
+    *,
+    operation_id: str,
+    exit_status: int,
+) -> dict[str, Any]:
+    record = _require_exact_json_fields(
+        value,
+        {
+            "operation_id",
+            "exit_status",
+            "stdout_sha256",
+            "stdout_size_bytes",
+            "stderr_sha256",
+            "stderr_size_bytes",
+        },
+        name,
+    )
+    if (
+        record["operation_id"] != operation_id
+        or type(record["exit_status"]) is not int
+        or record["exit_status"] != exit_status
+    ):
+        raise ReceiptError(f"{name} has the wrong operation binding")
+    for stream in ("stdout", "stderr"):
+        digest = record[f"{stream}_sha256"]
+        size = record[f"{stream}_size_bytes"]
+        if (
+            not isinstance(digest, str)
+            or _DIGEST_RE.fullmatch(digest) is None
+            or type(size) is not int
+            or size < 0
+            or size > _MAX_SIGNATURE_JSON_BYTES
+        ):
+            raise ReceiptError(f"{name} has invalid {stream} metadata")
+    return record
+
+
+def _operation_matches_result(
+    operation: dict[str, Any],
+    status: int,
+    stdout: bytes,
+    stderr: bytes,
+) -> bool:
+    return (
+        operation["exit_status"] == status
+        and operation["stdout_sha256"] == hashlib.sha256(stdout).hexdigest()
+        and operation["stdout_size_bytes"] == len(stdout)
+        and operation["stderr_sha256"] == hashlib.sha256(stderr).hexdigest()
+        and operation["stderr_size_bytes"] == len(stderr)
+    )
+
+
 def _verification_metadata(data: bytes, name: str) -> tuple[str, str, str, str]:
     if not data.endswith(b"\0\n"):
         raise ReceiptError(f"{name} has malformed Git signature metadata")
@@ -2243,46 +2340,55 @@ def _validate_signature_evidence(
     )
     _require_exact_json_fields(
         attestation,
-        {
-            "schema_version",
-            "release_identity",
-            "release_identity_sha256",
-            "tools",
-            "policies",
-            "verification",
-            "evidence",
-        },
+        {"format", "schema_version", "candidate", "archives"},
         "release signature attestation",
     )
-    if type(attestation["schema_version"]) is not int or attestation["schema_version"] != 2:
-        raise ReceiptError("release signature attestation has the wrong schema version")
     if (
-        attestation["release_identity"] != candidate
-        or attestation["release_identity_sha256"]
-        != candidate_snapshot.sha256
+        attestation["format"] != _SIGNATURE_ATTESTATION_FORMAT
+        or type(attestation["schema_version"]) is not int
+        or attestation["schema_version"] != 3
     ):
+        raise ReceiptError("release signature attestation has the wrong schema version")
+    attested_candidate = _require_exact_json_fields(
+        attestation["candidate"],
+        {
+            "commit_oid",
+            "tree_oid",
+            "source_manifest_sha256",
+            "cargo_lock_sha256",
+            "release_identity_sha256",
+        },
+        "release signature attestation candidate",
+    )
+    if attested_candidate != {
+        "commit_oid": candidate["head_commit"],
+        "tree_oid": candidate["head_tree"],
+        "source_manifest_sha256": candidate[
+            "workspace_source_manifest_sha256"
+        ],
+        "cargo_lock_sha256": candidate["cargo_lock_sha256"],
+        "release_identity_sha256": candidate_snapshot.sha256,
+    }:
         raise ReceiptError("release signature attestation is not bound to exact candidate bytes")
 
-    expected_archive_names = {
-        label: archive_name
-        for label, archive_name in _SIGNATURE_ARCHIVE_NAMES.items()
-        if label != "attestation"
-    }
     evidence_records = _require_exact_json_fields(
-        attestation["evidence"],
-        set(expected_archive_names),
+        attestation["archives"],
+        set(_SIGNATURE_ARCHIVE_IDS),
         "release signature attestation evidence",
     )
-    for label, archive_name in expected_archive_names.items():
+    for label, archive_id in _SIGNATURE_ARCHIVE_IDS.items():
         mode = (
             _SIGNATURE_TOOL_MODE if label in {"git", "ssh_keygen"} else _SIGNATURE_DATA_MODE
         )
-        expected_record = _artifact_metadata(
-            archives[label]["data"], archive_name, mode
-        )
+        expected_record = {
+            "archive_id": archive_id,
+            "mode": f"{mode:04o}",
+            "sha256": archive_digests[label],
+            "size_bytes": len(archives[label]["data"]),
+        }
         record = _require_exact_json_fields(
             evidence_records[label],
-            {"archive_name", "mode", "sha256", "size_bytes"},
+            {"archive_id", "mode", "sha256", "size_bytes"},
             f"release signature attestation evidence for {label}",
         )
         if type(record["size_bytes"]) is not int or record != expected_record:
@@ -2290,263 +2396,48 @@ def _validate_signature_evidence(
                 f"release signature attestation evidence for {label} is not exact"
             )
 
-    tools = _require_exact_json_fields(
-        attestation["tools"], {"git", "ssh_keygen"}, "attested release tools"
-    )
-    _validate_tool_metadata(
-        tools["git"],
-        name="attested Git tool",
-        archive=archives["git"],
-        archive_name=_SIGNATURE_ARCHIVE_NAMES["git"],
-        protected_sha256=protected_git,
-    )
-    _validate_tool_metadata(
-        tools["ssh_keygen"],
-        name="attested ssh-keygen tool",
-        archive=archives["ssh_keygen"],
-        archive_name=_SIGNATURE_ARCHIVE_NAMES["ssh_keygen"],
-        protected_sha256=protected_ssh,
-    )
-
-    policies = _require_exact_json_fields(
-        attestation["policies"],
-        {
-            "expected_signer_fingerprint",
-            "signature_format",
-            "ssh_allowed_signers",
-            "ssh_revocation",
-        },
-        "attested release policies",
-    )
-    expected_policies = {
-        "expected_signer_fingerprint": protected_fingerprint,
-        "signature_format": "ssh",
-        "ssh_allowed_signers": _protected_metadata(
-            archives["ssh_allowed_signers"]["data"],
-            _SIGNATURE_ARCHIVE_NAMES["ssh_allowed_signers"],
-            _SIGNATURE_DATA_MODE,
-            protected_allowed,
-        ),
-        "ssh_revocation": _protected_metadata(
-            archives["ssh_revocation"]["data"],
-            _SIGNATURE_ARCHIVE_NAMES["ssh_revocation"],
-            _SIGNATURE_DATA_MODE,
-            protected_revocation,
-        ),
-    }
-    for policy_name in ("ssh_allowed_signers", "ssh_revocation"):
-        policy_record = _require_exact_json_fields(
-            policies[policy_name],
-            {
-                "archive_name",
-                "mode",
-                "observed_sha256",
-                "protected_sha256",
-                "size_bytes",
-            },
-            f"attested {policy_name} policy",
-        )
-        if type(policy_record["size_bytes"]) is not int:
-            raise ReceiptError(f"attested {policy_name} policy has a non-integer size")
-    if policies != expected_policies:
-        raise ReceiptError("attested release policies do not match out-of-band trust policy")
-
-    verification = _require_exact_json_fields(
-        attestation["verification"],
-        {
-            "status",
-            "signer_fingerprint",
-            "primary_key_fingerprint",
-            "allowed_signers_principal",
-        },
-        "attested release verification",
-    )
-    if (
-        verification["status"] != "G"
-        or verification["signer_fingerprint"] != protected_fingerprint
-        or verification["primary_key_fingerprint"] != ""
-        or not isinstance(verification["allowed_signers_principal"], str)
-        or not verification["allowed_signers_principal"]
-        or any(
-            ord(character) < 0x20 or ord(character) == 0x7F
-            for character in verification["allowed_signers_principal"]
-        )
-    ):
-        raise ReceiptError("attested release verification is not one exact trusted signer")
-
     transcript = _decode_canonical_json(
         archives["verify_transcript"]["data"], "release signature transcript"
     )
     _require_exact_json_fields(
         transcript,
-        {
-            "schema_version",
-            "archive_names",
-            "candidate_commit_oid",
-            "environment",
-            "policy_overrides",
-            "policies",
-            "replay",
-            "tools",
-            "commands",
-            "tool_probes",
-        },
+        {"format", "schema_version", "archive_ids", "candidate_commit_oid", "operations"},
         "release signature transcript",
     )
-    if type(transcript["schema_version"]) is not int or transcript["schema_version"] != 2:
+    if (
+        transcript["format"] != _SIGNATURE_TRANSCRIPT_FORMAT
+        or type(transcript["schema_version"]) is not int
+        or transcript["schema_version"] != 3
+    ):
         raise ReceiptError("release signature transcript has the wrong schema version")
-    if transcript["archive_names"] != expected_archive_names:
+    if transcript["archive_ids"] != _SIGNATURE_ARCHIVE_IDS:
         raise ReceiptError("release signature transcript archive mapping is not exact")
     if transcript["candidate_commit_oid"] != candidate["head_commit"]:
         raise ReceiptError("release signature transcript does not use the immutable candidate OID")
-    if transcript["tools"] != tools or transcript["policies"] != policies:
-        raise ReceiptError("release signature transcript disagrees with its attestation")
     expected_environment = _closed_replay_environment(directory)
-    if transcript["environment"] != expected_environment:
-        raise ReceiptError("release signature transcript environment is not closed")
-
-    commands = _require_exact_json_fields(
-        transcript["commands"],
-        {"show_signature_metadata", "verify_commit"},
-        "release signature transcript commands",
+    operations = _require_exact_json_fields(
+        transcript["operations"],
+        {"show_signature_metadata", "verify_commit", "ssh_keygen_usage"},
+        "release signature transcript operations",
     )
-    verify_record = _decode_command_record(
-        commands["verify_commit"], "release verify-commit command"
+    verify_record = _decode_sanitized_operation(
+        operations["verify_commit"],
+        "release verify-commit operation",
+        operation_id="git.verify-commit.ssh.v1",
+        exit_status=0,
     )
-    show_record = _decode_command_record(
-        commands["show_signature_metadata"], "release signature-metadata command"
+    show_record = _decode_sanitized_operation(
+        operations["show_signature_metadata"],
+        "release signature-metadata operation",
+        operation_id="git.show-signature-metadata.ssh.v1",
+        exit_status=0,
     )
-    probes = _require_exact_json_fields(
-        transcript["tool_probes"],
-        {"ssh_keygen_usage"},
-        "release signature transcript probes",
+    ssh_probe = _decode_sanitized_operation(
+        operations["ssh_keygen_usage"],
+        "release ssh-keygen operation",
+        operation_id="ssh-keygen.usage-probe.v1",
+        exit_status=1,
     )
-    ssh_probe = _decode_command_record(
-        probes["ssh_keygen_usage"], "release ssh-keygen probe"
-    )
-
-    verify_argv = verify_record["argv"]
-    if len(verify_argv) < 4 or verify_argv[-3:] != [
-        "verify-commit",
-        "--raw",
-        candidate["head_commit"],
-    ]:
-        raise ReceiptError("historical verify-commit did not use the immutable candidate OID")
-    staged_git = _historical_stage_path(
-        verify_argv[0], directory, _SIGNATURE_ARCHIVE_NAMES["git"], "historical Git"
-    )
-    historical_config = verify_argv[1:-3]
-    if len(historical_config) != 16:
-        raise ReceiptError("historical Git signature policy has the wrong arity")
-    assignments = {}
-    for index in (5, 7, 9):
-        key, marker, value = historical_config[index].partition("=")
-        if not marker:
-            raise ReceiptError("historical Git signature policy lacks a path assignment")
-        assignments[key] = value
-    staged_ssh = _historical_stage_path(
-        assignments.get("gpg.ssh.program", ""),
-        directory,
-        _SIGNATURE_ARCHIVE_NAMES["ssh_keygen"],
-        "historical ssh-keygen",
-    )
-    staged_allowed = _historical_stage_path(
-        assignments.get("gpg.ssh.allowedSignersFile", ""),
-        directory,
-        _SIGNATURE_ARCHIVE_NAMES["ssh_allowed_signers"],
-        "historical allowed-signers policy",
-    )
-    staged_revocation = _historical_stage_path(
-        assignments.get("gpg.ssh.revocationFile", ""),
-        directory,
-        _SIGNATURE_ARCHIVE_NAMES["ssh_revocation"],
-        "historical revocation policy",
-    )
-    expected_historical_config = _signature_config(
-        str(staged_ssh), str(staged_allowed), str(staged_revocation)
-    )
-    if (
-        historical_config != expected_historical_config
-        or transcript["policy_overrides"] != expected_historical_config
-        or show_record["argv"]
-        != [
-            str(staged_git),
-            *expected_historical_config,
-            "show",
-            "--no-patch",
-            "--format=%G?%x00%GF%x00%GP%x00%GS%x00",
-            candidate["head_commit"],
-        ]
-        or ssh_probe["argv"] != [str(staged_ssh), "-?"]
-    ):
-        raise ReceiptError("historical signature command mapping is not canonical")
-
-    placeholder = "${EVIDENCE_DIRECTORY}"
-    replay_config = _signature_config(
-        f"{placeholder}/{_SIGNATURE_ARCHIVE_NAMES['ssh_keygen']}",
-        f"{placeholder}/{_SIGNATURE_ARCHIVE_NAMES['ssh_allowed_signers']}",
-        f"{placeholder}/{_SIGNATURE_ARCHIVE_NAMES['ssh_revocation']}",
-    )
-    replay = _require_exact_json_fields(
-        transcript["replay"],
-        {
-            "candidate_root",
-            "evidence_directory",
-            "environment",
-            "policy_overrides",
-        },
-        "release signature replay mapping",
-    )
-    replay_environment = {
-        key: value.replace(str(directory), placeholder)
-        for key, value in expected_environment.items()
-    }
-    if replay != {
-        "candidate_root": "${CANDIDATE_ROOT}",
-        "evidence_directory": placeholder,
-        "environment": replay_environment,
-        "policy_overrides": replay_config,
-    }:
-        raise ReceiptError("release signature replay mapping is not canonical")
-    placeholder_git = f"{placeholder}/{_SIGNATURE_ARCHIVE_NAMES['git']}"
-    placeholder_ssh = f"{placeholder}/{_SIGNATURE_ARCHIVE_NAMES['ssh_keygen']}"
-    if (
-        verify_record["replay_argv"]
-        != [
-            placeholder_git,
-            *replay_config,
-            "verify-commit",
-            "--raw",
-            candidate["head_commit"],
-        ]
-        or show_record["replay_argv"]
-        != [
-            placeholder_git,
-            *replay_config,
-            "show",
-            "--no-patch",
-            "--format=%G?%x00%GF%x00%GP%x00%GS%x00",
-            candidate["head_commit"],
-        ]
-        or ssh_probe["replay_argv"] != [placeholder_ssh, "-?"]
-    ):
-        raise ReceiptError("release transcript replay argument vectors are not canonical")
-    if verify_record["exit_status"] != 0 or show_record["exit_status"] != 0:
-        raise ReceiptError("historical Git signature verification did not succeed")
-    if ssh_probe["exit_status"] < 0:
-        raise ReceiptError("historical ssh-keygen probe did not execute")
-    if show_record["_stderr_bytes"]:
-        raise ReceiptError("historical Git signature metadata has unexpected stderr")
-    historical_metadata = _verification_metadata(
-        show_record["_stdout_bytes"], "historical Git signature metadata"
-    )
-    if historical_metadata != (
-        verification["status"],
-        verification["signer_fingerprint"],
-        verification["primary_key_fingerprint"],
-        verification["allowed_signers_principal"],
-    ):
-        raise ReceiptError("historical Git metadata disagrees with its attestation")
 
     raw_commit = archives["raw_commit"]["data"]
     _validate_raw_commit(raw_commit, candidate)
@@ -2608,7 +2499,7 @@ def _validate_signature_evidence(
     )
     if replay_raw_stderr or replay_raw != raw_commit:
         raise ReceiptError("archived Git raw commit replay does not match its archive")
-    verify_status, _, _ = _run_bounded_replay(
+    verify_status, verify_stdout, verify_stderr = _run_bounded_replay(
         git,
         [*actual_config, "verify-commit", "--raw", candidate["head_commit"]],
         cwd=root,
@@ -2617,6 +2508,12 @@ def _validate_signature_evidence(
     )
     if verify_status != 0:
         raise ReceiptError("archived Git cryptographic signature replay failed")
+    if not _operation_matches_result(
+        verify_record, verify_status, verify_stdout, verify_stderr
+    ):
+        raise ReceiptError(
+            "archived Git verify-commit replay disagrees with sanitized transcript"
+        )
     replay_show, replay_show_stderr = _run_required_replay(
         git,
         [
@@ -2636,8 +2533,31 @@ def _validate_signature_evidence(
     replay_metadata = _verification_metadata(
         replay_show, "archived Git signature metadata replay"
     )
-    if replay_metadata != historical_metadata:
-        raise ReceiptError("archived Git signature replay changed signer metadata")
+    if (
+        replay_metadata[1] != protected_fingerprint
+        or not _operation_matches_result(
+            show_record, 0, replay_show, replay_show_stderr
+        )
+    ):
+        raise ReceiptError(
+            "archived Git signature replay disagrees with protected policy or transcript"
+        )
+    ssh_probe_status, ssh_probe_stdout, ssh_probe_stderr = _run_bounded_replay(
+        archives["ssh_keygen"]["path"],
+        ["-?"],
+        cwd=directory,
+        environment=expected_environment,
+        name="archived ssh-keygen usage probe",
+        executable_contract=_signature_archive_path_contract(
+            archives["ssh_keygen"]
+        ),
+    )
+    if not _operation_matches_result(
+        ssh_probe, ssh_probe_status, ssh_probe_stdout, ssh_probe_stderr
+    ):
+        raise ReceiptError(
+            "archived ssh-keygen replay disagrees with sanitized transcript"
+        )
     if (
         require_ascii_line(
             ["rev-parse", "--verify", "HEAD^{commit}"], "final HEAD commit"
@@ -2703,9 +2623,7 @@ def _validate_signature_evidence(
         "candidate_tree_oid": candidate["head_tree"],
         "signer_fingerprint": protected_fingerprint,
         "primary_key_fingerprint": "",
-        "allowed_signers_principal": verification["allowed_signers_principal"],
-        "release_root": str(root),
-        "archive_directory": str(directory),
+        "allowed_signers_principal": replay_metadata[3],
         "trust_policy": {
             "git_sha256": protected_git,
             "ssh_keygen_sha256": protected_ssh,
@@ -2713,13 +2631,9 @@ def _validate_signature_evidence(
             "revocation_sha256": protected_revocation,
             "signer_fingerprint": protected_fingerprint,
         },
-        "attested_tools": tools,
-        "attested_policies": policies,
         "replay": {
             "performed": True,
-            "candidate_root_placeholder": replay["candidate_root"],
-            "evidence_directory_placeholder": replay["evidence_directory"],
-            "archive_names": expected_archive_names,
+            "archive_ids": dict(_SIGNATURE_ARCHIVE_IDS),
         },
     }
     receipt_archives = {
@@ -2782,7 +2696,7 @@ def _bootstrap_identity_archive_names() -> dict[str, str]:
     }
 
 
-def _validate_bootstrap_identity_documents(
+def _validate_legacy_bootstrap_identity_documents(
     *,
     directory: Path,
     identity: dict[str, Any],
@@ -3108,6 +3022,530 @@ def _validate_bootstrap_identity_documents(
     return attestation, transcript, verification
 
 
+def _validate_bootstrap_identity_documents(
+    *,
+    directory: Path,
+    identity: dict[str, Any],
+    identity_snapshot: EvidenceSnapshot,
+    snapshots: dict[str, EvidenceSnapshot],
+    expected_signer_fingerprint: str,
+    trusted_digests: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Validate the path-free bootstrap identity documents from archived bytes."""
+
+    del directory
+    attestation = _decode_canonical_json(
+        snapshots["identity_attestation"].data, "bootstrap identity attestation"
+    )
+    transcript = _decode_canonical_json(
+        snapshots["identity_transcript"].data, "bootstrap identity transcript"
+    )
+    _require_exact_json_fields(
+        attestation,
+        {"format", "schema_version", "candidate", "archives"},
+        "bootstrap identity attestation",
+    )
+    if (
+        attestation["format"] != _SIGNATURE_ATTESTATION_FORMAT
+        or type(attestation["schema_version"]) is not int
+        or attestation["schema_version"] != 3
+    ):
+        raise ReceiptError(
+            "bootstrap identity attestation has the wrong sanitized schema"
+        )
+    candidate = _require_exact_json_fields(
+        attestation["candidate"],
+        {
+            "commit_oid",
+            "tree_oid",
+            "source_manifest_sha256",
+            "cargo_lock_sha256",
+            "release_identity_sha256",
+        },
+        "bootstrap identity attestation candidate",
+    )
+    if candidate != {
+        "commit_oid": identity["head_commit"],
+        "tree_oid": identity["head_tree"],
+        "source_manifest_sha256": identity[
+            "workspace_source_manifest_sha256"
+        ],
+        "cargo_lock_sha256": identity["cargo_lock_sha256"],
+        "release_identity_sha256": identity_snapshot.sha256,
+    }:
+        raise ReceiptError(
+            "bootstrap identity attestation does not bind the candidate"
+        )
+    archives = _require_exact_json_fields(
+        attestation["archives"],
+        set(_SIGNATURE_ARCHIVE_IDS),
+        "bootstrap identity attestation archives",
+    )
+    for label, archive_id in _SIGNATURE_ARCHIVE_IDS.items():
+        snapshot_label = (
+            "identity_transcript" if label == "verify_transcript" else label
+        )
+        snapshot = snapshots[snapshot_label]
+        mode = (
+            _SIGNATURE_TOOL_MODE
+            if label in {"git", "ssh_keygen"}
+            else _SIGNATURE_DATA_MODE
+        )
+        record = _require_exact_json_fields(
+            archives[label],
+            {"archive_id", "mode", "sha256", "size_bytes"},
+            f"bootstrap identity archive {label}",
+        )
+        if record != {
+            "archive_id": archive_id,
+            "mode": f"{mode:04o}",
+            "sha256": snapshot.sha256,
+            "size_bytes": snapshot.size,
+        } or type(record["size_bytes"]) is not int:
+            raise ReceiptError(
+                f"bootstrap identity archive {label} does not match its bytes"
+            )
+    protected_labels = {
+        "git": "git",
+        "ssh_keygen": "ssh_keygen",
+        "ssh_allowed_signers": "allowed_signers",
+        "ssh_revocation": "revocation",
+    }
+    for label, trusted_label in protected_labels.items():
+        trusted = snapshots["trusted_" + trusted_label]
+        if (
+            snapshots[label].sha256 != trusted_digests[trusted_label]
+            or snapshots[label].data != trusted.data
+        ):
+            raise ReceiptError(
+                f"bootstrap identity archive {label} differs from protected input"
+            )
+
+    _require_exact_json_fields(
+        transcript,
+        {"format", "schema_version", "archive_ids", "candidate_commit_oid", "operations"},
+        "bootstrap identity transcript",
+    )
+    if (
+        transcript["format"] != _SIGNATURE_TRANSCRIPT_FORMAT
+        or type(transcript["schema_version"]) is not int
+        or transcript["schema_version"] != 3
+        or transcript["archive_ids"] != _SIGNATURE_ARCHIVE_IDS
+        or transcript["candidate_commit_oid"] != identity["head_commit"]
+    ):
+        raise ReceiptError("bootstrap identity transcript binding is not exact")
+    operations = _require_exact_json_fields(
+        transcript["operations"],
+        {"show_signature_metadata", "verify_commit", "ssh_keygen_usage"},
+        "bootstrap identity transcript operations",
+    )
+    _decode_sanitized_operation(
+        operations["show_signature_metadata"],
+        "bootstrap signature metadata operation",
+        operation_id="git.show-signature-metadata.ssh.v1",
+        exit_status=0,
+    )
+    _decode_sanitized_operation(
+        operations["verify_commit"],
+        "bootstrap verify-commit operation",
+        operation_id="git.verify-commit.ssh.v1",
+        exit_status=0,
+    )
+    _decode_sanitized_operation(
+        operations["ssh_keygen_usage"],
+        "bootstrap ssh-keygen operation",
+        operation_id="ssh-keygen.usage-probe.v1",
+        exit_status=1,
+    )
+    try:
+        active = [
+            line
+            for line in snapshots["ssh_allowed_signers"].data.decode(
+                "utf-8"
+            ).splitlines()
+            if line and not line.startswith("#")
+        ]
+    except UnicodeDecodeError as error:
+        raise ReceiptError("bootstrap allowed-signers policy is not UTF-8") from error
+    if len(active) != 1 or not active[0].split():
+        raise ReceiptError(
+            "bootstrap allowed-signers policy has no unique principal"
+        )
+    verification = {
+        "status": "G",
+        "signer_fingerprint": expected_signer_fingerprint,
+        "primary_key_fingerprint": "",
+        "allowed_signers_principal": active[0].split()[0],
+    }
+    return attestation, transcript, verification
+
+
+def _framework_runtime_projection(
+    records: Any, name: str
+) -> list[dict[str, Any]]:
+    """Return the path-free, canonical projection of a Python runtime inventory."""
+
+    if not isinstance(records, list):
+        raise ReceiptError(f"{name} records are not a list")
+    projected: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise ReceiptError(f"{name} member is malformed")
+        kind = record.get("kind")
+        private_keys = {
+            "directory": {"path", "kind", "device", "inode", "mode"},
+            "file": {
+                "path",
+                "kind",
+                "device",
+                "inode",
+                "mode",
+                "size",
+                "sha256",
+            },
+            "symlink": {"path", "kind", "mode", "target"},
+        }.get(kind)
+        public_keys = {
+            "directory": {"path", "kind", "mode"},
+            "file": {"path", "kind", "mode", "size", "sha256"},
+            "symlink": {"path", "kind", "mode", "target"},
+        }.get(kind)
+        keys = set(record)
+        if private_keys is not None and keys == private_keys:
+            assert public_keys is not None
+            record = {key: record[key] for key in public_keys}
+            keys = set(record)
+        if public_keys is None or keys != public_keys:
+            raise ReceiptError(f"{name} member schema is not exact")
+        relative = record.get("path")
+        mode = record.get("mode")
+        if (
+            not isinstance(relative, str)
+            or not relative
+            or relative.startswith("/")
+            or PurePosixPath(relative).as_posix() != relative
+            or ".." in PurePosixPath(relative).parts
+            or not isinstance(mode, str)
+            or re.fullmatch(r"[0-7]{4}", mode) is None
+        ):
+            raise ReceiptError(f"{name} member path or mode is unsafe")
+        if kind == "file":
+            if (
+                type(record["size"]) is not int
+                or record["size"] < 0
+                or not isinstance(record["sha256"], str)
+                or _DIGEST_RE.fullmatch(record["sha256"]) is None
+            ):
+                raise ReceiptError(f"{name} file metadata is invalid")
+        elif kind == "symlink" and (
+            not isinstance(record["target"], str) or not record["target"]
+        ):
+            raise ReceiptError(f"{name} symlink target is invalid")
+        projected.append(dict(record))
+    projected.sort(key=lambda record: record["path"])
+    if len(projected) > _MAX_FRAMEWORK_RUNTIME_MEMBERS or len(
+        {record["path"] for record in projected}
+    ) != len(projected):
+        raise ReceiptError(f"{name} member inventory is not unique and bounded")
+    return projected
+
+
+def _validate_framework_python_runtime(
+    value: Any, directory: Path
+) -> list[PathContract | DirectoryContract]:
+    """Authenticate every member of the loader-complete framework Python archive."""
+
+    runtime = _require_exact_json_fields(
+        value,
+        {
+            "format",
+            "schema_version",
+            "archive_root",
+            "root_mode",
+            "executable",
+            "inventory",
+            "record_count",
+            "file_bytes",
+            "records",
+        },
+        "framework Python runtime",
+    )
+    if (
+        runtime["format"] != "iroha-sumeragi-v2-framework-python-runtime"
+        or type(runtime["schema_version"]) is not int
+        or runtime["schema_version"] != 1
+        or runtime["archive_root"] != "python-runtime"
+        or runtime["root_mode"] != "0500"
+        or runtime["executable"] != "bin/python3"
+    ):
+        raise ReceiptError("framework Python runtime binding is not exact")
+    inventory_record = _require_exact_json_fields(
+        runtime["inventory"],
+        {"archive_name", "mode", "sha256", "size_bytes"},
+        "framework Python runtime inventory record",
+    )
+    if (
+        inventory_record["archive_name"] != "python-runtime-input.json"
+        or _octal_mode(
+            inventory_record["mode"], "framework Python runtime inventory mode"
+        )
+        != _SIGNATURE_DATA_MODE
+    ):
+        raise ReceiptError("framework Python runtime inventory binding is wrong")
+    inventory = _bounded_evidence_snapshot(
+        directory / "python-runtime-input.json",
+        "framework Python runtime inventory",
+        maximum_bytes=_MAX_SIGNATURE_JSON_BYTES,
+        expected_mode=_SIGNATURE_DATA_MODE,
+        allowed_owners={os.geteuid()},
+    )
+    if (
+        inventory.sha256
+        != _require_digest(
+            inventory_record["sha256"],
+            "framework Python runtime inventory digest",
+        )
+        or type(inventory_record["size_bytes"]) is not int
+        or inventory_record["size_bytes"] != inventory.size
+    ):
+        raise ReceiptError(
+            "framework Python runtime inventory bytes do not match the marker"
+        )
+    private_inventory = _decode_canonical_json(
+        inventory.data, "framework Python runtime inventory"
+    )
+    inventory_keys = {
+        "format",
+        "schema_version",
+        "runtime_root",
+        "record_count",
+        "file_bytes",
+        "records",
+        "source_disclosure",
+        "input_record_count",
+        "input_file_bytes",
+        "input_records",
+    }
+    runtime_root = directory / "python-runtime"
+    if (
+        set(private_inventory) != inventory_keys
+        or private_inventory["format"]
+        != "iroha-sumeragi-v2-private-framework-python-runtime"
+        or type(private_inventory["schema_version"]) is not int
+        or private_inventory["schema_version"] != 1
+        or private_inventory["runtime_root"] != str(runtime_root)
+        or private_inventory["source_disclosure"] != "withheld"
+        or not isinstance(private_inventory["input_records"], list)
+        or type(private_inventory["input_record_count"]) is not int
+        or private_inventory["input_record_count"] < 0
+        or type(private_inventory["input_file_bytes"]) is not int
+        or private_inventory["input_file_bytes"] < 0
+    ):
+        raise ReceiptError(
+            "private framework Python runtime inventory contract is wrong"
+        )
+    expected = _framework_runtime_projection(
+        runtime["records"], "framework Python runtime"
+    )
+    private = _framework_runtime_projection(
+        private_inventory["records"], "private framework Python runtime"
+    )
+    if expected != private:
+        raise ReceiptError(
+            "framework Python marker does not bind the private member inventory"
+        )
+    expected_count = runtime["record_count"]
+    expected_bytes = runtime["file_bytes"]
+    if (
+        type(expected_count) is not int
+        or expected_count != len(expected)
+        or type(private_inventory["record_count"]) is not int
+        or private_inventory["record_count"] != expected_count
+        or type(expected_bytes) is not int
+        or expected_bytes
+        != sum(record["size"] for record in expected if record["kind"] == "file")
+        or type(private_inventory["file_bytes"]) is not int
+        or private_inventory["file_bytes"] != expected_bytes
+        or expected_bytes > _MAX_FRAMEWORK_RUNTIME_BYTES
+    ):
+        raise ReceiptError("framework Python runtime member accounting is not exact")
+
+    try:
+        root_metadata = runtime_root.lstat()
+    except OSError as error:
+        raise ReceiptError("framework Python runtime root is unavailable") from error
+    if (
+        runtime_root.resolve(strict=True) != runtime_root
+        or stat.S_ISLNK(root_metadata.st_mode)
+        or not stat.S_ISDIR(root_metadata.st_mode)
+        or root_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(root_metadata.st_mode) != 0o500
+    ):
+        raise ReceiptError("framework Python runtime root metadata is not exact")
+
+    observed: list[dict[str, Any]] = []
+    contracts: list[PathContract | DirectoryContract] = [
+        _snapshot_contract(inventory),
+        _capture_directory_contract(runtime_root, "framework Python runtime root"),
+    ]
+    total_bytes = 0
+
+    def walk(root: Path, relative_root: str = "") -> None:
+        nonlocal total_bytes
+        try:
+            entries = tuple(sorted(os.scandir(root), key=lambda entry: entry.name))
+        except OSError as error:
+            raise ReceiptError("framework Python runtime directory is unreadable") from error
+        if len(observed) + len(entries) > _MAX_FRAMEWORK_RUNTIME_MEMBERS:
+            raise ReceiptError("framework Python runtime contains too many members")
+        for entry in entries:
+            name = entry.name
+            relative = name if not relative_root else f"{relative_root}/{name}"
+            if not name or name in {".", ".."} or "/" in name or "\0" in name:
+                raise ReceiptError("framework Python runtime has an unsafe member name")
+            path = root / name
+            try:
+                metadata = path.lstat()
+            except OSError as error:
+                raise ReceiptError(
+                    f"framework Python runtime member is unavailable: {relative}"
+                ) from error
+            if metadata.st_uid != os.geteuid():
+                raise ReceiptError(
+                    f"framework Python runtime member has the wrong owner: {relative}"
+                )
+            mode = f"{stat.S_IMODE(metadata.st_mode):04o}"
+            if stat.S_ISDIR(metadata.st_mode):
+                contract = _capture_directory_contract(
+                    path, f"framework Python runtime directory {relative}"
+                )
+                contracts.append(contract)
+                observed.append(
+                    {"path": relative, "kind": "directory", "mode": mode}
+                )
+                walk(path, relative)
+                if _capture_directory_contract(
+                    path, f"framework Python runtime directory {relative}"
+                ) != contract:
+                    raise ReceiptError(
+                        f"framework Python runtime directory changed: {relative}"
+                    )
+            elif stat.S_ISREG(metadata.st_mode):
+                contract = _bounded_path_contract(
+                    path,
+                    f"framework Python runtime file {relative}",
+                    maximum_bytes=_MAX_TOOL_BYTES,
+                    expected_mode=stat.S_IMODE(metadata.st_mode),
+                    allowed_owners={os.geteuid()},
+                    require_single_link=True,
+                )
+                total_bytes += contract.size
+                if total_bytes > _MAX_FRAMEWORK_RUNTIME_BYTES:
+                    raise ReceiptError("framework Python runtime exceeds its byte bound")
+                contracts.append(contract)
+                observed.append(
+                    {
+                        "path": relative,
+                        "kind": "file",
+                        "mode": mode,
+                        "size": contract.size,
+                        "sha256": contract.sha256,
+                    }
+                )
+            elif stat.S_ISLNK(metadata.st_mode):
+                target = os.readlink(path)
+                after = path.lstat()
+                if (
+                    not stat.S_ISLNK(after.st_mode)
+                    or (after.st_dev, after.st_ino, after.st_uid, after.st_mtime_ns, after.st_ctime_ns)
+                    != (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                        metadata.st_uid,
+                        metadata.st_mtime_ns,
+                        metadata.st_ctime_ns,
+                    )
+                    or os.readlink(path) != target
+                ):
+                    raise ReceiptError(
+                        f"framework Python runtime symlink changed: {relative}"
+                    )
+                observed.append(
+                    {
+                        "path": relative,
+                        "kind": "symlink",
+                        "mode": mode,
+                        "target": target,
+                    }
+                )
+            else:
+                raise ReceiptError(
+                    f"framework Python runtime contains a special member: {relative}"
+                )
+
+    walk(runtime_root)
+    observed.sort(key=lambda record: record["path"])
+    if observed != expected or total_bytes != expected_bytes:
+        raise ReceiptError("framework Python runtime members differ from the marker")
+    by_path = {record["path"]: record for record in observed}
+    stdlib_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    required = {
+        "bin": "directory",
+        "bin/python3": "file",
+        "Python3": "file",
+        "Resources": "directory",
+        "Resources/Python.app/Contents/MacOS/Python": "file",
+        "lib": "directory",
+        f"lib/{stdlib_name}": "directory",
+        f"lib/{stdlib_name}/lib-dynload": "directory",
+    }
+    if (
+        {PurePosixPath(path).parts[0] for path in by_path}
+        != {"bin", "Python3", "Resources", "lib"}
+        or any(by_path.get(path, {}).get("kind") != kind for path, kind in required.items())
+    ):
+        raise ReceiptError("framework Python runtime indispensable layout is incomplete")
+    for relative, record in by_path.items():
+        if record["kind"] != "symlink":
+            continue
+        target = PurePosixPath(record["target"])
+        if target.is_absolute():
+            raise ReceiptError(
+                f"framework Python runtime symlink is absolute: {relative}"
+            )
+        parts = list(PurePosixPath(relative).parts[:-1])
+        for part in target.parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if not parts:
+                    raise ReceiptError(
+                        f"framework Python runtime symlink escapes: {relative}"
+                    )
+                parts.pop()
+            else:
+                parts.append(part)
+        if not parts or parts[0] not in {"Python3", "Resources", "lib"}:
+            raise ReceiptError(
+                f"framework Python runtime symlink leaves its closure: {relative}"
+            )
+        for index in range(1, len(parts) + 1):
+            target_path = "/".join(parts[:index])
+            target_record = by_path.get(target_path)
+            if (
+                not isinstance(target_record, dict)
+                or (index < len(parts) and target_record["kind"] != "directory")
+                or (
+                    index == len(parts)
+                    and target_record["kind"] not in {"directory", "file"}
+                )
+            ):
+                raise ReceiptError(
+                    f"framework Python runtime symlink target is not exact: {relative}"
+                )
+    return contracts
+
+
 def _validate_bootstrap_evidence(
     *,
     completion_path: Path,
@@ -3130,7 +3568,11 @@ def _validate_bootstrap_evidence(
     expected_scaling_configuration_sha256: str,
     expected_scaling_irohad_sha256: str,
     expected_scaling_iroha_cli_sha256: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    list[PathContract | DirectoryContract],
+]:
     expected_marker_sha = _require_digest(
         expected_completion_sha256, "expected bootstrap completion digest"
     )
@@ -3196,7 +3638,6 @@ def _validate_bootstrap_evidence(
         {
             "schema_version",
             "trust_boundary",
-            "candidate_root",
             "candidate_identity",
             "candidate_identity_sha256",
             "trusted_inputs",
@@ -3206,7 +3647,7 @@ def _validate_bootstrap_evidence(
         },
         "bootstrap completion marker",
     )
-    if type(marker["schema_version"]) is not int or marker["schema_version"] != 1:
+    if type(marker["schema_version"]) is not int or marker["schema_version"] != 2:
         raise ReceiptError("bootstrap completion marker has the wrong schema version")
     if marker["trust_boundary"] != {
         "bootstrap_authentication": "external prerequisite",
@@ -3215,8 +3656,7 @@ def _validate_bootstrap_evidence(
     } or type(marker["trust_boundary"].get("same_uid_and_trusted_ancestor_owners")) is not bool:
         raise ReceiptError("bootstrap completion marker has the wrong trust boundary")
     if (
-        marker["candidate_root"] != str(candidate_root)
-        or marker["candidate_identity"] != candidate
+        marker["candidate_identity"] != candidate
         or marker["candidate_identity_sha256"] != identity_snapshot.sha256
     ):
         raise ReceiptError("bootstrap completion marker has the wrong candidate identity")
@@ -3234,31 +3674,53 @@ def _validate_bootstrap_evidence(
         "identity": identity_snapshot,
     }
     trusted_digests: dict[str, str] = {}
-    trusted_sources: dict[str, dict[str, Any]] = {}
+    trusted_archives: dict[str, dict[str, Any]] = {}
     evidence_inodes: set[tuple[int, int]] = {
         (marker_snapshot.device, marker_snapshot.inode),
         (identity_snapshot.device, identity_snapshot.inode),
     }
+    framework_runtime_contracts: list[PathContract | DirectoryContract] = []
+    framework_python = False
     executable_labels = {"python", "git", "ssh_keygen", "bash"}
-    for label, (archive_name, archive_mode) in _BOOTSTRAP_TRUSTED_ARCHIVES.items():
+    for label, (default_archive_name, archive_mode) in _BOOTSTRAP_TRUSTED_ARCHIVES.items():
+        raw_record = trusted_records[label]
+        framework_record = (
+            label == "python"
+            and isinstance(raw_record, dict)
+            and "runtime" in raw_record
+        )
+        validator_components = (
+            label == "receipt_validator"
+            and isinstance(raw_record, dict)
+            and "components" in raw_record
+        )
         record = _require_exact_json_fields(
-            trusted_records[label],
-            {
+            raw_record,
+            ({
+                "archive_id",
                 "archive_name",
-                "archive_mode",
-                "observed_sha256",
-                "protected_sha256",
+                "mode",
+                "sha256",
                 "size_bytes",
-                "source_mode",
-                "source_path",
-            },
+            }
+            | ({"runtime"} if framework_record else set())
+            | ({"components"} if validator_components else set())),
             f"bootstrap trusted input {label}",
         )
+        archive_name = (
+            "python-runtime/bin/python3"
+            if framework_record
+            else default_archive_name
+        )
+        if label == "python" and record["archive_name"] != archive_name:
+            raise ReceiptError("bootstrap trusted Python archive name is not exact")
         maximum_bytes = (
             _MAX_TOOL_BYTES
             if label in executable_labels
             else _MAX_POLICY_BYTES
             if label in {"allowed_signers", "revocation"}
+            else _MAX_SDK_MANIFEST_BYTES
+            if label == "sdk_dependency_bundle_manifest"
             else _MAX_HELPER_BYTES
         )
         archive = _read_evidence_snapshot(
@@ -3274,39 +3736,93 @@ def _validate_bootstrap_evidence(
         if inode in evidence_inodes:
             raise ReceiptError("bootstrap trusted archives contain an inode alias")
         evidence_inodes.add(inode)
-        source_mode = _octal_mode(record["source_mode"], f"bootstrap {label} source mode")
-        source_path_value = record["source_path"]
-        if not isinstance(source_path_value, str):
-            raise ReceiptError(f"bootstrap {label} source path is not text")
-        source_path = Path(source_path_value)
-        source = _read_evidence_snapshot(
-            source_path,
-            f"bootstrap trusted {label} source",
-            maximum_bytes=maximum_bytes,
-            expected_mode=source_mode,
-            allowed_owners={0, os.geteuid()},
-            require_single_link=False,
-            executable=label in executable_labels,
-        )
-        if source.path == archive.path or candidate_root == source.path or candidate_root in source.path.parents:
-            raise ReceiptError(f"bootstrap trusted {label} source crosses candidate boundary")
         expected_record = {
+            "archive_id": f"release-bootstrap.{label.replace('_', '-')}.v1",
             "archive_name": archive_name,
-            "archive_mode": f"{archive_mode:04o}",
-            "observed_sha256": source.sha256,
-            "protected_sha256": source.sha256,
-            "size_bytes": source.size,
-            "source_mode": f"{source.mode:04o}",
-            "source_path": str(source.path),
+            "mode": f"{archive_mode:04o}",
+            "sha256": archive.sha256,
+            "size_bytes": archive.size,
         }
-        if type(record["size_bytes"]) is not int or record != expected_record:
+        public_record = {
+            key: record[key]
+            for key in ("archive_id", "archive_name", "mode", "sha256", "size_bytes")
+        }
+        if (
+            type(record["size_bytes"]) is not int
+            or public_record != expected_record
+        ):
             raise ReceiptError(f"bootstrap trusted input {label} record is not exact")
-        if archive.data != source.data:
-            raise ReceiptError(f"bootstrap archived {label} differs from protected source")
-        if label == "bootstrap" and source.sha256 != _FROZEN_BOOTSTRAP_SHA256:
+        if label == "bootstrap" and archive.sha256 != _FROZEN_BOOTSTRAP_SHA256:
             raise ReceiptError("bootstrap trusted source is not the frozen trust root")
-        trusted_digests[label] = source.sha256
-        trusted_sources[label] = _snapshot_receipt_artifact(source)
+        if framework_record:
+            framework_python = True
+            framework_runtime_contracts = _validate_framework_python_runtime(
+                record["runtime"], directory
+            )
+        elif label == "python" and (
+            Path(sys.executable).resolve(strict=True) == archive.path
+            and sys.platform == "darwin"
+            and isinstance(sysconfig.get_config_var("PYTHONFRAMEWORK"), str)
+            and bool(sysconfig.get_config_var("PYTHONFRAMEWORK"))
+        ):
+            raise ReceiptError(
+                "framework Python trusted input omits its archived runtime closure"
+            )
+        if validator_components:
+            components = _require_exact_json_fields(
+                record["components"],
+                set(_RECEIPT_VALIDATOR_COMPONENT_SHA256),
+                "bootstrap receipt validator components",
+            )
+            for name, expected_digest in sorted(
+                _RECEIPT_VALIDATOR_COMPONENT_SHA256.items()
+            ):
+                component_record = _require_exact_json_fields(
+                    components[name],
+                    {"archive_id", "archive_name", "mode", "sha256", "size_bytes"},
+                    f"bootstrap receipt validator component {name}",
+                )
+                if (
+                    component_record["archive_id"]
+                    != "release-bootstrap.receipt-validator-component.v1:" + name
+                    or component_record["archive_name"] != name
+                    or _octal_mode(
+                        component_record["mode"],
+                        f"bootstrap receipt validator component {name} mode",
+                    )
+                    != _SIGNATURE_DATA_MODE
+                    or _require_digest(
+                        component_record["sha256"],
+                        f"bootstrap receipt validator component {name} digest",
+                    )
+                    != expected_digest
+                ):
+                    raise ReceiptError(
+                        f"bootstrap receipt validator component {name} binding is wrong"
+                    )
+                component = _bounded_evidence_snapshot(
+                    directory / name,
+                    f"bootstrap receipt validator component {name}",
+                    maximum_bytes=_MAX_HELPER_BYTES,
+                    expected_mode=_SIGNATURE_DATA_MODE,
+                    allowed_owners={os.geteuid()},
+                )
+                if (
+                    component.sha256 != expected_digest
+                    or type(component_record["size_bytes"]) is not int
+                    or component_record["size_bytes"] != component.size
+                ):
+                    raise ReceiptError(
+                        f"bootstrap receipt validator component {name} bytes are wrong"
+                    )
+                snapshots["trusted_receipt_validator_component:" + name] = component
+        trusted_digests[label] = archive.sha256
+        trusted_archives[label] = {
+            "archive_id": record["archive_id"],
+            "mode": record["mode"],
+            "sha256": archive.sha256,
+            "size_bytes": archive.size,
+        }
 
     identity_records = _require_exact_json_fields(
         marker["identity_verification"],
@@ -3315,7 +3831,9 @@ def _validate_bootstrap_evidence(
     )
     identity_snapshots: dict[str, EvidenceSnapshot] = {
         "trusted_allowed_signers": snapshots["trusted_allowed_signers"],
+        "trusted_git": snapshots["trusted_git"],
         "trusted_revocation": snapshots["trusted_revocation"],
+        "trusted_ssh_keygen": snapshots["trusted_ssh_keygen"],
     }
     archive_path_snapshots: dict[Path, EvidenceSnapshot] = {}
     for label, (archive_name, mode) in _BOOTSTRAP_IDENTITY_ARCHIVES.items():
@@ -3452,12 +3970,12 @@ def _validate_bootstrap_evidence(
     runner = _require_exact_json_fields(
         marker["runner"],
         {
-            "argv",
+            "archive_id",
+            "invocation",
             "closed_path_resolution",
-            "environment_without_self_digest",
+            "environment_sha256",
             "mode",
             "output",
-            "path",
             "self_digest_environment_variables",
             "sha256",
             "size_bytes",
@@ -3479,17 +3997,21 @@ def _validate_bootstrap_evidence(
     )
     snapshots["runner"] = runner_snapshot
     if (
-        runner["path"] != str(runner_path)
+        runner["archive_id"] != "release-candidate.runner.v1"
+        or runner["invocation"] != {
+            "profile": "release",
+            "operation_id": "sumeragi-v2.release.v1",
+            "arguments": ["--release"],
+            "bash_archive_id": "release-bootstrap.bash.v1",
+        }
         or runner["sha256"] != runner_snapshot.sha256
         or type(runner["size_bytes"]) is not int
         or runner["size_bytes"] != runner_snapshot.size
-        or runner["argv"]
-        != [str(directory / "bash"), str(runner_path), "--release"]
         or runner["closed_path_resolution"]
         != {
-            "bash": str(directory / "bash"),
-            "git": str(directory / "git"),
-            "python3": str(directory / "python3"),
+            "bash": "release-bootstrap.bash.v1",
+            "git": "release-bootstrap.git.v1",
+            "python3": "release-bootstrap.python.v1",
         }
         or runner["self_digest_environment_variables"]
         != [
@@ -3500,20 +4022,29 @@ def _validate_bootstrap_evidence(
         raise ReceiptError("bootstrap runner binding is not exact")
     output_contract = _require_exact_json_fields(
         runner["output"],
-        {"stderr_path", "stdout_path", "active_mode", "sealed_mode"},
+        {
+            "stderr_archive_id",
+            "stderr_name",
+            "stdout_archive_id",
+            "stdout_name",
+            "active_mode",
+            "sealed_mode",
+        },
         "bootstrap runner output",
     )
     if output_contract != {
-        "stderr_path": str(directory / "runner-stderr.log"),
-        "stdout_path": str(directory / "runner-stdout.log"),
+        "stderr_archive_id": "release-bootstrap.runner-stderr.v1",
+        "stderr_name": "runner-stderr.log",
+        "stdout_archive_id": "release-bootstrap.runner-stdout.v1",
+        "stdout_name": "runner-stdout.log",
         "active_mode": "0600",
         "sealed_mode": "0400",
     }:
         raise ReceiptError("bootstrap runner output contract is not exact")
     expected_log_mode = 0o400 if runner_logs_sealed else 0o600
     for output_path in (
-        Path(output_contract["stdout_path"]),
-        Path(output_contract["stderr_path"]),
+        directory / output_contract["stdout_name"],
+        directory / output_contract["stderr_name"],
     ):
         metadata = output_path.lstat()
         if (
@@ -3525,8 +4056,13 @@ def _validate_bootstrap_evidence(
             or stat.S_IMODE(metadata.st_mode) != expected_log_mode
         ):
             raise ReceiptError("bootstrap runner active log metadata is not exact")
+    if runner["tool_directory"] != "runner-bin":
+        raise ReceiptError("bootstrap runner tool directory id is not exact")
     tool_directory, _ = _private_evidence_directory(
-        Path(runner["tool_directory"]), "bootstrap runner tool directory"
+        directory / "runner-bin", "bootstrap runner tool directory"
+    )
+    tool_archive_directory, _ = _private_evidence_directory(
+        directory / "runner-tools", "bootstrap runner tool archive directory"
     )
     if tool_directory != directory / "runner-bin":
         raise ReceiptError("bootstrap runner tool directory is not exact")
@@ -3568,39 +4104,36 @@ def _validate_bootstrap_evidence(
         marker_record = _require_exact_json_fields(
             runner_tools[name],
             {
+                "archive_id",
                 "alias_name",
-                "alias_path",
+                "archive_name",
+                "mode",
                 "sha256",
                 "size_bytes",
-                "source_mode",
-                "source_path",
             },
             f"bootstrap runner tool {name}",
         )
         alias_path = tool_directory / name
         alias_metadata = alias_path.lstat()
-        source_path = marker_record["source_path"]
-        if not isinstance(source_path, str) or manifest_record.get("path") != source_path:
-            raise ReceiptError(f"bootstrap runner tool {name} source path is wrong")
+        archive_path = tool_archive_directory / name
+        relative_target = os.path.relpath(archive_path, alias_path.parent)
         if (
             marker_record["alias_name"] != name
-            or marker_record["alias_path"] != str(alias_path)
+            or marker_record["archive_id"] != f"release-runner-tool.{name}.v1"
+            or marker_record["archive_name"] != f"runner-tools/{name}"
             or not stat.S_ISLNK(alias_metadata.st_mode)
             or alias_metadata.st_uid != os.geteuid()
             or alias_metadata.st_nlink != 1
-            or os.readlink(alias_path) != source_path
+            or os.readlink(alias_path) != relative_target
         ):
             raise ReceiptError(f"bootstrap runner tool {name} alias binding is wrong")
-        source_mode = _octal_mode(
-            marker_record["source_mode"], f"bootstrap runner tool {name} source mode"
-        )
         source = _bounded_path_contract(
-            Path(source_path),
-            f"bootstrap runner tool source {name}",
+            archive_path,
+            f"bootstrap archived runner tool {name}",
             maximum_bytes=_MAX_TOOL_BYTES,
-            expected_mode=source_mode,
-            allowed_owners={0, os.geteuid()},
-            require_single_link=False,
+            expected_mode=0o500,
+            allowed_owners={os.geteuid()},
+            require_single_link=True,
             executable=True,
         )
         runner_tool_total_bytes += source.size
@@ -3608,26 +4141,13 @@ def _validate_bootstrap_evidence(
             raise ReceiptError(
                 "bootstrap runner tools exceed their aggregate byte limit"
             )
-        if source.mode & 0o022:
-            raise ReceiptError(f"bootstrap runner tool {name} source is writable")
-        for ancestor in (source.path.parent, *source.path.parent.parents):
-            ancestor_metadata = ancestor.lstat()
-            if (
-                stat.S_ISLNK(ancestor_metadata.st_mode)
-                or not stat.S_ISDIR(ancestor_metadata.st_mode)
-                or ancestor_metadata.st_uid not in {0, os.geteuid()}
-                or stat.S_IMODE(ancestor_metadata.st_mode) & 0o022
-            ):
-                raise ReceiptError(
-                    f"bootstrap runner tool {name} has an unsafe ancestor"
-                )
         expected_record = {
+            "archive_id": f"release-runner-tool.{name}.v1",
             "alias_name": name,
-            "alias_path": str(alias_path),
+            "archive_name": f"runner-tools/{name}",
+            "mode": "0500",
             "sha256": source.sha256,
             "size_bytes": source.size,
-            "source_mode": f"{source.mode:04o}",
-            "source_path": str(source.path),
         }
         if (
             marker_record != expected_record
@@ -3636,9 +4156,24 @@ def _validate_bootstrap_evidence(
         ):
             raise ReceiptError(f"bootstrap runner tool {name} integrity binding is wrong")
         runner_tool_sources[name] = source
-    closed_path_entries = [str(directory), str(tool_directory)]
+    python_archive_path = snapshots["trusted_python"].path
+    closed_path_entries = [str(directory)]
+    if framework_python:
+        closed_path_entries.append(str(python_archive_path.parent))
+    closed_path_entries.append(str(tool_directory))
 
-    environment = runner["environment_without_self_digest"]
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {
+            "IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
+            "SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
+            "PWD",
+            "SHLVL",
+            "_",
+            "__CF_USER_TEXT_ENCODING",
+        }
+    }
     if not isinstance(environment, dict) or any(
         not isinstance(key, str)
         or not isinstance(value, str)
@@ -3647,6 +4182,9 @@ def _validate_bootstrap_evidence(
         for key, value in environment.items()
     ):
         raise ReceiptError("bootstrap runner environment is malformed")
+    _require_digest(
+        runner["environment_sha256"], "bootstrap runner environment digest"
+    )
     base_environment = {
         "HOME": str(directory / "home"),
         "LANG": "C",
@@ -3664,6 +4202,12 @@ def _validate_bootstrap_evidence(
         "GIT_TERMINAL_PROMPT": "0",
     }
     policy_environment = {
+        "SUMERAGI_V2_RELEASE_RUNTIME_HELPER": str(
+            snapshots["trusted_runtime_helper"].path
+        ),
+        "SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": trusted_digests[
+            "runtime_helper"
+        ],
         "SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN": str(directory / "ssh-keygen"),
         "SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256": trusted_digests["git"],
         "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256": trusted_digests[
@@ -3693,6 +4237,20 @@ def _validate_bootstrap_evidence(
         for key, value in policy_environment.items()
         if key.startswith("SUMERAGI_V2_RELEASE_BOOTSTRAP_")
     }
+    alias_environment.update({
+        "IROHA_RELEASE_RUNTIME_HELPER": str(
+            snapshots["trusted_runtime_helper"].path
+        ),
+        "IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": trusted_digests[
+            "runtime_helper"
+        ],
+        "IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST": str(
+            snapshots["trusted_sdk_dependency_bundle_manifest"].path
+        ),
+        "IROHA_RELEASE_EXPECTED_SDK_DEPENDENCY_BUNDLE_MANIFEST_SHA256": (
+            trusted_digests["sdk_dependency_bundle_manifest"]
+        ),
+    })
     fixed_keys = set(base_environment) | set(policy_environment) | set(alias_environment)
     extras = {key: value for key, value in environment.items() if key not in fixed_keys}
     if any(
@@ -3726,9 +4284,14 @@ def _validate_bootstrap_evidence(
         )
         if child.parent != directory:
             raise ReceiptError(f"bootstrap {child_name} directory escaped evidence root")
-    for command, expected in runner["closed_path_resolution"].items():
+    expected_closed_paths = {
+        "bash": snapshots["trusted_bash"].path,
+        "git": snapshots["trusted_git"].path,
+        "python3": python_archive_path,
+    }
+    for command, expected in expected_closed_paths.items():
         discovered = shutil.which(command, path=environment["PATH"])
-        if discovered is None or Path(discovered).resolve(strict=True) != Path(expected):
+        if discovered is None or Path(discovered).resolve(strict=True) != expected:
             raise ReceiptError(f"bootstrap closed PATH does not resolve protected {command}")
 
     probes = _require_exact_json_fields(
@@ -3736,6 +4299,8 @@ def _validate_bootstrap_evidence(
         {"bash", "python"},
         "bootstrap trusted execution probes",
     )
+    python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
+    python_probe_stdout = f"{python_archive_path}\n".encode()
     expected_probes = {
         "bash": {
             "argv": [str(directory / "bash"), "-c", ":"],
@@ -3743,13 +4308,18 @@ def _validate_bootstrap_evidence(
         },
         "python": {
             "argv": [
-                str(directory / "python3"),
+                str(python_archive_path),
                 "-I",
                 "-S",
                 "-c",
-                "raise SystemExit(0)",
+                python_probe_code,
             ],
+            "expected_executable": (
+                "python-runtime/bin/python3" if framework_python else "python3"
+            ),
             "exit_status": 0,
+            "stdout_sha256": hashlib.sha256(python_probe_stdout).hexdigest(),
+            "stdout_size_bytes": len(python_probe_stdout),
         },
     }
     if probes != expected_probes or any(
@@ -3768,22 +4338,22 @@ def _validate_bootstrap_evidence(
     ):
         raise ReceiptError("bootstrap evidence directory changed during validation")
     authentication = {
-        "schema_version": 1,
+        "schema_version": 2,
         "completion_sha256": marker_snapshot.sha256,
         "frozen_bootstrap_sha256": _FROZEN_BOOTSTRAP_SHA256,
-        "candidate_root": str(candidate_root),
         "candidate_identity_sha256": identity_snapshot.sha256,
         "candidate_commit_oid": candidate["head_commit"],
         "candidate_tree_oid": candidate["head_tree"],
         "runner": {
-            "path": str(runner_path),
+            "archive_id": runner["archive_id"],
             "sha256": runner_snapshot.sha256,
             "mode": f"{runner_snapshot.mode:04o}",
-            "argv": runner["argv"],
+            "invocation": runner["invocation"],
             "closed_path_resolution": runner["closed_path_resolution"],
             "output": output_contract,
-            "tool_directory": str(tool_directory),
+            "tool_directory": "runner-bin",
             "tools": runner_tools,
+            "environment_sha256": runner["environment_sha256"],
             "self_digest_environment_variables": runner[
                 "self_digest_environment_variables"
             ],
@@ -3791,28 +4361,53 @@ def _validate_bootstrap_evidence(
         "signer_fingerprint": expected_signer_fingerprint,
         "allowed_signers_principal": verification["allowed_signers_principal"],
         "trusted_input_digests": trusted_digests,
-        "trusted_input_sources": trusted_sources,
+        "trusted_input_archives": trusted_archives,
     }
+    def sanitized_record(
+        snapshot: EvidenceSnapshot | PathContract,
+        archive_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "archive_id": archive_id,
+            "mode": f"{snapshot.mode:04o}",
+            "sha256": snapshot.sha256,
+            "size_bytes": snapshot.size,
+        }
     bootstrap_evidence = {
-        "completion": _snapshot_receipt_artifact(marker_snapshot),
-        "candidate_identity": _snapshot_receipt_artifact(identity_snapshot),
-        "runner": _snapshot_receipt_artifact(runner_snapshot),
-        "candidate_cargo_lock": _snapshot_receipt_artifact(candidate_lock),
+        "completion": sanitized_record(
+            marker_snapshot, "release-bootstrap.completion.v2"
+        ),
+        "candidate_identity": sanitized_record(
+            identity_snapshot, "release-bootstrap.candidate-identity.v1"
+        ),
+        "runner": sanitized_record(
+            runner_snapshot, "release-candidate.runner.v1"
+        ),
+        "candidate_cargo_lock": sanitized_record(
+            candidate_lock, "release-candidate.cargo-lock.v1"
+        ),
         "trusted_inputs": {
-            label: _snapshot_receipt_artifact(snapshots["trusted_" + label])
+            label: trusted_archives[label]
             for label in _BOOTSTRAP_TRUSTED_ARCHIVES
         },
         "identity_verification": {
-            label: _snapshot_receipt_artifact(snapshot)
+            label: sanitized_record(
+                snapshot,
+                (
+                    _SIGNATURE_ARCHIVE_IDS["verify_transcript"]
+                    if label == "identity_transcript"
+                    else f"release-bootstrap.identity-{label.replace('_', '-')}.v1"
+                ),
+            )
             for label, snapshot in identity_snapshots.items()
             if not label.startswith("trusted_")
         },
         "runner_tools": {
-            label: _snapshot_receipt_artifact(snapshot)
-            for label, snapshot in sorted(runner_tool_sources.items())
+            label: runner_tools[label]
+            for label in sorted(runner_tool_sources)
         },
     }
-    return authentication, bootstrap_evidence
+    return authentication, bootstrap_evidence, framework_runtime_contracts
 
 
 def _load_identity(
@@ -4380,7 +4975,8 @@ def _prebuilt_version_transcripts(
             raise ReceiptError(f"authenticated corridor {tool} tool changed during version probe")
         display_arguments = ("--version",) if tool == "cargo" else arguments
         results[tool] = {
-            "argv": [str(executable), *display_arguments],
+            "operation_id": f"{tool}.version.v1",
+            "tool_archive_id": f"release-runner-tool.{tool}.v1",
             "sha256": observed_digest,
             "size_bytes": len(stdout),
         }
@@ -4535,13 +5131,22 @@ def _prebuilt_binary_bundle(
             {
                 "role": prefix,
                 "relative_path": relative,
-                **_snapshot_receipt_artifact(binary),
+                "archive_id": f"release-prebuilt.binary.{prefix}.v1",
+                "mode": f"{binary.mode:04o}",
+                "sha256": binary.sha256,
+                "size_bytes": binary.size,
             }
         )
 
     return {
-        "schema_version": 2,
-        "manifest": _snapshot_receipt_artifact(manifest),
+        "schema_version": 3,
+        "archive_id": f"release-prebuilt.bundle.v1:{bundle_dir.name}",
+        "manifest": {
+            "archive_id": "release-prebuilt.manifest.v2",
+            "mode": f"{manifest.mode:04o}",
+            "sha256": manifest.sha256,
+            "size_bytes": manifest.size,
+        },
         "source_manifest_sha256": manifest_fields["source_manifest_sha256"],
         "cargo_lock_sha256": manifest_fields["cargo_lock_sha256"],
         "cargo_version_sha256": manifest_fields["cargo_version_sha256"],
@@ -4549,9 +5154,6 @@ def _prebuilt_binary_bundle(
         "host_triple": manifest_fields["host_triple"],
         "target_triple": manifest_fields["target_triple"],
         "profile": manifest_fields["profile"],
-        "bundle_dir": str(bundle_dir),
-        "artifact_root": str(artifact_root),
-        "cargo_target_root": str(cargo_target_root),
         "version_transcripts": _prebuilt_version_transcripts(
             bundle_dir=bundle_dir,
             fields=manifest_fields,
@@ -4662,8 +5264,13 @@ def _corridor_artifacts(
         tool_path = Path(fields[f"{tool}_path"])
         if (
             not isinstance(runner_record, dict)
-            or (fields[f"{tool}_path"] != runner_record.get("source_path")
-                and expected_artifact_root.parent not in tool_path.parents)
+            or (
+                runner_record.get("archive_name") != f"runner-tools/{tool}"
+                or (
+                    (tool_path.parent.name != "runner-tools" or tool_path.name != tool)
+                    and expected_artifact_root.parent not in tool_path.parents
+                )
+            )
             or fields[f"{tool}_sha256"] != runner_record.get("sha256")
         ):
             raise ReceiptError(
@@ -5483,6 +6090,801 @@ def _path_contract_artifact(contract: PathContract) -> dict[str, Any]:
     }
 
 
+def _sdk_relative_path(value: Any, name: str, *, allow_root: bool) -> str:
+    """Return one canonical path-withheld SDK inventory member name."""
+
+    if not isinstance(value, str) or "\0" in value:
+        raise ReceiptError(f"{name} is not text")
+    if allow_root and value == ".":
+        return value
+    pure = PurePosixPath(value)
+    if (
+        pure.is_absolute()
+        or value != pure.as_posix()
+        or not pure.parts
+        or any(part in {"", ".", ".."} for part in pure.parts)
+    ):
+        raise ReceiptError(f"{name} is not one canonical relative path")
+    return value
+
+
+def _sdk_inventory_records(
+    value: Any,
+    name: str,
+    *,
+    root_mode: str,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], int]:
+    """Validate one exact path-free SDK member inventory."""
+
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > _MAX_SDK_RECORDS
+    ):
+        raise ReceiptError(f"{name} has an invalid record count")
+    records: list[dict[str, Any]] = []
+    by_path: dict[str, dict[str, Any]] = {}
+    file_bytes = 0
+    for index, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            raise ReceiptError(f"{name} record {index} is not an object")
+        kind = raw.get("kind")
+        expected_fields = {
+            "directory": {"path", "kind", "mode"},
+            "file": {"path", "kind", "mode", "size", "sha256"},
+            "symlink": {"path", "kind", "mode", "target"},
+        }.get(kind)
+        if expected_fields is None or set(raw) != expected_fields:
+            raise ReceiptError(f"{name} record {index} has the wrong schema")
+        relative = _sdk_relative_path(
+            raw["path"], f"{name} record {index} path", allow_root=True
+        )
+        if relative in by_path:
+            raise ReceiptError(f"{name} contains a duplicate member")
+        mode = raw["mode"]
+        if not isinstance(mode, str) or re.fullmatch(r"[0-7]{4}", mode) is None:
+            raise ReceiptError(f"{name} record {index} has an invalid mode")
+        if kind == "file":
+            size = raw["size"]
+            if type(size) is not int or not 0 <= size <= 4 * 1024 * 1024 * 1024:
+                raise ReceiptError(f"{name} record {index} has an invalid size")
+            _require_digest(raw["sha256"], f"{name} record {index} digest")
+            file_bytes += size
+            if file_bytes > _MAX_SDK_ARCHIVE_BYTES:
+                raise ReceiptError(f"{name} exceeds its aggregate byte limit")
+        elif kind == "symlink":
+            target = raw["target"]
+            if (
+                not isinstance(target, str)
+                or "\0" in target
+                or PurePosixPath(target).is_absolute()
+                or PurePosixPath(target).as_posix() != target
+            ):
+                raise ReceiptError(f"{name} record {index} has an unsafe symlink")
+        records.append(raw)
+        by_path[relative] = raw
+    if records[0] != {"path": ".", "kind": "directory", "mode": root_mode}:
+        raise ReceiptError(f"{name} has the wrong protected root")
+    if [record["path"] for record in records[1:]] != sorted(by_path.keys() - {"."}):
+        raise ReceiptError(f"{name} member ordering is not canonical")
+    for relative, record in by_path.items():
+        if relative == ".":
+            continue
+        pure = PurePosixPath(relative)
+        parent = pure.parent.as_posix()
+        parent = "." if parent == "." else parent
+        parent_record = by_path.get(parent)
+        if not isinstance(parent_record, dict) or parent_record.get("kind") != "directory":
+            raise ReceiptError(f"{name} member lacks its exact parent directory")
+        if record["kind"] == "symlink":
+            parts = list(pure.parent.parts) if pure.parent.as_posix() != "." else []
+            for part in PurePosixPath(record["target"]).parts:
+                if part in {"", "."}:
+                    continue
+                if part == "..":
+                    if not parts:
+                        raise ReceiptError(f"{name} symlink escapes its archive")
+                    parts.pop()
+                else:
+                    parts.append(part)
+            target = "/".join(parts) or "."
+            if target not in by_path:
+                raise ReceiptError(f"{name} symlink target is not inventoried")
+    return records, by_path, file_bytes
+
+
+def _sdk_source_inventory(
+    value: Any, name: str,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Validate one protected complete source-tree member inventory."""
+
+    document = _require_exact_json_fields(
+        value,
+        {
+            "format", "schema_version", "record_count", "file_bytes",
+            "records_sha256", "records",
+        },
+        name,
+    )
+    raw_records = document["records"]
+    if (
+        not isinstance(raw_records, list)
+        or not raw_records
+        or not isinstance(raw_records[0], dict)
+        or raw_records[0].get("path") != "."
+        or raw_records[0].get("kind") != "directory"
+        or not isinstance(raw_records[0].get("mode"), str)
+    ):
+        raise ReceiptError(f"{name} lacks its exact source root")
+    records, by_path, file_bytes = _sdk_inventory_records(
+        raw_records, name, root_mode=raw_records[0]["mode"],
+    )
+    records_payload = json.dumps(
+        records, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    if (
+        document["format"] != _SDK_SOURCE_INVENTORY_FORMAT
+        or type(document["schema_version"]) is not int
+        or document["schema_version"] != 1
+        or type(document["record_count"]) is not int
+        or document["record_count"] != len(records)
+        or type(document["file_bytes"]) is not int
+        or document["file_bytes"] != file_bytes
+        or document["records_sha256"]
+        != hashlib.sha256(records_payload).hexdigest()
+    ):
+        raise ReceiptError(f"{name} accounting or aggregate digest is not exact")
+    return records, by_path
+
+
+def _sdk_source_path(value: Any, name: str) -> None:
+    """Validate but do not publish one bootstrap-private original path."""
+
+    if (
+        not isinstance(value, str)
+        or "\0" in value
+        or not Path(value).is_absolute()
+        or value != os.path.abspath(os.path.normpath(value))
+    ):
+        raise ReceiptError(f"{name} is not one normalized absolute private path")
+
+
+def _sdk_project_source_records(
+    records: list[dict[str, Any]], prefix: str,
+) -> list[dict[str, Any]]:
+    """Project source modes onto the sealed archive layout."""
+
+    projected: list[dict[str, Any]] = []
+    for source in records:
+        relative = source["path"]
+        record = dict(source)
+        record["path"] = prefix if relative == "." else f"{prefix}/{relative}"
+        if source["kind"] == "directory":
+            record["mode"] = "0500"
+        elif source["kind"] == "file":
+            record["mode"] = (
+                "0500" if int(str(source["mode"]), 8) & 0o111 else "0400"
+            )
+        projected.append(record)
+    return sorted(projected, key=lambda record: str(record["path"]))
+
+
+def _sdk_validate_private_source_manifest(
+    *,
+    path: Path,
+    expected_sha256: str,
+    archive_records: list[dict[str, Any]],
+    bindings: dict[str, Any],
+    expected_git_sha256: str,
+) -> None:
+    """Link the withheld source inventories to every retained archive member."""
+
+    snapshot = _bounded_evidence_snapshot(
+        path,
+        "bootstrap-private SDK dependency source manifest",
+        maximum_bytes=_MAX_SDK_MANIFEST_BYTES,
+        expected_mode=0o400,
+        allowed_owners={os.geteuid()},
+    )
+    if snapshot.sha256 != expected_sha256:
+        raise ReceiptError("SDK private source manifest digest changed")
+    document = _require_exact_json_fields(
+        _decode_canonical_json(snapshot.data, "SDK private source manifest"),
+        {"format", "schema_version", "git", "node", "swiftpm", "gradle"},
+        "SDK private source manifest",
+    )
+    if (
+        document["format"] != _SDK_SOURCE_MANIFEST_FORMAT
+        or type(document["schema_version"]) is not int
+        or document["schema_version"] != 2
+    ):
+        raise ReceiptError("SDK private source manifest identity is not exact")
+    git = _require_exact_json_fields(
+        document["git"], {"executable", "sha256"}, "SDK private Git binding",
+    )
+    node = _require_exact_json_fields(
+        document["node"],
+        {"node_modules_root", "package_lock_sha256", "node_modules_inventory"},
+        "SDK private Node source",
+    )
+    swift = _require_exact_json_fields(
+        document["swiftpm"],
+        {
+            "cache_root", "cache_inventory", "package_resolved_sha256",
+            "resolved_revisions",
+        },
+        "SDK private SwiftPM source",
+    )
+    gradle = _require_exact_json_fields(
+        document["gradle"],
+        {
+            "distribution_archive", "distribution_sha256",
+            "distribution_url", "gradle_user_home",
+            "gradle_user_home_inventory", "java_wrapper_properties_sha256",
+            "kotlin_wrapper_properties_sha256", "version", "wrapper_cache_key",
+        },
+        "SDK private Gradle source",
+    )
+    for value, name in (
+        (git["executable"], "SDK private protected Git"),
+        (node["node_modules_root"], "SDK private node_modules root"),
+        (swift["cache_root"], "SDK private SwiftPM cache root"),
+        (gradle["distribution_archive"], "SDK private Gradle distribution"),
+        (gradle["gradle_user_home"], "SDK private Gradle user home"),
+    ):
+        _sdk_source_path(value, name)
+    expected_bindings = bindings
+    if (
+        _require_digest(git["sha256"], "SDK private protected Git")
+        != expected_git_sha256
+        or _require_digest(node["package_lock_sha256"], "SDK private package lock")
+        != expected_bindings["node"]["package_lock_sha256"]
+        or _require_digest(
+            swift["package_resolved_sha256"], "SDK private Package.resolved"
+        ) != expected_bindings["swiftpm"]["package_resolved_sha256"]
+        or swift["resolved_revisions"]
+        != expected_bindings["swiftpm"]["resolved_revisions"]
+        or _require_digest(
+            gradle["distribution_sha256"], "SDK private Gradle distribution"
+        ) != expected_bindings["gradle"]["distribution_sha256"]
+        or _require_digest(
+            gradle["java_wrapper_properties_sha256"],
+            "SDK private Java Gradle wrapper",
+        ) != expected_bindings["gradle"]["wrapper_properties_sha256"]["java"]
+        or _require_digest(
+            gradle["kotlin_wrapper_properties_sha256"],
+            "SDK private Kotlin Gradle wrapper",
+        ) != expected_bindings["gradle"]["wrapper_properties_sha256"]["kotlin"]
+        or gradle["distribution_url"] != _SDK_GRADLE_DISTRIBUTION_URL
+        or gradle["wrapper_cache_key"] != _SDK_GRADLE_WRAPPER_CACHE_KEY
+        or gradle["version"] != "9.3.0"
+    ):
+        raise ReceiptError("SDK private source bindings do not match the archive")
+
+    specifications = (
+        (
+            "node/node_modules", node["node_modules_inventory"],
+            "SDK private Node member inventory",
+        ),
+        (
+            "swiftpm/cache", swift["cache_inventory"],
+            "SDK private SwiftPM member inventory",
+        ),
+        (
+            "gradle/gradle-user-home", gradle["gradle_user_home_inventory"],
+            "SDK private Gradle member inventory",
+        ),
+    )
+    archive_by_path = {str(record["path"]): record for record in archive_records}
+    source_by_prefix: dict[str, dict[str, dict[str, Any]]] = {}
+    for prefix, raw_inventory, name in specifications:
+        source_records, source_by_path = _sdk_source_inventory(raw_inventory, name)
+        source_by_prefix[prefix] = source_by_path
+        projected = _sdk_project_source_records(source_records, prefix)
+        retained = sorted(
+            (
+                record for relative, record in archive_by_path.items()
+                if relative == prefix or relative.startswith(prefix + "/")
+            ),
+            key=lambda record: str(record["path"]),
+        )
+        if retained != projected:
+            raise ReceiptError(
+                f"{name} does not exactly reproduce the retained archive subtree"
+            )
+
+    swift_records = source_by_prefix["swiftpm/cache"]
+    swift_children = {
+        path for path in swift_records
+        if path != "." and PurePosixPath(path).parent.as_posix() == "."
+    }
+    if swift_children != {"checkouts", "repositories"} or any(
+        swift_records[name].get("kind") != "directory"
+        for name in swift_children
+    ):
+        raise ReceiptError("SDK private SwiftPM cache roots are not exact")
+    revision_checkouts = {
+        str(item["checkout"]) for item in swift["resolved_revisions"]
+    }
+    observed_checkouts = {
+        path.removeprefix("checkouts/")
+        for path, record in swift_records.items()
+        if path.startswith("checkouts/")
+        and "/" not in path.removeprefix("checkouts/")
+        and record.get("kind") == "directory"
+    }
+    if observed_checkouts != revision_checkouts or any(
+        swift_records.get(f"checkouts/{checkout}/.git/HEAD", {}).get("kind")
+        != "file"
+        for checkout in revision_checkouts
+    ):
+        raise ReceiptError("SDK private SwiftPM checkouts are not revision-complete")
+
+    gradle_records = source_by_prefix["gradle/gradle-user-home"]
+    gradle_children = {
+        path for path in gradle_records
+        if path != "." and PurePosixPath(path).parent.as_posix() == "."
+    }
+    cache_key_root = (
+        "wrapper/dists/gradle-9.3.0-bin/"
+        f"{_SDK_GRADLE_WRAPPER_CACHE_KEY}"
+    )
+    if (
+        gradle_children != {"caches", "wrapper"}
+        or gradle_records.get("caches/9.3.0", {}).get("kind") != "directory"
+        or gradle_records.get("caches/modules-2", {}).get("kind") != "directory"
+        or gradle_records.get(cache_key_root, {}).get("kind") != "directory"
+        or gradle_records.get(f"{cache_key_root}/gradle-9.3.0", {}).get("kind")
+        != "directory"
+        or gradle_records.get(
+            f"{cache_key_root}/gradle-9.3.0-bin.zip.ok", {}
+        ).get("kind") != "file"
+        or gradle_records.get(
+            _SDK_GRADLE_LAUNCHER_ARCHIVE_NAME.removeprefix(
+                "gradle/gradle-user-home/"
+            ), {}
+        ).get("kind") != "file"
+    ):
+        raise ReceiptError("SDK private Gradle offline closure is not exact")
+
+
+def _sdk_binding_contract(
+    value: Any,
+    records: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Validate the path-free Node, SwiftPM, and Gradle lock bindings."""
+
+    bindings = _require_exact_json_fields(
+        value, {"node", "swiftpm", "gradle"}, "SDK dependency bindings"
+    )
+    node = _require_exact_json_fields(
+        bindings["node"],
+        {
+            "node_modules_archive_name",
+            "package_lock_archive_name",
+            "package_lock_sha256",
+            "installed_lock_sha256",
+        },
+        "SDK Node binding",
+    )
+    if (
+        node["node_modules_archive_name"] != "node/node_modules"
+        or node["package_lock_archive_name"] != "node/package-lock.json"
+    ):
+        raise ReceiptError("SDK Node archive names are not exact")
+    for field in ("package_lock_sha256", "installed_lock_sha256"):
+        _require_digest(node[field], f"SDK Node {field}")
+    swift = _require_exact_json_fields(
+        bindings["swiftpm"],
+        {
+            "cache_archive_name",
+            "package_resolved_archive_name",
+            "package_resolved_sha256",
+            "resolved_revisions",
+        },
+        "SDK SwiftPM binding",
+    )
+    if (
+        swift["cache_archive_name"] != "swiftpm/cache"
+        or swift["package_resolved_archive_name"] != "swiftpm/Package.resolved"
+    ):
+        raise ReceiptError("SDK SwiftPM archive names are not exact")
+    _require_digest(swift["package_resolved_sha256"], "SDK Package.resolved digest")
+    revisions = swift["resolved_revisions"]
+    if not isinstance(revisions, list) or len(revisions) > _MAX_SDK_RECORDS:
+        raise ReceiptError("SDK SwiftPM revisions are not bounded")
+    revision_keys: list[str] = []
+    for index, raw in enumerate(revisions):
+        item = _require_exact_json_fields(
+            raw, {"identity", "checkout", "revision", "tree"},
+            f"SDK SwiftPM revision {index}",
+        )
+        identity = item["identity"]
+        checkout = item["checkout"]
+        revision = item["revision"]
+        tree = item["tree"]
+        if (
+            not isinstance(identity, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", identity) is None
+            or not isinstance(checkout, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", checkout) is None
+            or not isinstance(revision, str)
+            or _OBJECT_ID_RE.fullmatch(revision) is None
+            or not isinstance(tree, str)
+            or _OBJECT_ID_RE.fullmatch(tree) is None
+        ):
+            raise ReceiptError("SDK SwiftPM revision is malformed")
+        revision_keys.append(identity)
+    if revision_keys != sorted(set(revision_keys)):
+        raise ReceiptError("SDK SwiftPM revisions are not uniquely ordered")
+    gradle = _require_exact_json_fields(
+        bindings["gradle"],
+        {
+            "distribution_archive_name",
+            "distribution_sha256",
+            "distribution_url",
+            "gradle_user_home_archive_name",
+            "launcher_archive_name",
+            "wrapper_cache_key",
+            "version",
+            "wrapper_properties_sha256",
+        },
+        "SDK Gradle binding",
+    )
+    wrappers = _require_exact_json_fields(
+        gradle["wrapper_properties_sha256"], {"java", "kotlin"},
+        "SDK Gradle wrapper digests",
+    )
+    if (
+        gradle["distribution_archive_name"] != "gradle/gradle-9.3.0-bin.zip"
+        or gradle["gradle_user_home_archive_name"] != "gradle/gradle-user-home"
+        or gradle["distribution_url"] != _SDK_GRADLE_DISTRIBUTION_URL
+        or gradle["launcher_archive_name"]
+        != _SDK_GRADLE_LAUNCHER_ARCHIVE_NAME
+        or gradle["version"] != "9.3.0"
+        or gradle["wrapper_cache_key"] != _SDK_GRADLE_WRAPPER_CACHE_KEY
+    ):
+        raise ReceiptError("SDK Gradle binding is not exact 9.3.0")
+    _require_digest(gradle["distribution_sha256"], "SDK Gradle distribution digest")
+    for name, digest in wrappers.items():
+        _require_digest(digest, f"SDK Gradle {name} wrapper digest")
+    expected_files = {
+        "node/package-lock.json": node["package_lock_sha256"],
+        "node/node_modules/.package-lock.json": node["installed_lock_sha256"],
+        "swiftpm/Package.resolved": swift["package_resolved_sha256"],
+        "gradle/gradle-9.3.0-bin.zip": gradle["distribution_sha256"],
+        "gradle/java-gradle-wrapper.properties": wrappers["java"],
+        "gradle/kotlin-gradle-wrapper.properties": wrappers["kotlin"],
+    }
+    for relative, digest in expected_files.items():
+        record = records.get(relative)
+        if not isinstance(record, dict) or record.get("kind") != "file" or record.get("sha256") != digest:
+            raise ReceiptError(f"SDK binding does not match archived {relative}")
+    for relative in (
+        "node/node_modules", "swiftpm/cache", "swiftpm/cache/checkouts",
+        "swiftpm/cache/repositories", "gradle/gradle-user-home",
+    ):
+        record = records.get(relative)
+        if not isinstance(record, dict) or record.get("kind") != "directory":
+            raise ReceiptError(f"SDK binding omits archived directory {relative}")
+    launcher = records.get(_SDK_GRADLE_LAUNCHER_ARCHIVE_NAME)
+    if (
+        not isinstance(launcher, dict)
+        or launcher.get("kind") != "file"
+        or int(str(launcher.get("mode")), 8) & 0o111 == 0
+    ):
+        raise ReceiptError("SDK binding omits its authenticated Gradle launcher")
+    return bindings
+
+
+def _sdk_validate_control_files(
+    controls: dict[str, bytes], bindings: dict[str, Any]
+) -> None:
+    """Recheck the lock/revision/wrapper semantics from archived bytes."""
+
+    def decoded(name: str) -> dict[str, Any]:
+        data = controls.get(name)
+        if data is None:
+            raise ReceiptError(f"SDK archive omits control file {name}")
+        try:
+            value = json.loads(data)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ReceiptError(f"SDK archive control file {name} is malformed") from error
+        if not isinstance(value, dict):
+            raise ReceiptError(f"SDK archive control file {name} is not an object")
+        return value
+
+    package = decoded("node/package-lock.json")
+    installed = decoded("node/node_modules/.package-lock.json")
+    if (
+        package.get("lockfileVersion") != 3
+        or installed.get("lockfileVersion") != 3
+        or (package.get("name"), package.get("version"))
+        != (installed.get("name"), installed.get("version"))
+        or not isinstance(package.get("packages"), dict)
+        or not isinstance(installed.get("packages"), dict)
+        or not installed["packages"]
+        or any(package["packages"].get(key) != value for key, value in installed["packages"].items())
+    ):
+        raise ReceiptError("SDK archived Node closure disagrees with package-lock.json")
+    resolved = decoded("swiftpm/Package.resolved")
+    resolved_pairs = sorted(
+        (
+            {"identity": pin.get("identity"), "revision": pin.get("state", {}).get("revision")}
+            for pin in resolved.get("pins", [])
+            if isinstance(pin, dict) and isinstance(pin.get("state"), dict)
+        ),
+        key=lambda item: str(item["identity"]),
+    ) if isinstance(resolved.get("pins"), list) else []
+    expected_pairs = [
+        {"identity": item["identity"], "revision": item["revision"]}
+        for item in bindings["swiftpm"]["resolved_revisions"]
+    ]
+    if resolved.get("version") != 2 or resolved_pairs != expected_pairs:
+        raise ReceiptError("SDK archived Package.resolved revisions are not exact")
+    for item in bindings["swiftpm"]["resolved_revisions"]:
+        name = f"swiftpm/cache/checkouts/{item['checkout']}/.git/HEAD"
+        head = controls.get(name)
+        if head is None:
+            raise ReceiptError("SDK archived SwiftPM checkout HEAD is absent")
+        try:
+            observed_revision = head.decode("ascii", "strict").strip()
+        except UnicodeDecodeError as error:
+            raise ReceiptError("SDK archived SwiftPM checkout HEAD is malformed") from error
+        if observed_revision != item["revision"]:
+            raise ReceiptError("SDK archived SwiftPM checkout revision changed")
+    for kind in ("java", "kotlin"):
+        name = f"gradle/{kind}-gradle-wrapper.properties"
+        try:
+            lines = controls[name].decode("utf-8").splitlines()
+        except (KeyError, UnicodeDecodeError) as error:
+            raise ReceiptError(f"SDK archived {kind} Gradle wrapper is malformed") from error
+        values = dict(
+            line.split("=", 1) for line in lines
+            if line and not line.startswith("#") and "=" in line
+        )
+        if values.get("distributionUrl") != _SDK_GRADLE_DISTRIBUTION_URL.replace(
+            ":", r"\:", 1,
+        ):
+            raise ReceiptError(f"SDK archived {kind} Gradle wrapper is not 9.3.0")
+        pinned = values.get("distributionSha256Sum")
+        if pinned is not None and pinned != bindings["gradle"]["distribution_sha256"]:
+            raise ReceiptError(f"SDK archived {kind} Gradle checksum is inconsistent")
+
+
+def _sdk_validate_tar(
+    archive: PathContract,
+    records: list[dict[str, Any]],
+    bindings: dict[str, Any],
+) -> None:
+    """Replay every retained SDK tar member against its sanitized inventory."""
+
+    expected = {
+        ("sdk-inputs" if record["path"] == "." else f"sdk-inputs/{record['path']}"): record
+        for record in records
+    }
+    controls: dict[str, bytes] = {}
+    control_names = {
+        "node/package-lock.json",
+        "node/node_modules/.package-lock.json",
+        "swiftpm/Package.resolved",
+        "gradle/java-gradle-wrapper.properties",
+        "gradle/kotlin-gradle-wrapper.properties",
+    }
+    control_names.update(
+        f"swiftpm/cache/checkouts/{item['checkout']}/.git/HEAD"
+        for item in bindings["swiftpm"]["resolved_revisions"]
+    )
+    try:
+        with tarfile.open(archive.path, mode="r:") as stream:
+            members = stream.getmembers()
+            if len(members) != len(expected) or {item.name for item in members} != set(expected):
+                raise ReceiptError("SDK retained tar inventory is not exact")
+            for member in members:
+                record = expected[member.name]
+                kind = record["kind"]
+                if (
+                    member.uid != 0
+                    or member.gid != 0
+                    or member.mtime != 0
+                    or member.mode != int(record["mode"], 8)
+                    or (kind == "directory" and not member.isdir())
+                    or (kind == "symlink" and (not member.issym() or member.linkname != record["target"]))
+                    or (kind == "file" and (not member.isfile() or member.size != record["size"]))
+                ):
+                    raise ReceiptError("SDK retained tar member metadata changed")
+                if kind != "file":
+                    continue
+                source = stream.extractfile(member)
+                if source is None:
+                    raise ReceiptError("SDK retained tar file is unavailable")
+                digest = hashlib.sha256()
+                captured = bytearray()
+                relative = member.name.removeprefix("sdk-inputs/")
+                while block := source.read(1024 * 1024):
+                    digest.update(block)
+                    if relative in control_names:
+                        captured.extend(block)
+                        if len(captured) > 16 * 1024 * 1024:
+                            raise ReceiptError("SDK control file exceeds its bound")
+                if digest.hexdigest() != record["sha256"]:
+                    raise ReceiptError("SDK retained tar file digest changed")
+                if relative in control_names:
+                    controls[relative] = bytes(captured)
+    except (OSError, tarfile.TarError) as error:
+        raise ReceiptError("SDK retained tar is malformed") from error
+    _sdk_validate_control_files(controls, bindings)
+    after = _bounded_path_contract(
+        archive.path,
+        "SDK dependency archive after replay",
+        maximum_bytes=_MAX_SDK_ARCHIVE_BYTES,
+        expected_mode=0o400,
+        allowed_owners={os.geteuid()},
+    )
+    if after != archive:
+        raise ReceiptError("SDK retained tar changed during replay")
+
+
+def _sdk_public_archive(
+    contract: EvidenceSnapshot | PathContract,
+    *,
+    archive_id: str,
+    archive_name: str,
+) -> dict[str, Any]:
+    return {
+        "archive_id": archive_id,
+        "archive_name": archive_name,
+        "mode": f"{contract.mode:04o}",
+        "sha256": contract.sha256,
+        "size_bytes": contract.size,
+    }
+
+
+def _validate_sdk_dependency_evidence(
+    *,
+    archive_path: Path,
+    input_inventory_path: Path,
+    final_work_inventory_path: Path,
+    release_root: Path,
+    source_manifest_path: Path,
+    source_manifest_sha256: str,
+    expected_git_sha256: str,
+) -> dict[str, Any]:
+    """Authenticate the retained path-free SDK dependency closure."""
+
+    invocation_root = release_root.parent
+    exact = {
+        archive_path: invocation_root / "sdk-dependency-bundle.tar",
+        input_inventory_path: invocation_root / "sdk-dependency-input.json",
+        final_work_inventory_path: invocation_root / "sdk-dependency-work-final.json",
+    }
+    if any(actual != expected for actual, expected in exact.items()):
+        raise ReceiptError("SDK dependency evidence paths are not exact retained paths")
+    archive = _bounded_path_contract(
+        archive_path,
+        "SDK dependency archive",
+        maximum_bytes=_MAX_SDK_ARCHIVE_BYTES,
+        expected_mode=0o400,
+        allowed_owners={os.geteuid()},
+    )
+    inventory = _bounded_evidence_snapshot(
+        input_inventory_path,
+        "SDK dependency input inventory",
+        maximum_bytes=_MAX_SDK_INVENTORY_BYTES,
+        expected_mode=0o400,
+        allowed_owners={os.geteuid()},
+    )
+    final_work = _bounded_evidence_snapshot(
+        final_work_inventory_path,
+        "SDK dependency final-work inventory",
+        maximum_bytes=_MAX_SDK_INVENTORY_BYTES,
+        expected_mode=0o400,
+        allowed_owners={os.geteuid()},
+    )
+    document = _require_exact_json_fields(
+        _decode_canonical_json(inventory.data, "SDK dependency input inventory"),
+        {
+            "format", "schema_version", "archive_id", "source_disclosure",
+            "source_manifest_sha256", "source_state_sha256", "bindings",
+            "archive", "record_count", "file_bytes", "records",
+            "work_initial_record_count", "work_initial_file_bytes",
+            "work_initial_records",
+        },
+        "SDK dependency input inventory",
+    )
+    if (
+        document["format"] != "iroha-sumeragi-v2-sdk-dependency-bundle"
+        or type(document["schema_version"]) is not int
+        or document["schema_version"] != 1
+        or document["archive_id"] != "release-sdk-dependencies.bundle.v1"
+        or document["source_disclosure"] != "withheld"
+        or document["source_manifest_sha256"] != source_manifest_sha256
+    ):
+        raise ReceiptError("SDK dependency input inventory identity is not exact")
+    _require_digest(document["source_state_sha256"], "SDK source-state digest")
+    records, by_path, file_bytes = _sdk_inventory_records(
+        document["records"], "SDK dependency input inventory", root_mode="0500"
+    )
+    work_records, _, work_file_bytes = _sdk_inventory_records(
+        document["work_initial_records"],
+        "SDK dependency initial-work inventory",
+        root_mode="0700",
+    )
+    if (
+        type(document["record_count"]) is not int
+        or document["record_count"] != len(records)
+        or type(document["file_bytes"]) is not int
+        or document["file_bytes"] != file_bytes
+        or type(document["work_initial_record_count"]) is not int
+        or document["work_initial_record_count"] != len(work_records)
+        or type(document["work_initial_file_bytes"]) is not int
+        or document["work_initial_file_bytes"] != work_file_bytes
+    ):
+        raise ReceiptError("SDK dependency inventory accounting is not exact")
+    bindings = _sdk_binding_contract(document["bindings"], by_path)
+    _sdk_validate_private_source_manifest(
+        path=source_manifest_path,
+        expected_sha256=source_manifest_sha256,
+        archive_records=records,
+        bindings=bindings,
+        expected_git_sha256=expected_git_sha256,
+    )
+    expected_archive = _sdk_public_archive(
+        archive,
+        archive_id="release-sdk-dependencies.bundle.v1",
+        archive_name="sdk-dependency-bundle.tar",
+    )
+    if document["archive"] != expected_archive:
+        raise ReceiptError("SDK dependency tar binding is not exact")
+    _sdk_validate_tar(archive, records, bindings)
+
+    final_document = _require_exact_json_fields(
+        _decode_canonical_json(final_work.data, "SDK final-work inventory"),
+        {
+            "format", "schema_version", "archive_id",
+            "sdk_dependency_inventory_sha256", "record_count", "file_bytes",
+            "records",
+        },
+        "SDK final-work inventory",
+    )
+    final_records, _, final_bytes = _sdk_inventory_records(
+        final_document["records"], "SDK final-work inventory", root_mode="0700"
+    )
+    if (
+        final_document["format"]
+        != "iroha-sumeragi-v2-sdk-dependency-work-final"
+        or type(final_document["schema_version"]) is not int
+        or final_document["schema_version"] != 1
+        or final_document["archive_id"]
+        != "release-sdk-dependencies.work-final.v1"
+        or final_document["sdk_dependency_inventory_sha256"] != inventory.sha256
+        or type(final_document["record_count"]) is not int
+        or final_document["record_count"] != len(final_records)
+        or type(final_document["file_bytes"]) is not int
+        or final_document["file_bytes"] != final_bytes
+        or final_records != work_records
+        or final_bytes != work_file_bytes
+    ):
+        raise ReceiptError("SDK final-work inventory binding is not exact")
+    return {
+        "schema_version": 1,
+        "source_disclosure": "withheld",
+        "source_manifest_sha256": source_manifest_sha256,
+        "source_state_sha256": document["source_state_sha256"],
+        "archive": expected_archive,
+        "input_inventory": _sdk_public_archive(
+            inventory,
+            archive_id="release-sdk-dependencies.input-inventory.v1",
+            archive_name="sdk-dependency-input.json",
+        ),
+        "final_work_inventory": _sdk_public_archive(
+            final_work,
+            archive_id="release-sdk-dependencies.work-final.v1",
+            archive_name="sdk-dependency-work-final.json",
+        ),
+    }
+
+
 def _validate_scaling_evidence(
     *,
     manifest_path: Path,
@@ -5766,14 +7168,17 @@ def _validate_scaling_evidence(
         raise ReceiptError("scaling evidence manifest changed while decoded")
 
     bundle = {
-        "root": str(root),
+        "archive_id": "release-scaling.bundle.v1",
         "file_count": len(files),
         "total_size_bytes": total_bytes,
         "directories": directories,
         "files": [
             {
+                "archive_id": "release-scaling.file.v1:" + relative,
                 "relative_path": relative,
-                **_path_contract_artifact(contract),
+                "sha256": contract.sha256,
+                "size_bytes": contract.size,
+                "mode": f"{contract.mode:04o}",
             }
             for relative, contract in files
         ],
@@ -5783,17 +7188,23 @@ def _validate_scaling_evidence(
         "configuration_sha256": expected_configuration_sha256,
         "irohad_sha256": expected_irohad_sha256,
         "iroha_cli_sha256": expected_iroha_cli_sha256,
-        "repository_root": str(repo_root),
         "retained_tooling": [
             {
                 "role": role,
-                "source_path": source_path,
-                **_path_contract_artifact(contract),
+                "archive_id": f"release-scaling.retained-tool.{role}.v1",
+                "sha256": contract.sha256,
+                "size_bytes": contract.size,
+                "mode": f"{contract.mode:04o}",
             }
-            for role, source_path, contract in retained_tooling
+            for role, _, contract in retained_tooling
         ],
     }
-    return bundle, _path_contract_artifact(retained_contract), trust_anchors
+    return bundle, {
+        "archive_id": "release-scaling.retained-validator.v1",
+        "sha256": retained_contract.sha256,
+        "size_bytes": retained_contract.size,
+        "mode": f"{retained_contract.mode:04o}",
+    }, trust_anchors
 
 
 def _read_g12_snapshot(
@@ -6264,13 +7675,21 @@ def build_receipt(
     g12_seed_completion_path: Path,
     g12_fault_soak_completion_path: Path,
     scaling_evidence_manifest_path: Path,
+    sdk_dependency_archive_path: Path,
+    sdk_dependency_input_inventory_path: Path,
+    sdk_dependency_final_work_inventory_path: Path,
     expected_scaling_trial_harness_sha256: str,
     expected_scaling_configuration_sha256: str,
     expected_scaling_irohad_sha256: str,
     expected_scaling_iroha_cli_sha256: str,
     repository_root_path: Path,
     runner_logs_sealed: bool = False,
-) -> tuple[dict[str, Any], PathContract, PathContract]:
+) -> tuple[
+    dict[str, Any],
+    PathContract,
+    PathContract,
+    list[PathContract | DirectoryContract],
+]:
     """Validate every completion artifact and return one aggregate receipt."""
 
     repo_root = repository_root_path.resolve(strict=True)
@@ -6335,7 +7754,11 @@ def build_receipt(
         expected_revocation_sha256=expected_revocation_sha256,
         expected_signer_fingerprint=expected_signer_fingerprint,
     )
-    bootstrap_authentication, bootstrap_evidence = _validate_bootstrap_evidence(
+    (
+        bootstrap_authentication,
+        bootstrap_evidence,
+        bootstrap_runtime_contracts,
+    ) = _validate_bootstrap_evidence(
         completion_path=bootstrap_completion_path,
         evidence_dir_path=bootstrap_evidence_dir_path,
         identity_path=bootstrap_identity_path,
@@ -6360,6 +7783,22 @@ def build_receipt(
         ),
         expected_scaling_irohad_sha256=expected_scaling_irohad_sha256,
         expected_scaling_iroha_cli_sha256=expected_scaling_iroha_cli_sha256,
+    )
+    sdk_dependencies = _validate_sdk_dependency_evidence(
+        archive_path=sdk_dependency_archive_path,
+        input_inventory_path=sdk_dependency_input_inventory_path,
+        final_work_inventory_path=sdk_dependency_final_work_inventory_path,
+        release_root=repo_root,
+        source_manifest_path=(
+            bootstrap_evidence_dir_path
+            / "sdk-dependency-bundle-manifest.json"
+        ),
+        source_manifest_sha256=bootstrap_authentication[
+            "trusted_input_digests"
+        ]["sdk_dependency_bundle_manifest"],
+        expected_git_sha256=bootstrap_authentication[
+            "trusted_input_digests"
+        ]["git"],
     )
     checker_environment = _closed_replay_environment(
         Path(signature_archives["git"]["path"]).parent
@@ -6414,6 +7853,16 @@ def build_receipt(
         ),
     )
     prebuilt_manifest_sha256 = prebuilt_binary_bundle["manifest"]["sha256"]
+    prebuilt_invocation_id = prebuilt_binary_bundle["archive_id"].partition(":")[2]
+    prebuilt_artifact_root = release_root_path.parent / "output"
+    prebuilt_cargo_target_root = release_root_path.parent / "target"
+    prebuilt_bundle_dir = (
+        prebuilt_artifact_root
+        / "sumeragi-v2-release"
+        / sealed["workspace_source_manifest_sha256"]
+        / "programs"
+        / prebuilt_invocation_id
+    )
     g4p_evidence = _validate_g4p_evidence(
         completion_path=g4p_completion_path,
         sealed=sealed,
@@ -6494,8 +7943,8 @@ def build_receipt(
         seed_path,
         seed_summary,
         manifest,
-        Path(prebuilt_binary_bundle["cargo_target_root"]),
-        Path(prebuilt_binary_bundle["bundle_dir"]),
+        prebuilt_cargo_target_root,
+        prebuilt_bundle_dir,
         prebuilt_manifest_sha256,
     )
     seed_localnet_manifest_index, seed_localnet_manifests = (
@@ -6637,7 +8086,7 @@ def build_receipt(
                 manifest,
                 "--build-root",
                 str(
-                    Path(prebuilt_binary_bundle["artifact_root"])
+                    prebuilt_artifact_root
                     / "sumeragi-v2-release"
                     / manifest
                 ),
@@ -6696,6 +8145,7 @@ def build_receipt(
             "corridor_logs": [_artifact(path) for path in corridor_logs],
             "cargo_cache_input": cargo_cache_input, "cargo_cache_input_inventory": cargo_cache_input["inventory"],
             "cargo_cache_final_inventory": cargo_cache_input["final_inventory"],
+            "sdk_dependencies": sdk_dependencies,
             "prebuilt_binary_bundle": prebuilt_binary_bundle,
             "formal_completion": _artifact(formal_path),
             "formal_gate_log": _artifact(formal_log),
@@ -6739,6 +8189,7 @@ def build_receipt(
         receipt,
         _snapshot_contract(candidate_snapshot),
         _snapshot_contract(sealed_snapshot),
+        bootstrap_runtime_contracts,
     )
 
 
@@ -6854,6 +8305,11 @@ def _snapshot_receipt_inputs(
     *,
     candidate_identity: PathContract,
     sealed_identity: PathContract,
+    scaling_root: Path,
+    bootstrap_evidence_root: Path,
+    candidate_root: Path,
+    release_root: Path,
+    bootstrap_runtime_contracts: list[PathContract | DirectoryContract],
 ) -> list[PathContract | DirectoryContract]:
     records = list(_iter_artifact_records(receipt["authentication"])) + list(
         _iter_artifact_records(receipt["evidence"])
@@ -6892,16 +8348,14 @@ def _snapshot_receipt_inputs(
     scaling_bundle = receipt["evidence"].get("multilane_scaling_bundle")
     if not isinstance(scaling_bundle, dict):
         raise ReceiptError("aggregate receipt lacks its scaling bundle inventory")
-    scaling_root_raw = scaling_bundle.get("root")
     scaling_files_raw = scaling_bundle.get("files")
     scaling_directories_raw = scaling_bundle.get("directories")
     if (
-        not isinstance(scaling_root_raw, str)
+        scaling_bundle.get("archive_id") != "release-scaling.bundle.v1"
         or not isinstance(scaling_files_raw, list)
         or not isinstance(scaling_directories_raw, list)
     ):
         raise ReceiptError("aggregate receipt scaling bundle inventory is malformed")
-    scaling_root = Path(scaling_root_raw)
     expected_scaling_files: list[str] = []
     expected_scaling_size = 0
     for index, record in enumerate(scaling_files_raw):
@@ -6909,13 +8363,10 @@ def _snapshot_receipt_inputs(
             raise ReceiptError("aggregate receipt scaling file record is malformed")
         relative = record.get("relative_path")
         size = record.get("size_bytes")
-        path_value = record.get("path")
         if (
             not isinstance(relative, str)
             or type(size) is not int
-            or not isinstance(path_value, str)
-            or Path(path_value)
-            != scaling_root.joinpath(*PurePosixPath(relative).parts)
+            or record.get("archive_id") != "release-scaling.file.v1:" + relative
         ):
             raise ReceiptError(
                 f"aggregate receipt scaling file {index} path is malformed"
@@ -6946,21 +8397,55 @@ def _snapshot_receipt_inputs(
         raise ReceiptError(
             "scaling evidence bundle inventory changed before receipt publication"
         )
+    for relative, path, metadata in current_scaling:
+        record = next(
+            item for item in scaling_files_raw if item["relative_path"] == relative
+        )
+        by_path[path] = {
+            "path": str(path),
+            "sha256": record["sha256"],
+            "size_bytes": record["size_bytes"],
+            "mode": record["mode"],
+            "owner_uid": metadata.st_uid,
+            "nlink": metadata.st_nlink,
+        }
 
     prebuilt_bundle = receipt["evidence"].get("prebuilt_binary_bundle")
     if (
         not isinstance(prebuilt_bundle, dict)
-        or prebuilt_bundle.get("schema_version") != 2
-        or not isinstance(prebuilt_bundle.get("bundle_dir"), str)
+        or prebuilt_bundle.get("schema_version") != 3
+        or not isinstance(prebuilt_bundle.get("archive_id"), str)
+        or not prebuilt_bundle["archive_id"].startswith(
+            "release-prebuilt.bundle.v1:"
+        )
         or not isinstance(prebuilt_bundle.get("manifest"), dict)
         or not isinstance(prebuilt_bundle.get("binaries"), list)
     ):
         raise ReceiptError("aggregate receipt lacks its prebuilt binary bundle")
-    prebuilt_root = Path(prebuilt_bundle["bundle_dir"])
+    invocation_id = prebuilt_bundle["archive_id"].partition(":")[2]
+    if _PREBUILT_INVOCATION_RE.fullmatch(invocation_id) is None:
+        raise ReceiptError("aggregate receipt prebuilt bundle id is malformed")
+    prebuilt_root = (
+        release_root.parent
+        / "output"
+        / "sumeragi-v2-release"
+        / receipt["identity"]["sealed_source_manifest_sha256"]
+        / "programs"
+        / invocation_id
+    )
     prebuilt_manifest = prebuilt_bundle["manifest"]
     prebuilt_binaries = prebuilt_bundle["binaries"]
-    if prebuilt_manifest.get("path") != str(prebuilt_root / _PREBUILT_MANIFEST_NAME):
+    if prebuilt_manifest.get("archive_id") != "release-prebuilt.manifest.v2":
         raise ReceiptError("aggregate receipt prebuilt manifest path is malformed")
+    manifest_path = prebuilt_root / _PREBUILT_MANIFEST_NAME
+    by_path[manifest_path] = {
+        "path": str(manifest_path),
+        "sha256": prebuilt_manifest["sha256"],
+        "size_bytes": prebuilt_manifest["size_bytes"],
+        "mode": prebuilt_manifest["mode"],
+        "owner_uid": os.geteuid(),
+        "nlink": 1,
+    }
     expected_binary_paths = [
         (prefix, relative, prebuilt_root.joinpath(*PurePosixPath(relative).parts))
         for prefix, relative in _PREBUILT_BINARY_SPECS
@@ -6974,11 +8459,176 @@ def _snapshot_receipt_inputs(
             not isinstance(record, dict)
             or record.get("role") != prefix
             or record.get("relative_path") != relative
-            or record.get("path") != str(path)
+            or record.get("archive_id")
+            != f"release-prebuilt.binary.{prefix}.v1"
         ):
             raise ReceiptError(
                 f"aggregate receipt prebuilt binary {index} path is malformed"
             )
+        by_path[path] = {
+            "path": str(path),
+            "sha256": record["sha256"],
+            "size_bytes": record["size_bytes"],
+            "mode": record["mode"],
+            "owner_uid": os.geteuid(),
+            "nlink": 1,
+        }
+
+    cargo_cache = receipt["evidence"].get("cargo_cache_input")
+    if not isinstance(cargo_cache, dict) or set(cargo_cache) != {
+        "schema_version",
+        "inventory",
+        "final_inventory",
+        "runtime_inventory",
+        "runtime_environment_sha256",
+        "runtime_directories",
+        "cargo_home",
+        "source_cargo_home_disclosure",
+        "input_root_count",
+        "input_record_count",
+        "input_file_count",
+    }:
+        raise ReceiptError("aggregate receipt Cargo-cache authentication is malformed")
+    if (
+        type(cargo_cache["schema_version"]) is not int
+        or cargo_cache["schema_version"] != 2
+        or cargo_cache["source_cargo_home_disclosure"] != "withheld"
+        or any(
+            type(cargo_cache[name]) is not int or cargo_cache[name] < 0
+            for name in ("input_root_count", "input_record_count", "input_file_count")
+        )
+    ):
+        raise ReceiptError("aggregate receipt Cargo-cache identity is malformed")
+    artifact_root = release_root.parent / "output"
+    cargo_file_specs = (
+        (
+            "inventory",
+            "release-cargo-cache.input-inventory.v1",
+            artifact_root / "cargo-cache-input.json",
+        ),
+        (
+            "final_inventory",
+            "release-cargo-cache.final-inventory.v1",
+            artifact_root / "cargo-cache-final.json",
+        ),
+        (
+            "runtime_inventory",
+            "release-runtime.inventory.v1",
+            release_root.parent / "runtime-input.json",
+        ),
+    )
+    for field, archive_id, path in cargo_file_specs:
+        record = cargo_cache[field]
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"archive_id", "mode", "sha256", "size_bytes"}
+            or record.get("archive_id") != archive_id
+        ):
+            raise ReceiptError(f"aggregate receipt Cargo-cache {field} is malformed")
+        by_path[path] = {
+            "path": str(path),
+            "sha256": record["sha256"],
+            "size_bytes": record["size_bytes"],
+            "mode": record["mode"],
+            "owner_uid": os.geteuid(),
+            "nlink": 1,
+        }
+    if (
+        receipt["evidence"].get("cargo_cache_input_inventory")
+        != cargo_cache["inventory"]
+        or receipt["evidence"].get("cargo_cache_final_inventory")
+        != cargo_cache["final_inventory"]
+    ):
+        raise ReceiptError("aggregate receipt Cargo-cache inventory aliases disagree")
+    sdk = _require_exact_json_fields(
+        receipt["evidence"].get("sdk_dependencies"),
+        {
+            "schema_version", "source_disclosure", "source_manifest_sha256",
+            "source_state_sha256", "archive", "input_inventory",
+            "final_work_inventory",
+        },
+        "aggregate receipt SDK dependencies",
+    )
+    if (
+        type(sdk["schema_version"]) is not int
+        or sdk["schema_version"] != 1
+        or sdk["source_disclosure"] != "withheld"
+    ):
+        raise ReceiptError("aggregate receipt SDK dependency identity is malformed")
+    _require_digest(sdk["source_manifest_sha256"], "aggregate SDK source manifest")
+    _require_digest(sdk["source_state_sha256"], "aggregate SDK source state")
+    sdk_specs = (
+        (
+            "archive", "release-sdk-dependencies.bundle.v1",
+            "sdk-dependency-bundle.tar",
+        ),
+        (
+            "input_inventory", "release-sdk-dependencies.input-inventory.v1",
+            "sdk-dependency-input.json",
+        ),
+        (
+            "final_work_inventory", "release-sdk-dependencies.work-final.v1",
+            "sdk-dependency-work-final.json",
+        ),
+    )
+    for field, archive_id, archive_name in sdk_specs:
+        record = _require_exact_json_fields(
+            sdk[field],
+            {"archive_id", "archive_name", "mode", "sha256", "size_bytes"},
+            f"aggregate receipt SDK {field}",
+        )
+        if (
+            record["archive_id"] != archive_id
+            or record["archive_name"] != archive_name
+            or record["mode"] != "0400"
+        ):
+            raise ReceiptError(f"aggregate receipt SDK {field} is not exact")
+        by_path[release_root.parent / archive_name] = {
+            "path": str(release_root.parent / archive_name),
+            "sha256": record["sha256"],
+            "size_bytes": record["size_bytes"],
+            "mode": record["mode"],
+            "owner_uid": os.geteuid(),
+            "nlink": 1,
+        }
+    expected_runtime_environment = {
+        "runtime_home_path": str(artifact_root / "home"),
+        "runtime_tmpdir_path": str(artifact_root / "tmp"),
+        "runtime_tmp_path": str(artifact_root / "tmp"),
+        "runtime_temp_path": str(artifact_root / "tmp"),
+        "runtime_cache_path": str(artifact_root / "cache"),
+    }
+    if cargo_cache["runtime_environment_sha256"] != hashlib.sha256(
+        _canonical_json(expected_runtime_environment)
+    ).hexdigest():
+        raise ReceiptError("aggregate receipt runtime environment digest is not exact")
+    runtime_directories = cargo_cache["runtime_directories"]
+    if not isinstance(runtime_directories, dict) or set(runtime_directories) != {
+        "home",
+        "tmp",
+        "cache",
+    }:
+        raise ReceiptError("aggregate receipt runtime directory inventory is malformed")
+    cargo_cache_directories = {
+        artifact_root / "home",
+        artifact_root / "tmp",
+        artifact_root / "cache",
+        artifact_root / "cargo-home",
+    }
+    for name in ("cache", "home", "tmp"):
+        record = runtime_directories[name]
+        if record != {
+            "archive_id": f"release-runtime.directory.{name}.v1",
+            "mode": "0700",
+        }:
+            raise ReceiptError(
+                f"aggregate receipt runtime directory {name} is malformed"
+            )
+    if cargo_cache["cargo_home"] != {
+        "archive_id": "release-cargo-cache.home.v1",
+        "mode": "0700",
+    }:
+        raise ReceiptError("aggregate receipt Cargo home archive is malformed")
     prebuilt_directories = {
         prebuilt_root,
         prebuilt_root / "release",
@@ -7048,11 +8698,6 @@ def _snapshot_receipt_inputs(
                 "g_unit_focused_test_inventory",
                 "corridor_logs",
             ),
-        ),
-        (
-            "Cargo cache snapshots",
-            "cargo_cache_input_inventory",
-            ("cargo_cache_input_inventory", "cargo_cache_final_inventory"),
         ),
         (
             "formal",
@@ -7132,7 +8777,9 @@ def _snapshot_receipt_inputs(
                         break
                     parent = parent.parent
 
-    snapshots: list[PathContract | DirectoryContract] = []
+    snapshots: list[PathContract | DirectoryContract] = list(
+        bootstrap_runtime_contracts
+    )
     inodes: dict[tuple[int, int], Path] = {}
     for index, (path, record) in enumerate(by_path.items()):
         mode_value = record.get("mode")
@@ -7159,20 +8806,21 @@ def _snapshot_receipt_inputs(
             raise ReceiptError("aggregate receipt evidence contains a hard-link alias")
         inodes[inode_key] = path
         snapshots.append(snapshot)
-    evidence_root = Path(
-        receipt["evidence"]["bootstrap"]["completion"]["path"]
-    ).parent
+    evidence_root = bootstrap_evidence_root
     directory_paths = {
         evidence_root,
         scaling_root,
         g4p_root,
         g12_seed_root,
         g12_soak_root,
-        Path(receipt["authentication"]["bootstrap"]["candidate_root"]),
-        Path(receipt["authentication"]["bootstrap"]["runner"]["tool_directory"]),
-        Path(receipt["authentication"]["release_identity"]["release_root"]),
+        candidate_root,
+        evidence_root / "runner-bin",
+        evidence_root / "runner-tools",
+        release_root.parent,
+        release_root,
     }
-    directory_paths.update((*family_roots, *(Path(record["path"]) for record in receipt["evidence"]["cargo_cache_input"]["runtime_directories"].values())))
+    directory_paths.update(family_roots)
+    directory_paths.update(cargo_cache_directories)
     directory_paths.update(family_directories)
     directory_paths.update(prebuilt_directories)
     directory_paths.update(
@@ -7258,7 +8906,8 @@ def _revalidate_receipt_inputs(
             )
             if current_directory != snapshot:
                 raise ReceiptError(
-                    f"aggregate evidence directory {index} changed before publication"
+                    "aggregate evidence directory "
+                    f"{index} changed before publication: {snapshot.path}"
                 )
             continue
         current = _capture_path_contract(
@@ -7315,7 +8964,9 @@ def _fsync_receipt_inputs(
             )
             flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
         if current != snapshot:
-            raise ReceiptError(f"durability input {index} changed before fsync")
+            raise ReceiptError(
+                f"durability input {index} changed before fsync: {snapshot.path}"
+            )
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         try:
@@ -7558,6 +9209,13 @@ def main() -> int:
     parser.add_argument("--g12-seed-completion", type=Path, required=True)
     parser.add_argument("--g12-fault-soak-completion", type=Path, required=True)
     parser.add_argument("--scaling-evidence-manifest", type=Path, required=True)
+    parser.add_argument("--sdk-dependency-archive", type=Path, required=True)
+    parser.add_argument(
+        "--sdk-dependency-input-inventory", type=Path, required=True
+    )
+    parser.add_argument(
+        "--sdk-dependency-final-work-inventory", type=Path, required=True
+    )
     parser.add_argument(
         "--expected-scaling-trial-harness-sha256", required=True
     )
@@ -7569,10 +9227,20 @@ def main() -> int:
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--verify-existing", action="store_true")
+    parser.add_argument("--replay-existing", action="store_true")
     _receipt_validation_ack_arguments(parser)
     args = parser.parse_args()
     try:
-        receipt, candidate_identity, sealed_identity = build_receipt(
+        if args.verify_existing and args.replay_existing:
+            raise ReceiptError(
+                "receipt validation and bootstrap replay operations are exclusive"
+            )
+        (
+            receipt,
+            candidate_identity,
+            sealed_identity,
+            bootstrap_runtime_contracts,
+        ) = build_receipt(
             candidate_identity_path=args.candidate_identity,
             sealed_identity_path=args.sealed_identity,
             release_root_path=args.release_root,
@@ -7608,6 +9276,13 @@ def main() -> int:
             g12_seed_completion_path=args.g12_seed_completion,
             g12_fault_soak_completion_path=args.g12_fault_soak_completion,
             scaling_evidence_manifest_path=args.scaling_evidence_manifest,
+            sdk_dependency_archive_path=args.sdk_dependency_archive,
+            sdk_dependency_input_inventory_path=(
+                args.sdk_dependency_input_inventory
+            ),
+            sdk_dependency_final_work_inventory_path=(
+                args.sdk_dependency_final_work_inventory
+            ),
             expected_scaling_trial_harness_sha256=(
                 args.expected_scaling_trial_harness_sha256
             ),
@@ -7621,12 +9296,17 @@ def main() -> int:
                 args.expected_scaling_iroha_cli_sha256
             ),
             repository_root_path=args.repository_root,
-            runner_logs_sealed=args.verify_existing,
+            runner_logs_sealed=(args.verify_existing or args.replay_existing),
         )
         snapshots = _snapshot_receipt_inputs(
             receipt,
             candidate_identity=candidate_identity,
             sealed_identity=sealed_identity,
+            scaling_root=args.scaling_evidence_manifest.parent,
+            bootstrap_evidence_root=args.bootstrap_evidence_dir,
+            candidate_root=args.bootstrap_candidate_root,
+            release_root=args.release_root,
+            bootstrap_runtime_contracts=bootstrap_runtime_contracts,
         )
         expected_output = (
             args.release_root.parent
@@ -7639,12 +9319,15 @@ def main() -> int:
                 "terminal receipt is not the exact bootstrap release output path"
             )
         receipt_bytes = _canonical_json(receipt)
-        if args.verify_existing:
+        if args.verify_existing or args.replay_existing:
             terminal = _existing_receipt_contract(args.output, receipt_bytes)
             verification_snapshots = [*snapshots, terminal]
             _fsync_receipt_inputs(verification_snapshots)
             _revalidate_receipt_inputs(verification_snapshots)
-            _receipt_validation_ack(args, verification_snapshots)
+            if args.verify_existing:
+                _receipt_validation_ack(args, verification_snapshots)
+            elif any((args.validation_ack, args.source_manifest_sha256)):
+                raise ReceiptError("receipt replay rejects acknowledgment inputs")
         else:
             if any((args.validation_ack, args.source_manifest_sha256)):
                 raise ReceiptError("receipt publication rejects ack inputs")
@@ -7660,7 +9343,13 @@ def main() -> int:
     except (OSError, ReceiptError) as error:
         print(f"Sumeragi v2 release receipt error: {error}", file=sys.stderr)
         return 1
-    action = "verified" if args.verify_existing else "published"
+    action = (
+        "replayed"
+        if args.replay_existing
+        else "verified"
+        if args.verify_existing
+        else "published"
+    )
     print(
         f"Sumeragi v2 aggregate release receipt {action}: {args.output}"
     )

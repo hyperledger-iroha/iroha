@@ -1295,9 +1295,11 @@ pub mod sorafs {
             /// runtime-only signer, reader, and terminal sink is injected.
             pub const ENABLED: bool = false;
             /// Maximum appeals and activated cases in one complete snapshot.
-            pub const MAX_CASES: u32 = 4_096;
+            pub const MAX_CASES: u32 =
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_QUERY_MAX_CASES_V1;
             /// Maximum finalized typed events retained in one snapshot.
-            pub const MAX_EVENTS: u32 = 65_536;
+            pub const MAX_EVENTS: u32 =
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_QUERY_MAX_EVENTS_V1;
             /// Maximum pending native transactions.
             pub const MAX_OUTBOX_ENTRIES: u32 = 4_096;
             /// Maximum durable operation identities and dead letters.

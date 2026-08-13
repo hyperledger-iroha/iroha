@@ -945,7 +945,6 @@ fn por_report_outputs_markdown() {
             .header("content-type", "application/x-norito")
             .body(body.clone());
     });
-
     let output = sorafs_cli_cmd()
         .arg("por")
         .arg("report")
@@ -5218,5 +5217,6 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
         Some("anon-guard-pq")
     );
 }
-
+include!("sorafs_cli/pdp.rs");
 include!("sorafs_cli/fetch_and_taikai_security.rs");
+include!("sorafs_cli/por_report.rs");

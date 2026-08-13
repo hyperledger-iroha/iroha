@@ -19,8 +19,8 @@ use crate::sumeragi::{
         AuthenticatedLifecycleIoCapacity, LifecycleIoCapacityCaptureFailure,
         LifecycleIoCapacityWait, LifecycleIoCapacityWaitStatus, ProductionV2Services,
         RecoveredDecisionApplyCapacityCaptureErrorV1, RecoveredDecisionApplyCapacityCaptureV1,
-        RecoveredDecisionFetchExactOutputCaptureV1, RecoveredLifecycleSignCapacityCaptureErrorV1,
-        RecoveredLifecycleSignCapacityCaptureV1,
+        RecoveredDecisionFetchExactOutputCaptureV1, RecoveredLifecycleSignBroadcastOutputCaptureV1,
+        RecoveredLifecycleSignCapacityCaptureErrorV1, RecoveredLifecycleSignCapacityCaptureV1,
     },
 };
 
@@ -222,6 +222,44 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignDispatchErrorV1 {
     DispatchProjection,
     /// The reserved key and claimed carrier projection disagreed.
     ReservedCommandMismatch,
+}
+
+/// Result of one restart-safe recovered signed-Broadcast refanout attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "recovered signed Broadcast refanout result must be observed"]
+pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanoutV1 {
+    /// No Ready lifecycle row currently requires this typed driver.
+    None,
+    /// The authenticated Ready census has no supported Broadcast to refanout.
+    OtherReadyWork,
+    /// The exact-output corridor was full; the Broadcast remains durably Ready.
+    CapacityUnavailable,
+    /// The output or volatile wait transition failed and process restart is required.
+    RestartRequired,
+    /// The corridor owns the fanout and the live row is parked on a volatile wait.
+    Refanned {
+        /// Exact durable Broadcast ordinal retained as the crash-recovery source.
+        ordinal: u128,
+    },
+}
+
+/// Closed failure before a recovered signed Broadcast enters exact output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1 {
+    /// The logical owner already latched a fail-closed condition.
+    CoordinatorFaulted(super::CoordinatorFault),
+    /// A prior turn still owns the sole live lease.
+    UnsettledLease(super::LeaseId),
+    /// The borrow-bound runner cursor was not this height's Completion turn.
+    ForeignRunnerObservation,
+    /// The service does not own this launched height's exact body-store worker.
+    ForeignServiceOwner,
+    /// Coordinator records and the reverse Ready index disagree.
+    InvalidReadyCensus,
+    /// The selected Broadcast or its declared next-Sign link failed authentication.
+    InvalidCarrier,
+    /// Planning did not return the authenticated Broadcast lease.
+    UnexpectedPlan,
 }
 
 /// Result of one recovered Decision Fetch request-dispatch turn.
@@ -931,6 +969,373 @@ impl ProductionLifecycleOwnerV1 {
         }
         reservation.commit(prepared);
         Ok(ProductionRecoveredLifecycleSignDispatchV1::Queued { ordinal })
+    }
+
+    /// Refanout one durable recovered signed Broadcast at the live Completion cursor.
+    #[cfg(not(test))]
+    pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
+        &mut self,
+        services: &ProductionV2Services,
+        runner: LifecycleCurrentRunnerTurn<'_>,
+    ) -> Result<
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+    > {
+        let context = self.verified.context();
+        if runner.target() != LifecycleRunnerRankTarget::Completion
+            || runner.height() != context.height
+            || runner.context_id() != context.id()
+        {
+            return Err(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::ForeignRunnerObservation,
+            );
+        }
+        self.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(services, runner.debt())
+    }
+
+    /// Exercise durable recovered Broadcast refanout with a fixture-owned cursor.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
+        &mut self,
+        services: &ProductionV2Services,
+        runner: LifecycleRunnerRankSnapshot,
+    ) -> Result<
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+    > {
+        let context = self.verified.context();
+        if runner.target() != LifecycleRunnerRankTarget::Completion
+            || runner.height() != context.height
+            || runner.context_id() != context.id()
+        {
+            return Err(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::ForeignRunnerObservation,
+            );
+        }
+        self.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(services, runner.debt())
+    }
+
+    fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
+        &mut self,
+        services: &ProductionV2Services,
+        runner_debt: u64,
+    ) -> Result<
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+    > {
+        if let Some(fault) = self.coordinator.fault {
+            return Err(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::CoordinatorFaulted(
+                    fault,
+                ),
+            );
+        }
+        if let Some(lease) = self.coordinator.active_lease.as_ref() {
+            return Err(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::UnsettledLease(
+                    lease.id,
+                ),
+            );
+        }
+        let Some(body_store_identity) = self.body_store_identity.as_ref() else {
+            return Err(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::ForeignServiceOwner,
+            );
+        };
+        if self.body_store.is_some() || !services.matches_lifecycle_body_store(body_store_identity)
+        {
+            return Err(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::ForeignServiceOwner,
+            );
+        }
+        let exact_ready = self
+            .coordinator
+            .records
+            .iter()
+            .filter_map(|(ordinal, record)| {
+                matches!(record.state, LifecycleState::Ready).then_some(*ordinal)
+            })
+            .collect::<BTreeSet<_>>();
+        if exact_ready != self.coordinator.ready_index {
+            return Err(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidReadyCensus,
+            );
+        }
+        let Some(ordinal) = exact_ready.iter().copied().find(|ordinal| {
+            self.coordinator
+                .records
+                .get(ordinal)
+                .is_some_and(|record| record.work_class == LifecycleWorkClass::Broadcast)
+        }) else {
+            if exact_ready.is_empty() {
+                return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::None);
+            }
+            return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::OtherReadyWork);
+        };
+        let paired_next_sign_ordinal = self
+            .registry
+            .recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(
+                &self.coordinator,
+                ordinal,
+            );
+        if paired_next_sign_ordinal.is_none()
+            && self
+                .registry
+                .recovered_lifecycle_signed_broadcast_declares_next_vote(&self.coordinator, ordinal)
+        {
+            return Err(ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier);
+        }
+        let mut paired_next_sign = if let Some(next_sign_ordinal) = paired_next_sign_ordinal {
+            let attestation = self
+                .registry
+                .attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
+                    &self.coordinator,
+                    ordinal,
+                    next_sign_ordinal,
+                )
+                .map_err(|_| {
+                    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                })?;
+            Some((next_sign_ordinal, attestation))
+        } else {
+            self.registry
+                .attest_ready_recovered_lifecycle_signed_broadcast(&self.coordinator, ordinal)
+                .map_err(|_| {
+                    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                })?;
+            None
+        };
+
+        let factory = AuthenticatedSchedulerInputsFactory::new();
+        let mut ready_rows = BTreeMap::new();
+        for ready_ordinal in &exact_ready {
+            let ready_record = self.coordinator.records.get(ready_ordinal).ok_or(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidReadyCensus,
+            )?;
+            let live_debts = if *ready_ordinal == ordinal {
+                [0, 0, 0, 0, 0, runner_debt]
+            } else {
+                [1, 0, 0, 0, 0, runner_debt]
+            };
+            let row = match ready_record.work_class {
+                LifecycleWorkClass::Broadcast => {
+                    self.registry
+                        .attest_ready_recovered_lifecycle_signed_broadcast(
+                            &self.coordinator,
+                            *ready_ordinal,
+                        )
+                        .map_err(|_| {
+                            ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                        })?;
+                    authenticated_ready_row(
+                        &factory,
+                        ready_record,
+                        None,
+                        None,
+                        None,
+                        None,
+                        live_debts,
+                    )
+                }
+                LifecycleWorkClass::SignVote
+                | LifecycleWorkClass::SignProposal
+                | LifecycleWorkClass::SignTimeout => {
+                    let attestation = if paired_next_sign
+                        .as_ref()
+                        .is_some_and(|(next, _)| next == ready_ordinal)
+                    {
+                        paired_next_sign
+                            .take()
+                            .expect("matched pair attestation is retained")
+                            .1
+                    } else {
+                        self.registry
+                            .attest_ready_recovered_lifecycle_sign(
+                                &self.coordinator,
+                                *ready_ordinal,
+                            )
+                            .map_err(|_| {
+                                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                            })?
+                    };
+                    authenticated_ready_row(
+                        &factory,
+                        ready_record,
+                        None,
+                        None,
+                        Some(attestation),
+                        None,
+                        live_debts,
+                    )
+                }
+                LifecycleWorkClass::Apply => {
+                    let attestation = self
+                        .registry
+                        .attest_ready_recovered_decision_apply(
+                            &self.coordinator,
+                            *ready_ordinal,
+                        )
+                        .map_err(|_| {
+                            ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                        })?;
+                    authenticated_ready_row(
+                        &factory,
+                        ready_record,
+                        None,
+                        Some(attestation),
+                        None,
+                        None,
+                        live_debts,
+                    )
+                }
+                LifecycleWorkClass::Fetch => {
+                    let attestation = self
+                        .registry
+                        .attest_ready_recovered_decision_fetch(
+                            &self.coordinator,
+                            *ready_ordinal,
+                        )
+                        .map_err(|_| {
+                            ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                        })?;
+                    authenticated_ready_row(
+                        &factory,
+                        ready_record,
+                        None,
+                        None,
+                        None,
+                        Some(attestation),
+                        live_debts,
+                    )
+                }
+                LifecycleWorkClass::Validate => {
+                    let attestation = self
+                        .coordinator
+                        .attest_ready_validate_demand(&self.registry, *ready_ordinal)
+                        .map_err(|_| {
+                            ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier
+                        })?;
+                    authenticated_ready_row(
+                        &factory,
+                        ready_record,
+                        Some(attestation),
+                        None,
+                        None,
+                        None,
+                        live_debts,
+                    )
+                }
+                LifecycleWorkClass::Store
+                | LifecycleWorkClass::EnterView
+                | LifecycleWorkClass::EquivocationReport
+                | LifecycleWorkClass::InvalidBodyReport
+                | LifecycleWorkClass::CertifiedServe
+                | LifecycleWorkClass::ProducerTurn => {
+                    return Ok(
+                        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::OtherReadyWork,
+                    );
+                }
+            }
+            .ok_or(
+                ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier,
+            )?;
+            if ready_rows.insert(*ready_ordinal, row).is_some() {
+                return Err(
+                    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidReadyCensus,
+                );
+            }
+        }
+        if paired_next_sign.is_some() {
+            return Err(ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier);
+        }
+        let inputs = authenticated_scheduler_inputs(factory, BTreeMap::new(), ready_rows);
+        let lease = match self.coordinator.plan_turn(inputs) {
+            super::TurnPlan::Execute(lease)
+                if lease.ordinal() == ordinal
+                    && lease.work_class() == LifecycleWorkClass::Broadcast
+                    && lease.output_reservation().is_none() =>
+            {
+                lease
+            }
+            super::TurnPlan::Execute(lease) => {
+                assert!(
+                    self.coordinator.rollback_unpublished_turn(&lease),
+                    "unexpected recovered Broadcast plan must restore its durable owner"
+                );
+                return Err(
+                    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::UnexpectedPlan,
+                );
+            }
+            super::TurnPlan::Waiting(_)
+            | super::TurnPlan::Idle
+            | super::TurnPlan::FailClosed(_) => {
+                return Err(
+                    ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::UnexpectedPlan,
+                );
+            }
+        };
+        let Some(authority) = self
+            .registry
+            .project_claimed_recovered_lifecycle_signed_broadcast_output(&self.coordinator, &lease)
+        else {
+            assert!(
+                self.coordinator.rollback_unpublished_turn(&lease),
+                "failed recovered Broadcast projection must restore its durable owner"
+            );
+            return Err(ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier);
+        };
+        let capture = match services
+            .capture_recovered_lifecycle_signed_broadcast_refanout(authority)
+        {
+            Ok(capture) => capture,
+            Err(_) => {
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                assert!(
+                    self.coordinator.rollback_unpublished_turn(&lease),
+                    "failed recovered Broadcast capture must restore its durable owner"
+                );
+                return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired);
+            }
+        };
+        let RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(output) = capture else {
+            assert!(
+                self.coordinator.rollback_unpublished_turn(&lease),
+                "unavailable recovered Broadcast output must restore its durable owner"
+            );
+            return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::CapacityUnavailable);
+        };
+        let Some((_, &wait_digest)) = lease.physical_slots().first_key_value() else {
+            drop(output);
+            return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired);
+        };
+        let wait_source = super::WaitSource::Recovery(wait_digest);
+        let wait_generation = self
+            .coordinator
+            .observed_generation
+            .get(&wait_source)
+            .copied()
+            .unwrap_or(0);
+        let wait = super::WaitToken::new(wait_source, wait_generation);
+        self.coordinator
+            .settle_turn(lease, super::TurnOutcome::Blocked(wait));
+        if self.coordinator.fault.is_some()
+            || self.coordinator.active_lease.is_some()
+            || self
+                .coordinator
+                .records
+                .get(&ordinal)
+                .is_none_or(|record| record.state != LifecycleState::Waiting(wait))
+        {
+            drop(output);
+            return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired);
+        }
+        output.commit_after_publication();
+        // TODO: Consume the still-live Broadcast only in the authenticated
+        // applied-height output handoff/owner rollover transaction. Process-
+        // local actor admission is not a durable terminal receipt.
+        Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned { ordinal })
     }
 
     /// Sign, reserve, claim, and publish the sole recovered Decision Fetch request.

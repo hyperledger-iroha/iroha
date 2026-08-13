@@ -39,7 +39,11 @@ use super::{
         ServicedCandidateKey, ServicedCandidateStore, serviced_candidate_stage_for_kind_code,
     },
     v2_body_store::{
-        DurableBodyReceipt, RecoveredDecisionApplyAdapterPreviewPermit, ValidatedBodyReceipt,
+        DurableBodyReceipt, RecoveredDecisionApplyAdapterPreviewPermit,
+        RecoveredLifecycleColdProposalOutputMintPermitV1,
+        RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1,
+        RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1, V2BodyStoreInstanceIdentity,
+        ValidatedBodyReceipt,
     },
     v2_lifecycle_coordinator::{
         AdapterEffectAdmissionError, AuthenticatedRecoveredWalControlProjection,
@@ -57,11 +61,11 @@ use super::{
         RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyCompletionProjectionPermit,
         RecoveredDecisionApplyDispatchIdentityV1, RecoveredDecisionApplyDispatchKeyV1,
         RecoveredDecisionApplyPendingLineageV1, RecoveredDecisionApplyRegistryProjectionPermit,
-        RecoveredDecisionFetchStoreProjectionV1, RecoveredWalControlReplayEvidenceV1,
-        RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalParentFactoryError,
-        RecoveredWalProductionOwnerOpenV1, RecoveredWalVoteReplayEvidenceV1,
-        SealedInvalidBodyReportProjectionPermit, SealedLiveWalPersistedEffectV1,
-        SealedValidateSignProjectionPermit,
+        RecoveredDecisionFetchStoreProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
+        RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
+        RecoveredWalParentFactoryError, RecoveredWalProductionOwnerOpenV1,
+        RecoveredWalVoteReplayEvidenceV1, SealedInvalidBodyReportProjectionPermit,
+        SealedLiveWalPersistedEffectV1, SealedValidateSignProjectionPermit,
     },
     v2_runtime::{
         PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit,
@@ -83,7 +87,9 @@ use super::v2_lifecycle_coordinator::{
 
 // Keep wire admission and reducer capacity identical; mismatches fail at compile time.
 const _: [(); wire::MAX_VALIDATORS_PER_HEIGHT] = [(); reducer::MAX_VOTING_ROSTER_LEN];
-use crate::kura::{Kura, KuraInstanceIdentity, KuraV2CommitReceipt};
+use crate::kura::{
+    Kura, KuraInstanceIdentity, KuraSafetyWalDirectoryAuthority, KuraV2CommitReceipt,
+};
 
 const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";
 const MAX_DEFERRED_INPUTS: usize = 1024;
@@ -406,7 +412,10 @@ impl LiveWalFrameIdentity {
 
     /// Return whether the live append has the canonical reducer relation.
     pub(super) const fn is_exact(&self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Project inert codec evidence without exposing locator scalar parts.
@@ -442,11 +451,14 @@ impl RecoveredWalFrameIdentity {
 
     /// Return whether this sealed frame has the canonical reducer persistence relation.
     pub(crate) const fn is_exact(self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Match another sealed WAL-frame identity without exposing its parts.
-    pub(crate) const fn exactly_matches(self, other: Self) -> bool {
+    pub(crate) fn exactly_matches(self, other: Self) -> bool {
         self.frame_sequence == other.frame_sequence
             && self.persistence_id == other.persistence_id
             && self.frame_hash == other.frame_hash
@@ -499,11 +511,14 @@ pub(crate) struct PersistedWalFrameLocatorV1 {
 impl PersistedWalFrameLocatorV1 {
     /// Check the canonical reducer persistence relation without authenticating provenance.
     pub(crate) const fn is_exact(self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Compare inert persisted evidence with one sealed runtime identity.
-    pub(crate) const fn exactly_matches_runtime(self, runtime: RecoveredWalFrameIdentity) -> bool {
+    pub(crate) fn exactly_matches_runtime(self, runtime: RecoveredWalFrameIdentity) -> bool {
         self.frame_sequence == runtime.frame_sequence
             && self.persistence_id == runtime.persistence_id
             && self.frame_hash == runtime.frame_hash
@@ -1040,6 +1055,156 @@ impl ProductionLifecycleAdapterStartupV1 {
         }
     }
 
+    /// Preview one already-fsynced Broadcast-plus-next-Sign crash cut.
+    ///
+    /// WAL recovery has authenticated the historical unsigned request and its
+    /// signed Broadcast. This consuming preview independently verifies the
+    /// signature and replays the reducer on clones, accepting only the exact
+    /// `Broadcast` then `Sign(Vote)` successor. The original cold adapter stays
+    /// unchanged and sealed inside the result until the next Vote's durable
+    /// body and WAL owner have also rejoined.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_signed_broadcast_and_sign(
+        self,
+        verified: &VerifiedHeightContext,
+        authority: RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1,
+    ) -> Result<PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1, &'static str> {
+        let ProductionLifecycleAdapterStartupStateV1::Recovered {
+            adapter,
+            effects,
+            leader_wire_launch_prepared: false,
+        } = self.state
+        else {
+            return Err("recovered Broadcast-and-Sign preview startup is not pristine");
+        };
+        if !effects.is_empty()
+            || &adapter.wire_context != verified.context()
+            || adapter.proofs_of_possession.as_slice() != verified.proofs_of_possession()
+            || adapter.current_tag().height() != verified.context().height
+            || adapter.pending_persistence_id.is_some()
+            || !adapter.deferred_completions.is_empty()
+            || !adapter.deferred_progress_inputs.is_empty()
+            || !adapter.deferred_inputs.is_empty()
+            || adapter.ensure_ingress().is_err()
+        {
+            return Err("recovered Broadcast-and-Sign preview changed its exact context");
+        }
+        let RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1 {
+            tag,
+            request,
+            signature,
+            broadcast,
+        } = authority;
+        if adapter.current_tag() != tag {
+            return Err("recovered Broadcast-and-Sign preview tag changed across restart");
+        }
+        let AdapterEffect::Broadcast(message) = &broadcast else {
+            return Err("recovered Broadcast-and-Sign preview lost its signed Broadcast");
+        };
+        verified
+            .verify_consensus_message(message)
+            .map_err(|_| "recovered Broadcast-and-Sign preview signature is not authorized")?;
+
+        let mut next_registry = adapter.registry.clone();
+        let awaiting = adapter.reducer.awaiting_signature().ok_or(
+            "recovered Broadcast-and-Sign preview is not awaiting its historical signature",
+        )?;
+        let awaiting_request = match awaiting {
+            reducer::SignableMessage::Proposal(proposal) => SignRequest::Proposal(
+                next_registry
+                    .unsigned_proposal_to_wire(proposal, adapter.aggregator.as_ref())
+                    .map_err(|_| {
+                        "recovered Broadcast-and-Sign preview Proposal could not be reconstructed"
+                    })?,
+            ),
+            reducer::SignableMessage::Vote(vote) => SignRequest::Vote(
+                next_registry
+                    .unsigned_vote_to_wire(*vote)
+                    .map_err(|_| {
+                        "recovered Broadcast-and-Sign preview vote could not be reconstructed"
+                    })?,
+            ),
+            reducer::SignableMessage::TimeoutVote(_) => {
+                return Err("recovered Broadcast-and-Sign preview cannot start from timeout Sign");
+            }
+        };
+        if awaiting_request != request {
+            return Err("recovered Broadcast-and-Sign preview request changed across restart");
+        }
+
+        let event = reducer::Event::Signed {
+            tag,
+            signature: reducer::OpaqueSignature::new(signature),
+        };
+        let mut next_reducer = adapter.reducer.clone();
+        let outcome = next_reducer
+            .step(event)
+            .map_err(|_| "recovered Broadcast-and-Sign preview reducer replay failed")?;
+        if outcome.disposition() != reducer::StepDisposition::Applied {
+            return Err("recovered Broadcast-and-Sign preview reducer did not apply");
+        }
+        let core_effects = outcome.into_effects();
+        let [
+            reducer::Effect::Broadcast(replayed_message),
+            reducer::Effect::Sign {
+                tag: replayed_next_tag,
+                message: reducer::SignableMessage::Vote(replayed_next_vote),
+            },
+        ] = core_effects.as_slice()
+        else {
+            return Err("recovered Broadcast-and-Sign preview has another reducer successor");
+        };
+        let replayed_broadcast = AdapterEffect::Broadcast(
+            next_registry
+                .message_to_wire(replayed_message.clone(), adapter.aggregator.as_ref())
+                .map_err(|_| "recovered Broadcast-and-Sign preview wire projection failed")?,
+        );
+        let next_sign = AdapterEffect::Sign {
+            tag: *replayed_next_tag,
+            request: SignRequest::Vote(
+                next_registry
+                    .unsigned_vote_to_wire(*replayed_next_vote)
+                    .map_err(|_| {
+                        "recovered Broadcast-and-Sign preview next Vote could not be reconstructed"
+                    })?,
+            ),
+        };
+        if replayed_broadcast != broadcast
+            || next_reducer.pending_persistence_record().is_some()
+            || next_reducer.awaiting_signature()
+                != Some(&reducer::SignableMessage::Vote(*replayed_next_vote))
+        {
+            return Err("recovered Broadcast-and-Sign preview children changed across restart");
+        }
+        let expected_proposal_manifest_hash = match &message.payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                Some(HashOf::new(&proposal.manifest))
+            }
+            wire::ConsensusMessageV2Payload::Vote(vote)
+                if vote.phase == wire::GlobalPhase::Prepare =>
+            {
+                None
+            }
+            _ => {
+                return Err(
+                    "recovered Broadcast-and-Sign preview parent is not Proposal or Prepare",
+                );
+            }
+        };
+        Ok(
+            PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
+                startup: Self::recovered(adapter, effects),
+                broadcast,
+                next_sign,
+                expected_proposal_manifest_hash,
+                body_store_identity: None,
+                cold_proposal_output: None,
+                body_lookup_minted: false,
+            },
+        )
+    }
+
     /// Rebuild the reducer's already-fsynced recovered Fetch-to-Store crash cut.
     ///
     /// The adapter transition is installed only after the opaque body and WAL
@@ -1124,6 +1289,9 @@ impl ProductionLifecycleAdapterStartupV1 {
             SignRequest::Vote(vote) => vote.signer,
             SignRequest::TimeoutVote(vote) => vote.signer,
             SignRequest::Proposal(_) => {
+                // TODO: Admit recovered Proposal only after the same durable
+                // transaction also authenticates its body chunks and fsyncs
+                // the reducer's Prepare-WAL successor.
                 return Err("Proposal cold replay requires its body and Prepare WAL successor");
             }
         };
@@ -1210,6 +1378,170 @@ impl ProductionLifecycleAdapterStartupV1 {
                 .filter(|next| *next != u64::MAX)
                 .ok_or("recovered signed Broadcast exhausted reducer fence generation")?
         };
+        adapter.reducer = next_reducer;
+        adapter.registry = next_registry;
+        adapter.reducer_fence_generation = next_fence_generation;
+        adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &core_effects);
+        adapter.log_body_progress(
+            &event,
+            reducer::StepDisposition::Applied,
+            core_effects.len(),
+        );
+        Ok(Self::recovered(adapter, effects))
+    }
+
+    /// Rejoin an already-fsynced Broadcast-plus-next-Sign pair to the cold adapter.
+    ///
+    /// WAL recovery has already authenticated both durable children and retained
+    /// their executable registry authority. The cold reducer still awaits the
+    /// historical signature whose worker result was lost at the crash. This
+    /// method independently verifies that signature, replays it on cloned state,
+    /// and accepts only the exact `Broadcast`-then-`Sign(Vote)` successor already
+    /// present in LedgerV1. It publishes no status or output and mutates no WAL.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn advance_recovered_lifecycle_signed_broadcast_and_sign(
+        self,
+        verified: &VerifiedHeightContext,
+        authority: RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1,
+    ) -> Result<Self, &'static str> {
+        let ProductionLifecycleAdapterStartupStateV1::Recovered {
+            adapter,
+            effects,
+            leader_wire_launch_prepared: false,
+        } = self.state
+        else {
+            return Err("recovered Broadcast-and-Sign adapter startup is not pristine");
+        };
+        if !effects.is_empty()
+            || &adapter.wire_context != verified.context()
+            || adapter.proofs_of_possession.as_slice() != verified.proofs_of_possession()
+            || adapter.current_tag().height() != verified.context().height
+            || adapter.pending_persistence_id.is_some()
+            || !adapter.deferred_completions.is_empty()
+            || !adapter.deferred_progress_inputs.is_empty()
+            || !adapter.deferred_inputs.is_empty()
+            || adapter.ensure_ingress().is_err()
+        {
+            return Err("recovered Broadcast-and-Sign adapter startup changed its exact context");
+        }
+        let RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
+            broadcast,
+            next_sign,
+        } = authority;
+        let AdapterEffect::Broadcast(message) = &broadcast else {
+            return Err("recovered Broadcast-and-Sign authority lost its Broadcast");
+        };
+        verified.verify_consensus_message(message).map_err(
+            |_| "recovered Broadcast-and-Sign message failed frozen-roster verification",
+        )?;
+        let (request, signature) = match &message.payload {
+            wire::ConsensusMessageV2Payload::Proposal(signed) => {
+                let mut unsigned = signed.clone();
+                let signature = core::mem::take(&mut unsigned.signature);
+                (SignRequest::Proposal(unsigned), signature)
+            }
+            wire::ConsensusMessageV2Payload::Vote(signed) => {
+                let mut unsigned = signed.clone();
+                let signature = core::mem::take(&mut unsigned.signature);
+                (SignRequest::Vote(unsigned), signature)
+            }
+            _ => {
+                return Err(
+                    "recovered Broadcast-and-Sign message is not a Proposal or Prepare vote",
+                );
+            }
+        };
+        let AdapterEffect::Sign {
+            request: SignRequest::Vote(_),
+            ..
+        } = &next_sign
+        else {
+            return Err("recovered Broadcast-and-Sign authority lost its next Vote Sign");
+        };
+        let mut next_registry = adapter.registry.clone();
+        let awaiting = adapter.reducer.awaiting_signature().ok_or(
+            "recovered Broadcast-and-Sign reducer is not awaiting its historical signature",
+        )?;
+        let awaiting_request = match awaiting {
+            reducer::SignableMessage::Proposal(proposal) => SignRequest::Proposal(
+                next_registry
+                    .unsigned_proposal_to_wire(proposal, adapter.aggregator.as_ref())
+                    .map_err(
+                        |_| "recovered Broadcast-and-Sign Proposal could not be reconstructed",
+                    )?,
+            ),
+            reducer::SignableMessage::Vote(vote) => SignRequest::Vote(
+                next_registry
+                    .unsigned_vote_to_wire(*vote)
+                    .map_err(|_| "recovered Broadcast-and-Sign vote could not be reconstructed")?,
+            ),
+            reducer::SignableMessage::TimeoutVote(_) => {
+                return Err("recovered Broadcast-and-Sign cannot start from a timeout Sign");
+            }
+        };
+        if awaiting_request != request {
+            return Err("recovered Broadcast-and-Sign historical request changed across restart");
+        }
+
+        let event = reducer::Event::Signed {
+            tag: adapter.current_tag(),
+            signature: reducer::OpaqueSignature::new(signature),
+        };
+        let mut next_reducer = adapter.reducer.clone();
+        let outcome = next_reducer
+            .step(event.clone())
+            .map_err(|_| "recovered Broadcast-and-Sign reducer replay failed")?;
+        if outcome.disposition() != reducer::StepDisposition::Applied {
+            return Err("recovered Broadcast-and-Sign reducer did not apply");
+        }
+        let core_effects = outcome.into_effects();
+        let [
+            reducer::Effect::Broadcast(replayed_message),
+            reducer::Effect::Sign {
+                tag: replayed_next_tag,
+                message: reducer::SignableMessage::Vote(replayed_next_vote),
+            },
+        ] = core_effects.as_slice()
+        else {
+            return Err("recovered Broadcast-and-Sign has another reducer successor");
+        };
+        let replayed_broadcast = AdapterEffect::Broadcast(
+            next_registry
+                .message_to_wire(replayed_message.clone(), adapter.aggregator.as_ref())
+                .map_err(|_| "recovered Broadcast-and-Sign wire projection failed")?,
+        );
+        let replayed_next_sign = AdapterEffect::Sign {
+            tag: *replayed_next_tag,
+            request: SignRequest::Vote(
+                next_registry
+                    .unsigned_vote_to_wire(*replayed_next_vote)
+                    .map_err(|_| "recovered next Vote Sign could not be reconstructed")?,
+            ),
+        };
+        if replayed_broadcast != broadcast
+            || replayed_next_sign != next_sign
+            || next_reducer.pending_persistence_record().is_some()
+            || next_reducer.awaiting_signature()
+                != Some(&reducer::SignableMessage::Vote(*replayed_next_vote))
+        {
+            return Err("recovered Broadcast-and-Sign children changed across restart");
+        }
+        let next_fence = ReducerFenceProjection {
+            pending_persistence: None,
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: adapter.replay_complete,
+        };
+        let next_fence_generation = if next_fence == adapter.reducer_fence_projection() {
+            adapter.reducer_fence_generation
+        } else {
+            adapter
+                .reducer_fence_generation
+                .checked_add(1)
+                .filter(|next| *next != u64::MAX)
+                .ok_or("recovered Broadcast-and-Sign exhausted reducer fence generation")?
+        };
+        let mut adapter = adapter;
         adapter.reducer = next_reducer;
         adapter.registry = next_registry;
         adapter.reducer_fence_generation = next_fence_generation;
@@ -1526,8 +1858,8 @@ struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
 /// Exact-store startup after Sign installation and before final recovery open.
 #[must_use = "the installed recovered startup must enter its production owner"]
 struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
-    adapter: SumeragiV2Adapter,
-    effects: Vec<AdapterEffect>,
+    adapter_startup: ProductionLifecycleAdapterStartupV1,
+    verified: VerifiedHeightContext,
     installed: InstalledRecoveredWalSignStorage<'registry>,
 }
 
@@ -1540,9 +1872,18 @@ struct StorageRecoveredWalPersistError<'registry> {
 
 #[must_use = "failed exact-store Sign installation requires process restart"]
 struct StorageRecoveredWalSignInstallError<'registry> {
-    _adapter: SumeragiV2Adapter,
-    _effects: Vec<AdapterEffect>,
-    error: ExactStoreRecoveredWalSignInstallError<'registry>,
+    failure: StorageRecoveredWalSignInstallFailure<'registry>,
+}
+
+#[allow(variant_size_differences)]
+enum StorageRecoveredWalSignInstallFailure<'registry> {
+    Adapter {
+        reason: &'static str,
+    },
+    Install {
+        _startup: ProductionLifecycleAdapterStartupV1,
+        error: ExactStoreRecoveredWalSignInstallError<'registry>,
+    },
 }
 
 #[must_use = "failed exact-store lifecycle open requires process restart"]
@@ -1553,13 +1894,11 @@ struct StorageRecoveredWalOpenError<'registry> {
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum StorageRecoveredWalOpenFailure<'registry> {
     Storage {
-        _adapter: SumeragiV2Adapter,
-        _effects: Vec<AdapterEffect>,
+        _adapter_startup: ProductionLifecycleAdapterStartupV1,
         error: ProductionRecoveredWalStorageError,
     },
     OwnerSeal {
-        _adapter: SumeragiV2Adapter,
-        _effects: Vec<AdapterEffect>,
+        _adapter_startup: ProductionLifecycleAdapterStartupV1,
         _opened: ProductionOpenedRecoveredWalSignLifecycleCut<'registry>,
     },
 }
@@ -1572,7 +1911,10 @@ impl StorageRecoveredWalPersistError<'_> {
 
 impl StorageRecoveredWalSignInstallError<'_> {
     fn reason(&self) -> &'static str {
-        self.error.reason()
+        match &self.failure {
+            StorageRecoveredWalSignInstallFailure::Adapter { reason, .. } => reason,
+            StorageRecoveredWalSignInstallFailure::Install { error, .. } => error.reason(),
+        }
     }
 }
 
@@ -2047,109 +2389,113 @@ impl AuthenticatedRecoveredAdapterStartup {
         }
         let authority = match authority {
             PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
-                match body_store.detach_recovered_decision_apply_body(&fetch) {
-                    Ok(body) => {
-                        if !body.exactly_matches_decision(&fetch) {
-                            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                    "detached Decision body lost its exact same-store binding",
+                if body_store.has_rejected_recovered_decision_body(&fetch) {
+                    return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
+                            super::v2_body_store::RecoveredDecisionApplyBodyCutError::DeterministicRejection,
+                        ),
+                    ));
+                }
+                if !body_store.has_exact_recovered_decision_fetch_parent(&fetch) {
+                    PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch)
+                } else {
+                    // Establish marker presence before taking the move-only body
+                    // cut so the cut's borrow ends before the store is consumed.
+                    let body = body_store
+                        .detach_recovered_decision_apply_body(&fetch)
+                        .map_err(|error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
+                                    error,
                                 ),
-                            ));
-                        }
-                        let lineage =
-                            body.prepare_replay_lineage(&verified, &fetch)
-                                .ok_or_else(|| {
-                                    ProductionLifecycleOwnerStartupErrorV1::new(
+                            )
+                        })?;
+                    if !body.exactly_matches_decision(&fetch) {
+                        return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                "detached Decision body lost its exact same-store binding",
+                            ),
+                        ));
+                    }
+                    let lineage =
+                        body.prepare_replay_lineage(&verified, &fetch)
+                            .ok_or_else(|| {
+                                ProductionLifecycleOwnerStartupErrorV1::new(
                                 ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
                                     "Decision body replay lineage is inconsistent",
                                 ),
                             )
-                                })?;
-                        let preview = body
-                            .into_adapter_preview(adapter, &verified, fetch, lineage)
-                            .map_err(|error| {
-                                let _ = error.reason();
-                                ProductionLifecycleOwnerStartupErrorV1::new(
+                            })?;
+                    let preview = body
+                        .into_adapter_preview(adapter, &verified, fetch, lineage)
+                        .map_err(|error| {
+                            let _ = error.reason();
+                            ProductionLifecycleOwnerStartupErrorV1::new(
                                 ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
                                     "Decision body reducer fast-forward is inconsistent",
                                 ),
                             )
-                            })?;
-                        let storage =
-                            preview.into_storage_preview(&verified).map_err(|_error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                    "Decision body storage lineage is inconsistent",
-                                ),
-                            )
-                            })?;
-                        if !storage.validates(&verified) {
-                            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                    "Decision body storage projection lost its same-store binding",
-                                ),
-                            ));
-                        }
-                        let restored = storage.restore_body();
-                        debug_assert!(restored.staged().validates(&verified));
-                        let staged = restored.into_staged();
-                        let body_store = body_store
-                            .into_lifecycle_owner_store(verified.context())
-                            .map_err(|error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
-                                )
-                            })?;
-                        let (payload_store, recovered_payloads) =
-                            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                                serve_payload_root,
-                                verified.context(),
-                            )
-                            .map_err(|error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
-                                )
-                            })?;
-                        let serve_payloads = recovered_payloads
-                            .authenticate(&verified, local_signer, &body_store)
-                            .map_err(|error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::ServeRecovery(
-                                        error,
-                                    ),
-                                )
-                            })?;
-                        let owner =
-                            ProductionLifecycleOwnerV1::open_recovered_decision_apply_startup(
-                                verified,
-                                staged,
-                                effects,
-                                ledger_root,
-                                body_store,
-                                config,
-                                reply_route_source_capacity,
-                                payload_store,
-                                serve_payloads,
-                            )
-                            .map_err(|error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                        error.reason(),
-                                    ),
-                                )
-                            })?;
-                        return Ok(owner);
-                    }
-                    Err(
-                        super::v2_body_store::RecoveredDecisionApplyBodyCutError::MissingMarker,
-                    ) => PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch),
-                    Err(error) => {
+                        })?;
+                    let storage = preview.into_storage_preview(&verified).map_err(|_error| {
+                        ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                "Decision body storage lineage is inconsistent",
+                            ),
+                        )
+                    })?;
+                    if !storage.validates(&verified) {
                         return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
-                                error,
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                "Decision body storage projection lost its same-store binding",
                             ),
                         ));
                     }
+                    let restored = storage.restore_body();
+                    debug_assert!(restored.staged().validates(&verified));
+                    let staged = restored.into_staged();
+                    let body_store = body_store
+                        .into_lifecycle_owner_store(verified.context())
+                        .map_err(|error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+                            )
+                        })?;
+                    let (payload_store, recovered_payloads) =
+                        super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                                serve_payload_root,
+                                verified.context(),
+                            )
+                        .map_err(|error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
+                                )
+                        })?;
+                    let serve_payloads = recovered_payloads
+                        .authenticate(&verified, local_signer, &body_store)
+                        .map_err(|error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::ServeRecovery(error),
+                            )
+                        })?;
+                    let owner = ProductionLifecycleOwnerV1::open_recovered_decision_apply_startup(
+                        verified,
+                        staged,
+                        effects,
+                        ledger_root,
+                        body_store,
+                        config,
+                        reply_route_source_capacity,
+                        payload_store,
+                        serve_payloads,
+                    )
+                    .map_err(|error| {
+                        ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                error.reason(),
+                            ),
+                        )
+                    })?;
+                    return Ok(owner);
                 }
             }
             authority => authority,
@@ -2262,11 +2608,13 @@ impl AuthenticatedRecoveredAdapterStartup {
                 ProductionLifecycleOwnerStartupErrorKindV1::Persist(error.reason()),
             )
         })?;
-        let installed = persisted.install_recovered_sign().map_err(|error| {
-            ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::SignInstall(error.reason()),
-            )
-        })?;
+        let installed = persisted
+            .install_recovered_sign(&body_store)
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::SignInstall(error.reason()),
+                )
+            })?;
         let paired = installed
             .open_production_owner_seals(
                 config,
@@ -2540,7 +2888,12 @@ impl<'registry> StorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
             ledger,
             repair,
         } = self;
-        match ledger.persist_recovered_wal_repair(repair) {
+        let verified = VerifiedHeightContext {
+            context: adapter.wire_context.clone(),
+            proofs_of_possession: adapter.proofs_of_possession.clone(),
+            parent_verification: adapter.parent_verification.clone(),
+        };
+        match ledger.persist_recovered_wal_repair(&verified, repair) {
             Ok(persisted) => Ok(PersistedStorageAuthenticatedRecoveredWalLifecycleStartup {
                 adapter,
                 effects,
@@ -2560,6 +2913,7 @@ impl<'registry> PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
     #[allow(clippy::result_large_err)]
     fn install_recovered_sign(
         self,
+        body_store: &super::v2_body_store::V2BodyStore,
     ) -> Result<
         InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>,
         StorageRecoveredWalSignInstallError<'registry>,
@@ -2569,16 +2923,28 @@ impl<'registry> PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
             effects,
             persisted,
         } = self;
+        let verified = VerifiedHeightContext {
+            context: adapter.wire_context.clone(),
+            proofs_of_possession: adapter.proofs_of_possession.clone(),
+            parent_verification: adapter.parent_verification.clone(),
+        };
+        let adapter_startup = ProductionLifecycleAdapterStartupV1::recovered(adapter, effects);
+        let (adapter_startup, persisted) = persisted
+            .prepare_cold_adapter_startup(&verified, adapter_startup, body_store)
+            .map_err(|reason| StorageRecoveredWalSignInstallError {
+                failure: StorageRecoveredWalSignInstallFailure::Adapter { reason },
+            })?;
         match persisted.install_recovered_wal_sign() {
             Ok(installed) => Ok(InstalledStorageAuthenticatedRecoveredWalLifecycleStartup {
-                adapter,
-                effects,
+                adapter_startup,
+                verified,
                 installed,
             }),
             Err(error) => Err(StorageRecoveredWalSignInstallError {
-                _adapter: adapter,
-                _effects: effects,
-                error,
+                failure: StorageRecoveredWalSignInstallFailure::Install {
+                    _startup: adapter_startup,
+                    error,
+                },
             }),
         }
     }
@@ -2597,15 +2963,10 @@ impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
     ) -> Result<ProductionRecoveredLifecycleOwnerStartupV1, StorageRecoveredWalOpenError<'registry>>
     {
         let Self {
-            adapter,
-            effects,
+            adapter_startup,
+            verified,
             installed,
         } = self;
-        let verified = VerifiedHeightContext {
-            context: adapter.wire_context.clone(),
-            proofs_of_possession: adapter.proofs_of_possession.clone(),
-            parent_verification: adapter.parent_verification.clone(),
-        };
         let opened = match installed.open_production_lifecycle(
             &verified,
             config,
@@ -2618,8 +2979,7 @@ impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
             Err(error) => {
                 return Err(StorageRecoveredWalOpenError {
                     failure: StorageRecoveredWalOpenFailure::Storage {
-                        _adapter: adapter,
-                        _effects: effects,
+                        _adapter_startup: adapter_startup,
                         error,
                     },
                 });
@@ -2630,15 +2990,14 @@ impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
             Err(opened) => {
                 return Err(StorageRecoveredWalOpenError {
                     failure: StorageRecoveredWalOpenFailure::OwnerSeal {
-                        _adapter: adapter,
-                        _effects: effects,
+                        _adapter_startup: adapter_startup,
                         _opened: opened,
                     },
                 });
             }
         };
         Ok(ProductionRecoveredLifecycleOwnerStartupV1 {
-            adapter_startup: ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+            adapter_startup,
             opened,
         })
     }
@@ -4452,6 +4811,265 @@ impl RecoveredLifecycleSignAdapterCompletionPermitV1 {
     }
 }
 
+/// Adapter-private one-shot permit for sealing a follow-on recovered Vote Sign.
+///
+/// Replay evidence is structurally comparable, but only the adapter can mint
+/// this permit after reproducing the exact `Signed` reducer transition and
+/// authenticating the WAL frontier which owns the successor.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteSealPermitV1 {
+    _linearity: RecoveredLifecycleNextWalVoteSealPermitLinearityV1,
+}
+
+struct RecoveredLifecycleNextWalVoteSealPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextWalVoteSealPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextWalVoteSealPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextWalVoteSealPermitLinearityV1,
+        }
+    }
+}
+
+/// Opaque body lookup derived from the reducer's exact follow-on Vote Sign.
+///
+/// The lookup carries only the immutable Vote/body coordinates and the signed
+/// Proposal manifest hash, when the parent Broadcast is a Proposal. It has no
+/// receipt or coordinate accessors. Only the production service/executor join
+/// or the cold body-store-private join may consume it to select one exact
+/// validated body-store owner.
+#[must_use = "a recovered next-Vote body lookup must enter the exact production service"]
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyLookupV1 {
+    round: wire::ConsensusRound,
+    proposal_round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+    expected_proposal_manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+}
+
+impl RecoveredLifecycleNextVoteBodyLookupV1 {
+    fn from_adapter_preview(
+        next_sign: &AdapterEffect,
+        expected_proposal_manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+    ) -> Option<Self> {
+        let AdapterEffect::Sign {
+            request: SignRequest::Vote(vote),
+            ..
+        } = next_sign
+        else {
+            return None;
+        };
+        if !vote.signature.is_empty()
+            || vote.round.context_id != vote.proposal_round.context_id
+            || vote.round.height != vote.proposal_round.height
+            || vote.execution_commitment.validate().is_err()
+        {
+            return None;
+        }
+        Some(Self {
+            round: vote.round,
+            proposal_round: vote.proposal_round,
+            subject: vote.subject,
+            execution_commitment: vote.execution_commitment,
+            expected_proposal_manifest_hash,
+        })
+    }
+
+    /// Compare the lookup with one immutable height/service owner.
+    pub(in crate::sumeragi) fn matches_height_context(
+        &self,
+        context: &wire::HeightContext,
+    ) -> bool {
+        self.round.context_id == context.id()
+            && self.round.height == context.height
+            && self.proposal_round.context_id == context.id()
+            && self.proposal_round.height == context.height
+    }
+
+    /// Compare one executor-retained validated receipt without exposing its key.
+    pub(in crate::sumeragi) fn matches_validated_body(
+        &self,
+        validated: &ValidatedBodyReceipt,
+    ) -> bool {
+        let durable = validated.durable();
+        durable.context_id() == self.round.context_id
+            && durable.round() == self.proposal_round
+            && durable.subject() == self.subject
+            && validated.execution_commitment() == self.execution_commitment
+            && self
+                .expected_proposal_manifest_hash
+                .is_none_or(|expected| durable.manifest_hash() == expected)
+    }
+
+    /// Compare the recovered manifest and durable catalog entry as one owner.
+    pub(in crate::sumeragi) fn matches_recovered_body(
+        &self,
+        manifest: &wire::PayloadManifest,
+        durable: &DurableBodyReceipt,
+    ) -> bool {
+        manifest.round == self.proposal_round
+            && manifest.subject == self.subject
+            && durable.context_id() == self.round.context_id
+            && durable.round() == self.proposal_round
+            && durable.subject() == self.subject
+            && durable.manifest_hash() == HashOf::new(manifest)
+            && self
+                .expected_proposal_manifest_hash
+                .is_none_or(|expected| HashOf::new(manifest) == expected)
+    }
+
+    fn matches_adapter_successor(
+        &self,
+        next_sign: &AdapterEffect,
+        expected_proposal_manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+    ) -> bool {
+        let AdapterEffect::Sign {
+            request: SignRequest::Vote(vote),
+            ..
+        } = next_sign
+        else {
+            return false;
+        };
+        vote.signature.is_empty()
+            && vote.round == self.round
+            && vote.proposal_round == self.proposal_round
+            && vote.subject == self.subject
+            && vote.execution_commitment == self.execution_commitment
+            && expected_proposal_manifest_hash == self.expected_proposal_manifest_hash
+    }
+
+    #[cfg(test)]
+    /// Build one inert lookup from a test-only unsigned Vote projection.
+    pub(in crate::sumeragi) fn for_test(
+        vote: &wire::Vote,
+        expected_proposal_manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+    ) -> Option<Self> {
+        Self::from_adapter_preview(
+            &AdapterEffect::Sign {
+                tag: reducer::EventTag::new(
+                    vote.round.height,
+                    vote.round.view,
+                    reducer::Generation::new(vote.round.height),
+                ),
+                request: SignRequest::Vote(vote.clone()),
+            },
+            expected_proposal_manifest_hash,
+        )
+    }
+}
+
+/// Adapter-private permit for consuming one executor-authenticated body owner.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyConsumePermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyConsumePermitLinearityV1,
+}
+
+struct RecoveredLifecycleNextVoteBodyConsumePermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyConsumePermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyConsumePermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyConsumePermitLinearityV1,
+        }
+    }
+}
+
+/// Move-only exact validated-body owner authenticated by a production owner.
+///
+/// Construction requires either the executor-private live permit or the body
+/// store's cold-recovery permit after the exact validated, durable, and
+/// recovered manifest catalogs have rejoined one store instance. The adapter
+/// can consume this value only while rejoining the same next Sign and signed
+/// Proposal manifest; no raw receipt or parts API is exposed.
+#[must_use = "an authenticated next-Vote body owner must enter the adapter preview"]
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyAuthorityV1 {
+    lookup: RecoveredLifecycleNextVoteBodyLookupV1,
+    validated: ValidatedBodyReceipt,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+}
+
+impl RecoveredLifecycleNextVoteBodyAuthorityV1 {
+    /// Mint only after the exact production executor catalog join succeeds.
+    pub(in crate::sumeragi) fn from_exact_executor(
+        _permit: super::v2_effects::RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1,
+        lookup: RecoveredLifecycleNextVoteBodyLookupV1,
+        validated: ValidatedBodyReceipt,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+    ) -> Option<Self> {
+        lookup.matches_validated_body(&validated).then_some(Self {
+            lookup,
+            validated,
+            body_store_identity,
+        })
+    }
+
+    /// Mint only after the cold body store rejoined its exact recovered catalogs.
+    ///
+    /// The non-clone permit is constructible only inside the body-store module;
+    /// callers cannot promote a receipt or a comparison-only lookup directly.
+    pub(in crate::sumeragi) fn from_exact_revalidated_body_store(
+        _permit: RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1,
+        lookup: RecoveredLifecycleNextVoteBodyLookupV1,
+        validated: ValidatedBodyReceipt,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+    ) -> Option<Self> {
+        lookup.matches_validated_body(&validated).then_some(Self {
+            lookup,
+            validated,
+            body_store_identity,
+        })
+    }
+
+    fn consume_for_adapter(
+        self,
+        _permit: RecoveredLifecycleNextVoteBodyConsumePermitV1,
+        next_sign: &AdapterEffect,
+        expected_proposal_manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+        expected_body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> Result<ValidatedBodyReceipt, AdapterError> {
+        let Self {
+            lookup,
+            validated,
+            body_store_identity,
+        } = self;
+        if !body_store_identity.same_instance(expected_body_store_identity)
+            || !lookup.matches_adapter_successor(next_sign, expected_proposal_manifest_hash)
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        Ok(validated)
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        lookup: RecoveredLifecycleNextVoteBodyLookupV1,
+        validated: ValidatedBodyReceipt,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+    ) -> Option<Self> {
+        lookup.matches_validated_body(&validated).then_some(Self {
+            lookup,
+            validated,
+            body_store_identity,
+        })
+    }
+
+    /// Compare the retained receipt/store owner without exposing either part.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn exactly_matches_for_test(
+        &self,
+        validated: &ValidatedBodyReceipt,
+        body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> bool {
+        self.validated == *validated && self.body_store_identity.same_instance(body_store_identity)
+    }
+}
+
 /// Closed reducer successor shape produced by one exact recovered signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -4462,19 +5080,6 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignAdapterSuccessorShapeV1 {
     BroadcastAndSign,
     /// A signed local Proposal emitted Broadcast plus a new Prepare-intent WAL write.
     ProposalPrepareWal,
-}
-
-/// Opaque exact-output projection of one recovered signed Broadcast.
-///
-/// The signed envelope and optional recovered Proposal payload remain sealed
-/// until the production service consumes them with its private one-shot
-/// permit. Lifecycle staging can therefore reserve output without exposing a
-/// raw message or chunk family to sibling callers.
-#[must_use = "recovered signed Broadcast output must enter the exact-output corridor"]
-pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputAuthorityV1 {
-    dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
-    message: wire::ConsensusMessageV2,
-    outbound_payload: Option<super::v2_chunks::EncodedV2Payload>,
 }
 
 /// Adapter-authenticated authority for projecting one recovered Broadcast child.
@@ -4490,6 +5095,140 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastProjectionAuthorit
     broadcast: AdapterEffect,
 }
 
+/// Adapter-authenticated signed Proposal plus its exact canonical payload.
+///
+/// The worker-restored payload cannot be exposed independently from the
+/// cryptographically checked Proposal.  The production output service consumes
+/// this move-only value to prepare the control and chunk fanouts under one
+/// exact-output corridor lock; no message, payload, or parts accessor exists.
+#[must_use = "recovered Proposal output must enter its atomic exact-output corridor"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputAuthorityV1 {
+    dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+    tag: reducer::EventTag,
+    proposal: wire::ConsensusMessageV2,
+    payload: super::v2_chunks::EncodedV2Payload,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+    output_guard: Arc<super::output_guard::ConsensusOutputGuard>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleProposalExactOutputAuthorityV1 {
+    fn validated(
+        context: &wire::HeightContext,
+        dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+        tag: reducer::EventTag,
+        proposal: wire::ConsensusMessageV2,
+        payload: super::v2_chunks::EncodedV2Payload,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+        output_guard: Arc<super::output_guard::ConsensusOutputGuard>,
+    ) -> Option<Self> {
+        let wire::ConsensusMessageV2Payload::Proposal(signed) = &proposal.payload else {
+            return None;
+        };
+        (dispatch_key.matches_height_context(context)
+            && signed.round.context_id == context.id()
+            && signed.round.height == context.height
+            && tag.height() == signed.round.height
+            && tag.view() == signed.round.view
+            && !signed.signature.is_empty()
+            && payload.manifest() == &signed.manifest)
+            .then_some(Self {
+                dispatch_key,
+                tag,
+                proposal,
+                payload,
+                body_store_identity,
+                output_guard,
+            })
+    }
+
+    /// Consume only through the production service's private permit.
+    pub(in crate::sumeragi) fn consume_for_service(
+        self,
+        _permit: super::v2_worker::RecoveredLifecycleProposalExactOutputPermitV1,
+    ) -> (
+        super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+        reducer::EventTag,
+        wire::ConsensusMessageV2,
+        super::v2_chunks::EncodedV2Payload,
+        V2BodyStoreInstanceIdentity,
+        Arc<super::output_guard::ConsensusOutputGuard>,
+    ) {
+        (
+            self.dispatch_key,
+            self.tag,
+            self.proposal,
+            self.payload,
+            self.body_store_identity,
+            self.output_guard,
+        )
+    }
+
+    /// Reconstitute the same opaque authority after a capacity-only retry cut.
+    ///
+    /// Only the service-private permit can invoke this path. The immutable
+    /// context, tag, signed Proposal, and manifest join are all rechecked, so
+    /// the service cannot turn unpacked bytes into a different authority.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn from_service_retry(
+        _permit: super::v2_worker::RecoveredLifecycleProposalExactOutputPermitV1,
+        context: &wire::HeightContext,
+        dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+        tag: reducer::EventTag,
+        proposal: wire::ConsensusMessageV2,
+        payload: super::v2_chunks::EncodedV2Payload,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+        output_guard: Arc<super::output_guard::ConsensusOutputGuard>,
+    ) -> Option<Self> {
+        Self::validated(
+            context,
+            dispatch_key,
+            tag,
+            proposal,
+            payload,
+            body_store_identity,
+            output_guard,
+        )
+    }
+
+    /// Build one exact authority for focused output-corridor behavior tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        context: &wire::HeightContext,
+        dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+        tag: reducer::EventTag,
+        proposal: wire::ConsensusMessageV2,
+        payload: super::v2_chunks::EncodedV2Payload,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+        output_guard: Arc<super::output_guard::ConsensusOutputGuard>,
+    ) -> Option<Self> {
+        Self::validated(
+            context,
+            dispatch_key,
+            tag,
+            proposal,
+            payload,
+            body_store_identity,
+            output_guard,
+        )
+    }
+}
+
+/// Adapter-authenticated combined successor of one recovered signature.
+///
+/// The mandatory signed Broadcast remains paired with the reducer's exact
+/// follow-on Vote Sign. The latter is already sealed to its latest matching
+/// authenticated WAL frame and exact validated body receipt. Only WAL recovery
+/// can unpack this value, and no independent Broadcast or Sign accessor exists.
+#[must_use = "combined recovered Broadcast and Sign authority must remain inseparable"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {
+    dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+    broadcast: AdapterEffect,
+    next_sign: RecoveredLifecycleNextWalVoteSealV1,
+}
+
 /// WAL- and Ledger-authenticated input for replaying one fsynced `Signed` event.
 ///
 /// This authority is intentionally narrower than a worker completion: it has
@@ -4503,6 +5242,248 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignColdAdapterAuthorityV1 {
     request: SignRequest,
     signature: Vec<u8>,
     broadcast: AdapterEffect,
+}
+
+/// Comparison-only authority for advancing a cold adapter to the next Sign.
+///
+/// The complete executable Broadcast-and-Sign projection remains owned by WAL
+/// recovery. This token carries only cloned semantic witnesses and cannot
+/// install registry work or expose either effect to callers.
+#[must_use = "cold Broadcast-and-Sign authority must advance the exact adapter startup"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
+    broadcast: AdapterEffect,
+    next_sign: AdapterEffect,
+}
+
+/// WAL-authenticated historical signature input for a cold two-child preview.
+///
+/// This authority has no dispatch key or worker completion. WAL recovery is
+/// the sole mint: its private permit binds the unsigned request to the exact
+/// signed Proposal or Prepare-vote Broadcast already reconstructed from the
+/// durable parent. The cold adapter consumes it without publishing either
+/// reducer child.
+#[must_use = "a cold signed-Broadcast preview authority must enter the adapter"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1 {
+    tag: reducer::EventTag,
+    request: SignRequest,
+    signature: Vec<u8>,
+    broadcast: AdapterEffect,
+}
+
+/// Unpublished cold replay of one historical signature's two exact children.
+///
+/// The original adapter startup remains unmodified and owned by this value.
+/// The next Vote Sign can only project an opaque body lookup through the body
+/// store's private permit, and the lookup is affine even when body
+/// authentication fails. Dropping this preview publishes no effect, WAL,
+/// registry, status, or output mutation.
+#[must_use = "a cold Broadcast-and-Sign preview must authenticate its next body"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
+    startup: ProductionLifecycleAdapterStartupV1,
+    broadcast: AdapterEffect,
+    next_sign: AdapterEffect,
+    expected_proposal_manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+    body_store_identity: Option<V2BodyStoreInstanceIdentity>,
+    cold_proposal_output: Option<RecoveredLifecycleColdProposalOutputV1>,
+    body_lookup_minted: bool,
+}
+
+/// Canonical Proposal payload retained for cold exact-output reconstruction.
+///
+/// The value is minted only while the next Vote rejoins the same revalidated
+/// body-store instance. It exposes neither chunks nor process identity; the
+/// launched output service may consume it only through its private permit.
+#[derive(Clone)]
+#[must_use = "cold recovered Proposal output must remain with its durable Broadcast"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleColdProposalOutputV1 {
+    payload: super::v2_chunks::EncodedV2Payload,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+}
+
+/// Cold adapter/body seal awaiting the frame-bound WAL/Ledger join.
+///
+/// The adapter startup is still at the historical pre-signature state. The
+/// Broadcast and follow-on Vote Sign remain inseparable, with the latter
+/// sealed to its exact WAL frame and semantically revalidated body. Only WAL
+/// recovery can unpack this value; there is no general parts API.
+#[must_use = "a cold Broadcast-and-Sign seal must enter WAL/Ledger recovery"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastAndSignColdSealV1 {
+    startup: ProductionLifecycleAdapterStartupV1,
+    broadcast: AdapterEffect,
+    next_sign: RecoveredLifecycleNextWalVoteSealV1,
+    cold_proposal_output: Option<RecoveredLifecycleColdProposalOutputV1>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1 {
+    /// Seal one exact historical Proposal or Prepare-vote signature.
+    ///
+    /// The permit is constructible only by WAL recovery. Cryptographic and
+    /// reducer-state verification is deliberately repeated by the consuming
+    /// cold adapter preview.
+    pub(in crate::sumeragi) fn from_recovered_wal(
+        _permit: super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+        tag: reducer::EventTag,
+        request: SignRequest,
+        broadcast: AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::Broadcast(message) = &broadcast else {
+            return None;
+        };
+        let signature = match (&request, &message.payload) {
+            (
+                SignRequest::Proposal(unsigned),
+                wire::ConsensusMessageV2Payload::Proposal(signed),
+            ) => {
+                let mut expected = unsigned.clone();
+                if !expected.signature.is_empty()
+                    || signed.signature.is_empty()
+                    || tag.height() != unsigned.round.height
+                    || tag.view() != unsigned.round.view
+                {
+                    return None;
+                }
+                expected.signature.clone_from(&signed.signature);
+                (expected == *signed).then(|| signed.signature.clone())?
+            }
+            (SignRequest::Vote(unsigned), wire::ConsensusMessageV2Payload::Vote(signed)) => {
+                let mut expected = unsigned.clone();
+                if unsigned.phase != wire::GlobalPhase::Prepare
+                    || !expected.signature.is_empty()
+                    || signed.signature.is_empty()
+                    || tag.height() != unsigned.round.height
+                    || tag.view() != unsigned.round.view
+                {
+                    return None;
+                }
+                expected.signature.clone_from(&signed.signature);
+                (expected == *signed).then(|| signed.signature.clone())?
+            }
+            (SignRequest::TimeoutVote(_), _)
+            | (SignRequest::Proposal(_) | SignRequest::Vote(_), _) => return None,
+        };
+        Some(Self {
+            tag,
+            request,
+            signature,
+            broadcast,
+        })
+    }
+}
+
+impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
+    /// Seal the exact two-child relation under WAL recovery's private permit.
+    pub(in crate::sumeragi) fn from_recovered_wal(
+        _permit: super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+        broadcast: AdapterEffect,
+        next_sign: AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::Broadcast(message) = &broadcast else {
+            return None;
+        };
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(next_vote),
+        } = &next_sign
+        else {
+            return None;
+        };
+        let next_vote_tag_is_exact = match next_vote.phase {
+            wire::GlobalPhase::Prepare => tag.view() == next_vote.round.view,
+            wire::GlobalPhase::Commit => tag.view() >= next_vote.round.view,
+        };
+        if !next_vote.signature.is_empty()
+            || tag.height() != next_vote.round.height
+            || !next_vote_tag_is_exact
+        {
+            return None;
+        }
+        let relation_is_exact = match &message.payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                !proposal.signature.is_empty()
+                    && next_vote.phase == wire::GlobalPhase::Prepare
+                    && next_vote.round == proposal.round
+                    && next_vote.proposal_round == proposal.round
+                    && next_vote.subject == proposal.subject
+                    && next_vote.signer == proposal.proposer
+            }
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                !vote.signature.is_empty()
+                    && vote.phase == wire::GlobalPhase::Prepare
+                    && next_vote.phase == wire::GlobalPhase::Commit
+                    && next_vote.round == vote.round
+                    && next_vote.proposal_round == vote.proposal_round
+                    && next_vote.subject == vote.subject
+                    && next_vote.execution_commitment == vote.execution_commitment
+                    && next_vote.signer == vote.signer
+            }
+            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+            | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::ProposalManifest(_)
+            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+            | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+            | wire::ConsensusMessageV2Payload::VrfCommit(_)
+            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+        };
+        relation_is_exact.then_some(Self {
+            broadcast,
+            next_sign,
+        })
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleColdProposalOutputV1 {
+    /// Build canonical output for focused service routing tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        payload: super::v2_chunks::EncodedV2Payload,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+    ) -> Self {
+        Self {
+            payload,
+            body_store_identity,
+        }
+    }
+
+    /// Compare two sealed payload owners without exposing either constituent.
+    pub(in crate::sumeragi) fn exactly_matches(&self, other: &Self) -> bool {
+        self.payload == other.payload
+            && self
+                .body_store_identity
+                .same_instance(&other.body_store_identity)
+    }
+
+    /// Compare the retained payload with one exact signed Proposal Broadcast.
+    pub(in crate::sumeragi) fn matches_broadcast(&self, broadcast: &AdapterEffect) -> bool {
+        let AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+            ..
+        }) = broadcast
+        else {
+            return false;
+        };
+        self.payload.manifest() == &proposal.manifest
+    }
+
+    /// Release canonical output only to the production service's private permit.
+    pub(in crate::sumeragi) fn consume_for_service(
+        self,
+        _permit: super::v2_worker::RecoveredLifecycleProposalExactOutputPermitV1,
+    ) -> (
+        super::v2_chunks::EncodedV2Payload,
+        V2BodyStoreInstanceIdentity,
+    ) {
+        (self.payload, self.body_store_identity)
+    }
 }
 
 impl RecoveredLifecycleSignColdAdapterAuthorityV1 {
@@ -4561,17 +5542,181 @@ impl RecoveredLifecycleSignBroadcastProjectionAuthorityV1 {
     }
 }
 
-impl RecoveredLifecycleSignBroadcastOutputAuthorityV1 {
-    /// Consume the sealed output only through the production service permit.
-    pub(in crate::sumeragi) fn consume_for_service(
+#[cfg_attr(not(test), allow(dead_code))]
+impl PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
+    /// Project the reducer-derived next-body lookup only to the exact body store.
+    ///
+    /// The store supplies both the unforgeable bind permit and its process
+    /// identity. A failed catalog join therefore consumes the sole lookup and
+    /// leaves this preview inert rather than permitting fallback to another
+    /// store instance.
+    pub(in crate::sumeragi) fn project_next_vote_body_lookup(
+        &mut self,
+        _permit: RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+    ) -> Result<RecoveredLifecycleNextVoteBodyLookupV1, &'static str> {
+        if self.body_lookup_minted || self.body_store_identity.is_some() {
+            return Err("cold next-Vote body lookup was already projected");
+        }
+        let lookup = RecoveredLifecycleNextVoteBodyLookupV1::from_adapter_preview(
+            &self.next_sign,
+            self.expected_proposal_manifest_hash,
+        )
+        .ok_or("cold next-Vote body lookup changed its reducer successor")?;
+        self.body_store_identity = Some(body_store_identity);
+        self.body_lookup_minted = true;
+        Ok(lookup)
+    }
+
+    /// Retain canonical Proposal output only from the exact body-store join.
+    ///
+    /// Prepare-vote parents have no payload fanout and therefore deliberately
+    /// discard the reconstructed bytes after proving the same body catalog.
+    pub(in crate::sumeragi) fn bind_cold_proposal_output(
+        &mut self,
+        _permit: RecoveredLifecycleColdProposalOutputMintPermitV1,
+        payload: super::v2_chunks::EncodedV2Payload,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+    ) -> Result<(), &'static str> {
+        let retained_identity = self
+            .body_store_identity
+            .as_ref()
+            .ok_or("cold Proposal output was bound before its next-body lookup")?;
+        if !retained_identity.same_instance(&body_store_identity)
+            || self.cold_proposal_output.is_some()
+        {
+            return Err("cold Proposal output changed its body-store owner");
+        }
+        let Some(expected_manifest_hash) = self.expected_proposal_manifest_hash else {
+            return Ok(());
+        };
+        if HashOf::new(payload.manifest()) != expected_manifest_hash {
+            return Err("cold Proposal output changed its signed manifest");
+        }
+        self.cold_proposal_output = Some(RecoveredLifecycleColdProposalOutputV1 {
+            payload,
+            body_store_identity,
+        });
+        Ok(())
+    }
+
+    /// Bind the previewed next Vote to its exact WAL frame and validated body.
+    ///
+    /// Success retains the still-unmodified adapter startup beside the sealed
+    /// pair. Any failure is fail-stop: no adapter or storage mutation has been
+    /// published, and no body authority can escape for a retry against another
+    /// preview.
+    pub(in crate::sumeragi) fn seal_recovered_lifecycle_next_wal_vote(
         self,
-        _permit: super::v2_worker::RecoveredLifecycleSignBroadcastOutputPermitV1,
+        body_authority: RecoveredLifecycleNextVoteBodyAuthorityV1,
+    ) -> Result<RecoveredLifecycleSignedBroadcastAndSignColdSealV1, &'static str> {
+        let Self {
+            startup,
+            broadcast,
+            next_sign,
+            expected_proposal_manifest_hash,
+            body_store_identity,
+            cold_proposal_output,
+            body_lookup_minted,
+        } = self;
+        if !body_lookup_minted {
+            return Err("cold next-Vote body lookup was not authenticated");
+        }
+        if cold_proposal_output.is_some() != expected_proposal_manifest_hash.is_some()
+            || cold_proposal_output
+                .as_ref()
+                .is_some_and(|output| !output.matches_broadcast(&broadcast))
+        {
+            return Err("cold Proposal output did not rejoin its signed Broadcast");
+        }
+        let body_store_identity = body_store_identity
+            .as_ref()
+            .ok_or("cold next-Vote body store identity was not retained")?;
+        let validated = body_authority
+            .consume_for_adapter(
+                RecoveredLifecycleNextVoteBodyConsumePermitV1::new(),
+                &next_sign,
+                expected_proposal_manifest_hash,
+                body_store_identity,
+            )
+            .map_err(|_| "cold next-Vote body authority changed its exact owner")?;
+        let ProductionLifecycleAdapterStartupStateV1::Recovered {
+            adapter,
+            effects,
+            leader_wire_launch_prepared: false,
+        } = &startup.state
+        else {
+            return Err("cold next-Vote adapter startup changed after preview");
+        };
+        if !effects.is_empty() {
+            return Err("cold next-Vote adapter startup retained residual effects");
+        }
+        let next_sign = adapter
+            .authenticate_recovered_lifecycle_next_vote(
+                &next_sign,
+                &validated,
+                expected_proposal_manifest_hash,
+            )
+            .map_err(|_| "cold next-Vote WAL/body seal is inconsistent")?;
+        Ok(RecoveredLifecycleSignedBroadcastAndSignColdSealV1 {
+            startup,
+            broadcast,
+            next_sign,
+            cold_proposal_output,
+        })
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleSignedBroadcastAndSignColdSealV1 {
+    /// Release the sealed startup and pair only to WAL recovery's private permit.
+    pub(in crate::sumeragi) fn consume_for_recovered_wal(
+        self,
+        _permit: super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> (
+        ProductionLifecycleAdapterStartupV1,
+        AdapterEffect,
+        RecoveredLifecycleNextWalVoteSealV1,
+        Option<RecoveredLifecycleColdProposalOutputV1>,
+    ) {
+        (
+            self.startup,
+            self.broadcast,
+            self.next_sign,
+            self.cold_proposal_output,
+        )
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {
+    /// Consume the combined authority only through WAL recovery's one-shot permit.
+    pub(in crate::sumeragi) fn consume_for_recovered_wal(
+        self,
+        _permit: super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1,
     ) -> (
         super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
-        wire::ConsensusMessageV2,
-        Option<super::v2_chunks::EncodedV2Payload>,
+        AdapterEffect,
+        RecoveredLifecycleNextWalVoteSealV1,
     ) {
-        (self.dispatch_key, self.message, self.outbound_payload)
+        (self.dispatch_key, self.broadcast, self.next_sign)
+    }
+
+    /// Compare the complete combined projection in focused substitution tests.
+    #[cfg(test)]
+    fn exactly_matches_for_test(
+        &self,
+        dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+        broadcast: &AdapterEffect,
+        next_wal_identity: RecoveredWalFrameIdentity,
+        next_sign: &AdapterEffect,
+        validated: &ValidatedBodyReceipt,
+    ) -> bool {
+        self.dispatch_key == dispatch_key
+            && self.broadcast == *broadcast
+            && self
+                .next_sign
+                .exactly_matches(next_wal_identity, next_sign, validated)
     }
 }
 
@@ -4580,8 +5725,10 @@ impl RecoveredLifecycleSignBroadcastOutputAuthorityV1 {
 /// The reducer and wire registry are cloned. No WAL append, output fanout,
 /// service mutation, or live-adapter mutation occurs until a lifecycle
 /// transaction has durably published the corresponding successor family.
-/// TODO: consume this preview only from the restart-closed Sign-to-Broadcast
-/// LedgerV1 transaction; Proposal's Prepare-intent append remains a later cut.
+/// Broadcast, already-WAL-ahead Broadcast-and-Sign, and the initial Proposal
+/// Prepare-intent WAL cut all have sealed LedgerV1 consumers.  The initial
+/// Proposal path reserves exact output before its WAL append and keeps that
+/// fail-stop owner through the two-child Ledger publication.
 #[must_use = "prepared recovered Sign completion has not crossed LedgerV1"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignAdapterCompletionV1<'a> {
@@ -4592,10 +5739,43 @@ pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignAdapterCompletionV1
     core_effects: Vec<reducer::Effect>,
     broadcast: AdapterEffect,
     next_sign: Option<AdapterEffect>,
+    combined_authority_minted: bool,
+    proposal_output_authority_minted: bool,
+    next_vote_body_store_identity: Option<V2BodyStoreInstanceIdentity>,
+    next_vote_output_guard: Option<Arc<super::output_guard::ConsensusOutputGuard>>,
     pending_prepare: Option<(reducer::EventTag, reducer::WalEntry)>,
+    prepared_prepare_wal: Option<PreparedRecoveredLifecycleProposalPrepareWalV1>,
+    persisted_prepare_wal: Option<RecoveredLifecycleProposalPrepareWalContinuationV1>,
     outbound_payload: Option<super::v2_chunks::EncodedV2Payload>,
     next_fence_generation: u64,
     dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+}
+
+/// Preflighted continuation of the initial local Proposal `PrepareIntent`.
+///
+/// This value is still pre-WAL: it owns only cloned reducer/registry-derived
+/// state, the canonical encoded frame, and the exact future Prepare Sign.  It
+/// cannot authorize either lifecycle child until the retained adapter appends
+/// and reauthenticates that frame.
+struct PreparedRecoveredLifecycleProposalPrepareWalV1 {
+    next_reducer: reducer::Reducer,
+    persisted_event: reducer::Event,
+    sign_core_effect: reducer::Effect,
+    sign_effect: AdapterEffect,
+    expected_wal_sequence: u64,
+    encoded_wal_payload: Vec<u8>,
+    next_fence_generation: u64,
+}
+
+/// Exact post-append acknowledgement retained until LedgerV1 publication.
+///
+/// The adapter keeps its persistence identifier armed while this value exists.
+/// The launched transaction must either publish the two children and consume
+/// it in the assertion-only commit tail, or close admission for restart.
+struct RecoveredLifecycleProposalPrepareWalContinuationV1 {
+    persisted_event: reducer::Event,
+    sign_core_effect: reducer::Effect,
+    persistence_id: u64,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -4622,25 +5802,81 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         self.next_sign.as_ref()
     }
 
+    /// Return whether the unsealed successor is Prepare Broadcast then Commit Sign.
+    ///
+    /// This structural preflight deliberately does not require the affine
+    /// combined WAL/body authority: the registry mints that authority only
+    /// after it rejoins the exact claimed carrier. Post-seal publication must
+    /// use [`Self::is_vote_broadcast_and_sign`].
+    pub(in crate::sumeragi) fn is_vote_broadcast_and_sign_shape(&self) -> bool {
+        if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+            || self.next_vote_body_store_identity.is_none()
+            || self.next_vote_output_guard.is_none()
+            || self.outbound_payload.is_some()
+            || self.pending_prepare.is_some()
+        {
+            return false;
+        }
+        let (
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Vote(broadcast),
+                ..
+            }),
+            Some(AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(next),
+            }),
+        ) = (&self.broadcast, &self.next_sign)
+        else {
+            return false;
+        };
+        broadcast.phase == wire::GlobalPhase::Prepare
+            && next.phase == wire::GlobalPhase::Commit
+            && !broadcast.signature.is_empty()
+            && next.signature.is_empty()
+            && next.round == broadcast.round
+            && next.proposal_round == broadcast.proposal_round
+            && next.subject == broadcast.subject
+            && next.execution_commitment == broadcast.execution_commitment
+            && next.signer == broadcast.signer
+            && tag.height() == next.round.height
+            && tag.view() >= next.round.view
+    }
+
+    /// Return whether the exact Prepare-Broadcast/Commit-Sign authority is sealed.
+    pub(in crate::sumeragi) fn is_vote_broadcast_and_sign(&self) -> bool {
+        self.combined_authority_minted && self.is_vote_broadcast_and_sign_shape()
+    }
+
+    /// Return whether Proposal output and both child projections are sealed.
+    pub(in crate::sumeragi) fn is_authorized_proposal_broadcast_and_sign(&self) -> bool {
+        if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+            || !self.combined_authority_minted
+            || !self.proposal_output_authority_minted
+            || self.next_vote_body_store_identity.is_none()
+            || self.next_vote_output_guard.is_none()
+            || self.pending_prepare.is_some()
+        {
+            return false;
+        }
+        let (
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+                ..
+            }),
+            Some(payload),
+        ) = (&self.broadcast, &self.outbound_payload)
+        else {
+            return false;
+        };
+        !proposal.signature.is_empty() && payload.manifest() == &proposal.manifest
+    }
+
     /// Return the dedicated worker/registry identity retained by the preview.
     pub(in crate::sumeragi) const fn dispatch_key(
         &self,
     ) -> super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1 {
         self.dispatch_key
-    }
-
-    /// Clone one opaque exact-output authority while retaining this preview.
-    pub(in crate::sumeragi) fn project_broadcast_output_authority(
-        &self,
-    ) -> RecoveredLifecycleSignBroadcastOutputAuthorityV1 {
-        let AdapterEffect::Broadcast(message) = &self.broadcast else {
-            unreachable!("recovered Sign preview retains one Broadcast effect")
-        };
-        RecoveredLifecycleSignBroadcastOutputAuthorityV1 {
-            dispatch_key: self.dispatch_key,
-            message: message.clone(),
-            outbound_payload: self.outbound_payload.clone(),
-        }
     }
 
     /// Mint the sole adapter-authenticated WAL/registry projection authority.
@@ -4651,6 +5887,481 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             dispatch_key: self.dispatch_key,
             broadcast: self.broadcast.clone(),
         }
+    }
+
+    /// Seal the signed Proposal and worker-restored payload for atomic output.
+    ///
+    /// This projection is affine but does not consume the adapter preview: the
+    /// same preview must remain borrowed through body/WAL authentication and
+    /// the later LedgerV1 transaction.  Only Proposal shapes with the exact
+    /// retained manifest may mint it.
+    pub(in crate::sumeragi) fn project_proposal_exact_output_authority(
+        &mut self,
+    ) -> Result<RecoveredLifecycleProposalExactOutputAuthorityV1, AdapterError> {
+        let shape = self.shape();
+        if self.proposal_output_authority_minted
+            || !matches!(
+                shape,
+                RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+                    | RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
+            )
+            || (shape == RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
+                && self.prepared_prepare_wal.is_none())
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let AdapterEffect::Broadcast(proposal) = &self.broadcast else {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        };
+        let wire::ConsensusMessageV2Payload::Proposal(signed) = &proposal.payload else {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        };
+        let payload = self
+            .outbound_payload
+            .as_ref()
+            .filter(|payload| payload.manifest() == &signed.manifest)
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let reducer::Event::Signed { tag, .. } = &self.event else {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        };
+        if tag.height() != signed.round.height || tag.view() != signed.round.view {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let body_store_identity = self
+            .next_vote_body_store_identity
+            .as_ref()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let output_guard = self
+            .next_vote_output_guard
+            .as_ref()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        self.proposal_output_authority_minted = true;
+        Ok(RecoveredLifecycleProposalExactOutputAuthorityV1 {
+            dispatch_key: self.dispatch_key,
+            tag: *tag,
+            proposal: proposal.clone(),
+            payload: payload.clone(),
+            body_store_identity: body_store_identity.clone(),
+            output_guard: Arc::clone(output_guard),
+        })
+    }
+
+    fn broadcast_proposal_manifest_hash(
+        &self,
+    ) -> Result<Option<HashOf<wire::PayloadManifest>>, AdapterError> {
+        match &self.broadcast {
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+                ..
+            }) => Ok(Some(HashOf::new(&proposal.manifest))),
+            AdapterEffect::Broadcast(_) => Ok(None),
+            _ => Err(AdapterError::RecoveredLifecycleSignCompletionMismatch),
+        }
+    }
+
+    /// Preflight the initial Proposal's exact `PrepareIntent -> Sign(Prepare)` cut.
+    ///
+    /// The WAL payload and acknowledgement continuation are derived entirely
+    /// on cloned reducer state.  The returned body lookup is inert and remains
+    /// bound to the same launched store/output owner; no WAL byte, adapter
+    /// state, or lifecycle row changes until
+    /// [`Self::append_recovered_lifecycle_proposal_prepare_wal`] succeeds.
+    pub(in crate::sumeragi) fn prepare_proposal_prepare_wal_body_lookup(
+        &mut self,
+        _permit: super::v2_effects::RecoveredLifecycleNextVoteBodyPreviewBindPermitV1,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+        output_guard: Arc<super::output_guard::ConsensusOutputGuard>,
+    ) -> Result<RecoveredLifecycleNextVoteBodyLookupV1, AdapterError> {
+        if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
+            || self.prepared_prepare_wal.is_some()
+            || self.persisted_prepare_wal.is_some()
+            || self.next_vote_body_store_identity.is_some()
+            || self.next_vote_output_guard.is_some()
+            || self.proposal_output_authority_minted
+            || self.combined_authority_minted
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let (persist_tag, entry) = self
+            .pending_prepare
+            .as_ref()
+            .cloned()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let expected_vote = match entry.record() {
+            reducer::WalRecord::PrepareIntent(vote) if vote.phase() == reducer::Phase::Prepare => {
+                *vote
+            }
+            _ => return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch),
+        };
+        if self.adapter.fail_closed
+            || self.adapter.pending_persistence_id.is_some()
+            || self.next_reducer.pending_persistence_record() != Some(entry.record())
+            || self.next_reducer.awaiting_signature().is_some()
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let expected_wal_sequence = match self.adapter.wal.recovered_records().last() {
+            Some(record) => record
+                .sequence()
+                .checked_add(1)
+                .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?,
+            None => 0,
+        };
+        if expected_wal_sequence.checked_add(1) != Some(entry.id().get()) {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let encoded_wal_payload = self
+            .next_registry
+            .encode_wal_entry(&entry, self.adapter.aggregator.as_ref())?;
+        let pre_ack_fence = ReducerFenceProjection {
+            pending_persistence: self.next_reducer.pending_persistence_record().cloned(),
+            awaiting_signature: self.next_reducer.awaiting_signature().cloned(),
+            replay_complete: self.adapter.replay_complete,
+        };
+        let persisted_event = reducer::Event::Persisted {
+            tag: persist_tag,
+            id: entry.id(),
+        };
+        let mut next_reducer = self.next_reducer.clone();
+        let continuation = next_reducer.step(persisted_event.clone())?;
+        if continuation.disposition() != reducer::StepDisposition::Applied {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let mut continuation_effects = continuation.into_effects();
+        if continuation_effects.len() != 1 {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let sign_core_effect = continuation_effects
+            .pop()
+            .expect("one checked Proposal persistence continuation remains");
+        let sign_effect = match &sign_core_effect {
+            reducer::Effect::Sign {
+                tag,
+                message: reducer::SignableMessage::Vote(vote),
+            } if *tag == persist_tag && *vote == expected_vote => AdapterEffect::Sign {
+                tag: *tag,
+                request: SignRequest::Vote(self.next_registry.unsigned_vote_to_wire(*vote)?),
+            },
+            _ => return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch),
+        };
+        if next_reducer.pending_persistence_record().is_some()
+            || next_reducer.awaiting_signature()
+                != Some(&reducer::SignableMessage::Vote(expected_vote))
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let post_ack_fence = ReducerFenceProjection {
+            pending_persistence: next_reducer.pending_persistence_record().cloned(),
+            awaiting_signature: next_reducer.awaiting_signature().cloned(),
+            replay_complete: self.adapter.replay_complete,
+        };
+        let next_fence_generation = if post_ack_fence == pre_ack_fence {
+            self.next_fence_generation
+        } else {
+            self.next_fence_generation
+                .checked_add(1)
+                .filter(|next| *next != u64::MAX)
+                .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
+        };
+        let lookup = RecoveredLifecycleNextVoteBodyLookupV1::from_adapter_preview(
+            &sign_effect,
+            self.broadcast_proposal_manifest_hash()?,
+        )
+        .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        self.next_vote_body_store_identity = Some(body_store_identity);
+        self.next_vote_output_guard = Some(output_guard);
+        self.prepared_prepare_wal = Some(PreparedRecoveredLifecycleProposalPrepareWalV1 {
+            next_reducer,
+            persisted_event,
+            sign_core_effect,
+            sign_effect,
+            expected_wal_sequence,
+            encoded_wal_payload,
+            next_fence_generation,
+        });
+        Ok(lookup)
+    }
+
+    /// Append and fsync the preflighted initial Proposal `PrepareIntent`.
+    ///
+    /// Success advances only this borrow-bound preview to its exact
+    /// `Broadcast(Proposal) + Sign(Prepare)` successor.  The live adapter keeps
+    /// the persistence identifier armed until LedgerV1 publishes both
+    /// children.  Any append or receipt ambiguity fail-closes the adapter and
+    /// requires cold recovery; it is never reported as a retryable error.
+    pub(in crate::sumeragi) fn append_recovered_lifecycle_proposal_prepare_wal(
+        &mut self,
+    ) -> Result<(), AdapterError> {
+        if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
+            || self.prepared_prepare_wal.is_none()
+            || self.persisted_prepare_wal.is_some()
+            || !self.proposal_output_authority_minted
+            || self.next_vote_body_store_identity.is_none()
+            || self.next_vote_output_guard.is_none()
+            || self.adapter.fail_closed
+            || self.adapter.pending_persistence_id.is_some()
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let (persist_tag, entry) = self
+            .pending_prepare
+            .as_ref()
+            .cloned()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let prepared = self
+            .prepared_prepare_wal
+            .as_ref()
+            .expect("checked Proposal WAL preflight remains retained");
+        if self
+            .adapter
+            .wal
+            .recovered_records()
+            .last()
+            .map_or(prepared.expected_wal_sequence != 0, |record| {
+                record.sequence().checked_add(1) != Some(prepared.expected_wal_sequence)
+            })
+            || prepared.expected_wal_sequence.checked_add(1) != Some(entry.id().get())
+            || self.next_reducer.pending_persistence_record() != Some(entry.record())
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+
+        let PreparedRecoveredLifecycleProposalPrepareWalV1 {
+            next_reducer,
+            persisted_event,
+            sign_core_effect,
+            sign_effect,
+            expected_wal_sequence,
+            encoded_wal_payload,
+            next_fence_generation,
+        } = self
+            .prepared_prepare_wal
+            .take()
+            .expect("checked Proposal WAL preflight remains retained");
+        let persistence_id = entry.id().get();
+        self.adapter.pending_persistence_id = Some(persistence_id);
+        let receipt = match self.adapter.wal.append(&encoded_wal_payload) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.adapter.fail_closed = true;
+                return Err(error.into());
+            }
+        };
+        let frame_sequence = receipt.sequence();
+        let frame_hash = receipt.frame_hash();
+        let post_wal: Result<SealedLiveWalPersistedEffectV1, AdapterError> = (|| {
+            let frame = self.adapter.wal.recovered_records().last().ok_or(
+                AdapterError::WalFrameIdentityMismatch {
+                    frame_sequence,
+                    persistence_id,
+                    frame_hash,
+                },
+            )?;
+            if frame_sequence != expected_wal_sequence
+                || frame.payload() != encoded_wal_payload.as_slice()
+            {
+                return Err(AdapterError::WalFrameIdentityMismatch {
+                    frame_sequence,
+                    persistence_id,
+                    frame_hash,
+                });
+            }
+            let wal_identity =
+                LiveWalFrameIdentity::from_append_receipt(frame, receipt, persistence_id).ok_or(
+                    AdapterError::WalFrameIdentityMismatch {
+                        frame_sequence,
+                        persistence_id,
+                        frame_hash,
+                    },
+                )?;
+            let pending = PendingRuntimeEffectBinding::from_exact_live_wal_append(
+                &wal_identity,
+                &sign_effect,
+            )
+            .ok_or(AdapterError::LiveWalReplayCauseMismatch)?;
+            SealedLiveWalPersistedEffectV1::from_exact_live_append(
+                ExactLiveWalPersistedContinuationCause::PayloadFree {
+                    wal_identity,
+                    effect: sign_effect.clone(),
+                    pending,
+                },
+            )
+            .ok_or(AdapterError::LiveWalReplayCauseMismatch)
+        })();
+        let persisted_sign = match post_wal {
+            Ok(persisted_sign) => persisted_sign,
+            Err(error) => {
+                self.adapter.fail_closed = true;
+                return Err(error);
+            }
+        };
+        drop(persisted_sign);
+
+        self.next_reducer = next_reducer;
+        self.next_sign = Some(sign_effect);
+        self.pending_prepare = None;
+        self.persisted_prepare_wal = Some(RecoveredLifecycleProposalPrepareWalContinuationV1 {
+            persisted_event,
+            sign_core_effect,
+            persistence_id,
+        });
+        self.next_fence_generation = next_fence_generation;
+        debug_assert!(matches!(
+            &self.event,
+            reducer::Event::Signed { tag, .. } if *tag == persist_tag
+        ));
+        Ok(())
+    }
+
+    /// Project an inert exact-body lookup for the reducer-produced next Vote.
+    ///
+    /// The production service must consume this lookup while exclusively
+    /// borrowing the launched executor and rejoining the exact body-store
+    /// instance. It contains no validated receipt and cannot authorize WAL or
+    /// runtime work by itself.
+    pub(in crate::sumeragi) fn project_broadcast_and_sign_body_lookup(
+        &mut self,
+        _permit: super::v2_effects::RecoveredLifecycleNextVoteBodyPreviewBindPermitV1,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+        output_guard: Arc<super::output_guard::ConsensusOutputGuard>,
+    ) -> Result<RecoveredLifecycleNextVoteBodyLookupV1, AdapterError> {
+        if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        if self.next_vote_body_store_identity.is_some() || self.next_vote_output_guard.is_some() {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let next_sign = self
+            .next_sign
+            .as_ref()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let lookup = RecoveredLifecycleNextVoteBodyLookupV1::from_adapter_preview(
+            next_sign,
+            self.broadcast_proposal_manifest_hash()?,
+        )
+        .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        self.next_vote_body_store_identity = Some(body_store_identity);
+        self.next_vote_output_guard = Some(output_guard);
+        Ok(lookup)
+    }
+
+    #[cfg(test)]
+    fn project_broadcast_and_sign_body_lookup_for_test(
+        &mut self,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+        output_guard: Arc<super::output_guard::ConsensusOutputGuard>,
+    ) -> Result<RecoveredLifecycleNextVoteBodyLookupV1, AdapterError> {
+        if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+            || self.next_vote_body_store_identity.is_some()
+            || self.next_vote_output_guard.is_some()
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let next_sign = self
+            .next_sign
+            .as_ref()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let lookup = RecoveredLifecycleNextVoteBodyLookupV1::from_adapter_preview(
+            next_sign,
+            self.broadcast_proposal_manifest_hash()?,
+        )
+        .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        self.next_vote_body_store_identity = Some(body_store_identity);
+        self.next_vote_output_guard = Some(output_guard);
+        Ok(lookup)
+    }
+
+    /// Seal the exact Broadcast-and-Sign successor against WAL and body authority.
+    ///
+    /// Live settlement consumes this authority as one opaque two-child input;
+    /// neither child is reconstructed from caller-supplied bytes. Cold owner
+    /// assembly must independently rejoin the persisted pair before use.
+    pub(in crate::sumeragi) fn project_broadcast_and_sign_authority(
+        &mut self,
+        body_authority: RecoveredLifecycleNextVoteBodyAuthorityV1,
+    ) -> Result<RecoveredLifecycleSignBroadcastAndSignAuthorityV1, AdapterError> {
+        if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        if self.combined_authority_minted {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let next_sign = self
+            .next_sign
+            .as_ref()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let expected_manifest_hash = self.broadcast_proposal_manifest_hash()?;
+        let expected_body_store_identity = self
+            .next_vote_body_store_identity
+            .as_ref()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let validated = body_authority.consume_for_adapter(
+            RecoveredLifecycleNextVoteBodyConsumePermitV1::new(),
+            next_sign,
+            expected_manifest_hash,
+            expected_body_store_identity,
+        )?;
+        let next_sign = if self.persisted_prepare_wal.is_some() {
+            core::mem::swap(&mut self.adapter.reducer, &mut self.next_reducer);
+            core::mem::swap(&mut self.adapter.registry, &mut self.next_registry);
+            let authenticated = self.adapter.authenticate_recovered_lifecycle_next_vote(
+                next_sign,
+                &validated,
+                expected_manifest_hash,
+            );
+            core::mem::swap(&mut self.adapter.registry, &mut self.next_registry);
+            core::mem::swap(&mut self.adapter.reducer, &mut self.next_reducer);
+            authenticated?
+        } else {
+            self.adapter.authenticate_recovered_lifecycle_next_vote(
+                next_sign,
+                &validated,
+                expected_manifest_hash,
+            )?
+        };
+        self.combined_authority_minted = true;
+        Ok(RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {
+            dispatch_key: self.dispatch_key,
+            broadcast: self.broadcast.clone(),
+            next_sign,
+        })
+    }
+
+    /// Exercise fail-closed next-Sign substitution without exposing production parts.
+    #[cfg(test)]
+    fn project_broadcast_and_substituted_sign_for_test(
+        &mut self,
+        next_sign: &AdapterEffect,
+        body_authority: RecoveredLifecycleNextVoteBodyAuthorityV1,
+    ) -> Result<RecoveredLifecycleSignBroadcastAndSignAuthorityV1, AdapterError> {
+        if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        if self.combined_authority_minted {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        let expected_manifest_hash = self.broadcast_proposal_manifest_hash()?;
+        let expected_body_store_identity = self
+            .next_vote_body_store_identity
+            .as_ref()
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let validated = body_authority.consume_for_adapter(
+            RecoveredLifecycleNextVoteBodyConsumePermitV1::new(),
+            next_sign,
+            expected_manifest_hash,
+            expected_body_store_identity,
+        )?;
+        let next_sign = self.adapter.authenticate_recovered_lifecycle_next_vote(
+            next_sign,
+            &validated,
+            expected_manifest_hash,
+        )?;
+        self.combined_authority_minted = true;
+        Ok(RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {
+            dispatch_key: self.dispatch_key,
+            broadcast: self.broadcast.clone(),
+            next_sign,
+        })
     }
 
     /// Install an exact Broadcast-only reducer successor after LedgerV1 fsync.
@@ -4672,7 +6383,13 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             core_effects,
             broadcast: _,
             next_sign: None,
+            combined_authority_minted: _,
+            proposal_output_authority_minted: _,
+            next_vote_body_store_identity: _,
+            next_vote_output_guard: _,
             pending_prepare: None,
+            prepared_prepare_wal: None,
+            persisted_prepare_wal: None,
             outbound_payload: None,
             next_fence_generation,
             dispatch_key: _,
@@ -4680,6 +6397,132 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         else {
             unreachable!("Broadcast-only shape was asserted above")
         };
+        let effect_count = core_effects.len();
+        adapter.reducer = next_reducer;
+        adapter.registry = next_registry;
+        adapter.reducer_fence_generation = next_fence_generation;
+        adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &core_effects);
+        adapter.log_body_progress(&event, reducer::StepDisposition::Applied, effect_count);
+    }
+
+    /// Install an exact Proposal Broadcast-and-next-Sign reducer successor.
+    ///
+    /// Both affine projections must already have crossed their respective
+    /// durable owners: LedgerV1 owns the Broadcast and WAL-backed Sign rows,
+    /// while the exact-output reservation owns the Proposal control and chunk
+    /// fanouts. This assertion-only tail cannot discard either prerequisite.
+    pub(in crate::sumeragi) fn commit_after_durable_broadcast_and_sign(self) {
+        assert_eq!(
+            self.shape(),
+            RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign,
+            "combined Sign settlement requires exactly Broadcast and Sign"
+        );
+        let Self {
+            adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effects,
+            broadcast: _,
+            next_sign: Some(_),
+            combined_authority_minted: true,
+            proposal_output_authority_minted: true,
+            next_vote_body_store_identity: Some(_),
+            next_vote_output_guard: Some(_),
+            pending_prepare: None,
+            prepared_prepare_wal: None,
+            persisted_prepare_wal,
+            outbound_payload: Some(_),
+            next_fence_generation,
+            dispatch_key: _,
+        } = self
+        else {
+            unreachable!("combined Proposal settlement retained every affine authority")
+        };
+        let effect_count = core_effects.len();
+        match persisted_prepare_wal {
+            None => assert_eq!(
+                core_effects.len(),
+                2,
+                "WAL-ahead Proposal successor must contain Broadcast then Sign"
+            ),
+            Some(RecoveredLifecycleProposalPrepareWalContinuationV1 {
+                persisted_event,
+                sign_core_effect,
+                persistence_id,
+            }) => {
+                assert_eq!(
+                    core_effects.len(),
+                    2,
+                    "initial Proposal successor must contain Broadcast then PrepareIntent"
+                );
+                assert_eq!(
+                    adapter.pending_persistence_id,
+                    Some(persistence_id),
+                    "initial Proposal WAL acknowledgement must remain armed through LedgerV1"
+                );
+                adapter.pending_persistence_id = None;
+                adapter.reducer = next_reducer;
+                adapter.registry = next_registry;
+                adapter.reducer_fence_generation = next_fence_generation;
+                adapter.record_reducer_outcome(
+                    &event,
+                    reducer::StepDisposition::Applied,
+                    &core_effects,
+                );
+                adapter.log_body_progress(&event, reducer::StepDisposition::Applied, effect_count);
+                adapter.record_reducer_outcome(
+                    &persisted_event,
+                    reducer::StepDisposition::Applied,
+                    core::slice::from_ref(&sign_core_effect),
+                );
+                return;
+            }
+        }
+        adapter.reducer = next_reducer;
+        adapter.registry = next_registry;
+        adapter.reducer_fence_generation = next_fence_generation;
+        adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &core_effects);
+        adapter.log_body_progress(&event, reducer::StepDisposition::Applied, effect_count);
+    }
+
+    /// Install an exact Prepare Broadcast-and-Commit-Sign reducer successor.
+    ///
+    /// Vote output remains owned by the durable Broadcast row and is refanned
+    /// by the typed post-publication driver. Unlike Proposal, this mode has no
+    /// canonical chunk payload or pre-fsync exact-output reservation.
+    pub(in crate::sumeragi) fn commit_after_durable_vote_broadcast_and_sign(self) {
+        assert!(
+            self.is_vote_broadcast_and_sign(),
+            "combined Vote settlement requires Prepare Broadcast then Commit Sign"
+        );
+        let Self {
+            adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effects,
+            broadcast: _,
+            next_sign: Some(_),
+            combined_authority_minted: true,
+            proposal_output_authority_minted: false,
+            next_vote_body_store_identity: Some(_),
+            next_vote_output_guard: Some(_),
+            pending_prepare: None,
+            prepared_prepare_wal: None,
+            persisted_prepare_wal: None,
+            outbound_payload: None,
+            next_fence_generation,
+            dispatch_key: _,
+        } = self
+        else {
+            unreachable!("combined Vote settlement retained every affine authority")
+        };
+        assert_eq!(
+            core_effects.len(),
+            2,
+            "combined Vote successor must contain Broadcast then Sign"
+        );
         let effect_count = core_effects.len();
         adapter.reducer = next_reducer;
         adapter.registry = next_registry;
@@ -5664,7 +7507,7 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             && validation_tag == persist_tag
             && persist_tag == persisted_tag
             && persisted_tag == sign_tag
-            && id == entry.id()
+            && *id == entry.id()
             && next_reducer.pending_persistence_record().is_none()
             && next_reducer.awaiting_signature() == Some(message)
     }
@@ -5919,7 +7762,7 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
         // boundary without weakening the production WAL API.
         let frame_sequence = receipt.sequence();
         let frame_hash = receipt.frame_hash();
-        let post_wal = (|| {
+        let post_wal: Result<SealedLiveWalPersistedEffectV1, AdapterError> = (|| {
             let frame = adapter.wal.recovered_records().last().ok_or(
                 AdapterError::WalFrameIdentityMismatch {
                     frame_sequence,
@@ -9499,6 +11342,15 @@ pub(crate) struct SumeragiV2Adapter {
     fail_closed: bool,
 }
 
+enum SafetyWalOpenTarget<'kura> {
+    Kura {
+        kura: &'kura Kura,
+        authority: KuraSafetyWalDirectoryAuthority,
+    },
+    #[cfg(test)]
+    FixturePath(PathBuf),
+}
+
 fn commit_qc_status(
     certificate: &wire::QuorumCertificate,
     context: &wire::HeightContext,
@@ -9561,7 +11413,8 @@ impl SumeragiV2Adapter {
     /// serviced-identity table while its legitimate lifecycles remain active.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_with_capacity_geometry(
-        wal_path: impl Into<PathBuf>,
+        kura: &Kura,
+        wal_authority: KuraSafetyWalDirectoryAuthority,
         verified_context: VerifiedHeightContext,
         local_validator: Option<wire::ValidatorIndex>,
         generation: reducer::Generation,
@@ -9571,7 +11424,10 @@ impl SumeragiV2Adapter {
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator_and_publication_with_capacity(
-            wal_path,
+            SafetyWalOpenTarget::Kura {
+                kura,
+                authority: wal_authority,
+            },
             verified_context,
             local_validator,
             generation,
@@ -9592,7 +11448,8 @@ impl SumeragiV2Adapter {
     #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_recovered_startup_with_capacity_geometry(
-        wal_path: impl Into<PathBuf>,
+        kura: &Kura,
+        wal_authority: KuraSafetyWalDirectoryAuthority,
         verified_context: VerifiedHeightContext,
         local_validator: Option<wire::ValidatorIndex>,
         generation: reducer::Generation,
@@ -9602,7 +11459,10 @@ impl SumeragiV2Adapter {
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<RecoveredAdapterStartup, AdapterError> {
         let (adapter, effects) = Self::open_with_aggregator_and_publication_with_capacity(
-            wal_path,
+            SafetyWalOpenTarget::Kura {
+                kura,
+                authority: wal_authority,
+            },
             verified_context,
             local_validator,
             generation,
@@ -9650,7 +11510,8 @@ impl SumeragiV2Adapter {
     /// Open with deferred status publication and the validated queue geometry.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_deferred_status_with_capacity_geometry(
-        wal_path: impl Into<PathBuf>,
+        kura: &Kura,
+        wal_authority: KuraSafetyWalDirectoryAuthority,
         verified_context: VerifiedHeightContext,
         local_validator: Option<wire::ValidatorIndex>,
         generation: reducer::Generation,
@@ -9660,7 +11521,10 @@ impl SumeragiV2Adapter {
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator_and_publication_with_capacity(
-            wal_path,
+            SafetyWalOpenTarget::Kura {
+                kura,
+                authority: wal_authority,
+            },
             verified_context,
             local_validator,
             generation,
@@ -9739,7 +11603,7 @@ impl SumeragiV2Adapter {
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator_and_publication_with_capacity(
-            wal_path,
+            SafetyWalOpenTarget::FixturePath(wal_path.into()),
             verified_context,
             local_validator,
             generation,
@@ -9754,7 +11618,7 @@ impl SumeragiV2Adapter {
 
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator_and_publication_with_capacity(
-        wal_path: impl Into<PathBuf>,
+        wal_target: SafetyWalOpenTarget<'_>,
         verified_context: VerifiedHeightContext,
         local_validator: Option<wire::ValidatorIndex>,
         generation: reducer::Generation,
@@ -9770,7 +11634,6 @@ impl SumeragiV2Adapter {
             proofs_of_possession,
             parent_verification,
         } = verified_context;
-        let wal_path = wal_path.into();
         let mut registry = WireRegistry::new(&wire_context)?;
         let context = registry.core_context(&wire_context)?;
         let local_validator = local_validator
@@ -9793,12 +11656,31 @@ impl SumeragiV2Adapter {
                     "producer-continuation lifecycle capacity is not representable".to_owned(),
                 )
             })?;
-        let wal = SafetyWal::open(
-            wal_path.clone(),
-            wire::PROTOCOL_VERSION,
-            network_id,
-            consensus_key_hash,
-        )?;
+        let (wal_path, wal) = match wal_target {
+            SafetyWalOpenTarget::Kura { kura, authority } => {
+                let wal_name = format!("{:020}.wal", wire_context.height);
+                let wal_path = kura.sumeragi_v2_storage_root().join("wal").join(&wal_name);
+                let wal = SafetyWal::open_with_kura_authority(
+                    kura,
+                    authority,
+                    wal_name,
+                    wire::PROTOCOL_VERSION,
+                    network_id,
+                    consensus_key_hash,
+                )?;
+                (wal_path, wal)
+            }
+            #[cfg(test)]
+            SafetyWalOpenTarget::FixturePath(wal_path) => {
+                let wal = SafetyWal::open(
+                    wal_path.clone(),
+                    wire::PROTOCOL_VERSION,
+                    network_id,
+                    consensus_key_hash,
+                )?;
+                (wal_path, wal)
+            }
+        };
         let serviced_candidate_storage = wal.mint_serviced_candidate_store_authority(&wal_path)?;
         let (serviced_candidate_store, restored_serviced_candidates) =
             ServicedCandidateStore::open_with_safety_wal_authority(
@@ -10598,6 +12480,119 @@ impl SumeragiV2Adapter {
         }))
     }
     // RECOVERED_WAL_VOTE_SIGN_MINT_END
+
+    /// Bind one reducer-produced follow-on Vote Sign to its durable WAL and body.
+    ///
+    /// The reverse scan deliberately selects the latest exact matching owner.
+    /// Authenticated unrelated later records neither redirect nor invalidate the
+    /// vote lineage. This helper mints the inert authority consumed by the
+    /// atomic combined Ledger/registry publication or exact cold recovery join.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn authenticate_recovered_lifecycle_next_vote(
+        &self,
+        effect: &AdapterEffect,
+        validated: &ValidatedBodyReceipt,
+        expected_manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+    ) -> Result<RecoveredLifecycleNextWalVoteSealV1, AdapterError> {
+        self.ensure_ingress()?;
+        self.authenticate_recovered_wal_frontier()?;
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        } = effect
+        else {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        };
+        let local_signer = self
+            .reducer
+            .local_validator()
+            .map(|validator| self.registry.validator_index(validator))
+            .transpose()?
+            .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let signer_in_roster =
+            usize::try_from(vote.signer).is_ok_and(|index| index < self.wire_context.roster.len());
+        let tag_is_exact = tag.height() == vote.round.height
+            && match vote.phase {
+                wire::GlobalPhase::Prepare => tag.view() == vote.round.view,
+                wire::GlobalPhase::Commit => tag.view() >= vote.round.view,
+            };
+        let durable = validated.durable();
+        if !vote.signature.is_empty()
+            || vote.round != vote.proposal_round
+            || vote.round.context_id != self.wire_context.id()
+            || vote.round.height != self.wire_context.height
+            || vote.execution_commitment.validate().is_err()
+            || !signer_in_roster
+            || vote.signer != local_signer
+            || *tag != self.current_tag()
+            || !tag_is_exact
+            || durable.context_id() != vote.round.context_id
+            || durable.round() != vote.proposal_round
+            || durable.subject() != vote.subject
+            || expected_manifest_hash.is_some_and(|expected| durable.manifest_hash() != expected)
+            || validated.execution_commitment() != vote.execution_commitment
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+
+        let active_commit_lock = match vote.phase {
+            wire::GlobalPhase::Prepare => None,
+            wire::GlobalPhase::Commit => self.reducer.durable_state().locked(),
+        };
+        if vote.phase == wire::GlobalPhase::Commit && active_commit_lock.is_none() {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+
+        let mut owner = None;
+        for frame in self.wal.recovered_records().iter().rev() {
+            let (wal_identity, envelope) = self.authenticate_recovered_wal_frame(frame)?;
+            match envelope.record {
+                WalRecordV2::PrepareIntent(candidate)
+                    if vote.phase == wire::GlobalPhase::Prepare && candidate == *vote =>
+                {
+                    owner = Some(wal_identity);
+                    break;
+                }
+                WalRecordV2::LockAndCommit {
+                    prepare,
+                    vote: candidate,
+                } if vote.phase == wire::GlobalPhase::Commit
+                    && candidate == *vote
+                    && prepare.phase == wire::GlobalPhase::Prepare
+                    && prepare.round == prepare.proposal_round
+                    && prepare.round == vote.round
+                    && prepare.proposal_round == vote.proposal_round
+                    && prepare.subject == vote.subject
+                    && prepare.execution_commitment == vote.execution_commitment
+                    && active_commit_lock.is_some_and(|locked| {
+                        self.registry.reducer_qc_matches_wire(locked, &prepare)
+                    }) =>
+                {
+                    owner = Some(wal_identity);
+                    break;
+                }
+                WalRecordV2::ProposalIntent(_)
+                | WalRecordV2::PrepareIntent(_)
+                | WalRecordV2::ObservePrepare(_)
+                | WalRecordV2::LockAndCommit { .. }
+                | WalRecordV2::TimeoutIntent(_)
+                | WalRecordV2::InstallTimeout(_)
+                | WalRecordV2::Decision(_) => {}
+            }
+        }
+        let wal_identity = owner.ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        let replay_evidence =
+            RecoveredWalVoteReplayEvidenceV1::from_sealed_recovered_vote(wal_identity, *tag, vote)
+                .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
+        RecoveredLifecycleNextWalVoteSealV1::from_authenticated_adapter(
+            RecoveredLifecycleNextWalVoteSealPermitV1::new(),
+            wal_identity,
+            replay_evidence,
+            effect.clone(),
+            validated.clone(),
+        )
+        .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)
+    }
 
     /// Consume the current ProposalIntent/TimeoutIntent control Sign from replay.
     ///
@@ -13893,7 +15888,9 @@ impl SumeragiV2Adapter {
     /// The guarded worker result is unpacked only through this module's
     /// private permit. The cloned reducer must emit exactly one signed
     /// Broadcast, optionally followed by one already-durable Sign, or—for a
-    /// local Proposal only—one Prepare-intent persistence request. Any quorum,
+    /// local Proposal—one Prepare-intent persistence request. A recovered
+    /// Proposal whose exact Prepare intent was already fsynced may instead
+    /// emit Broadcast followed by its Prepare Sign. Any quorum,
     /// timeout-install, report, body, or unrelated persistence shape fails
     /// closed before lifecycle publication.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -14072,6 +16069,19 @@ impl SumeragiV2Adapter {
                     && next_reducer.awaiting_signature().is_none()
                     && core_effects.len() == 2
             }
+            (
+                SignRequest::Proposal(_),
+                None,
+                Some(AdapterEffect::Sign {
+                    request: SignRequest::Vote(vote),
+                    ..
+                }),
+            ) => {
+                vote.phase == wire::GlobalPhase::Prepare
+                    && next_reducer.pending_persistence_record().is_none()
+                    && next_reducer.awaiting_signature().is_some()
+                    && core_effects.len() == 2
+            }
             (SignRequest::Vote(_) | SignRequest::TimeoutVote(_), None, possible_next_sign) => {
                 next_reducer.pending_persistence_record().is_none()
                     && match (next_reducer.awaiting_signature(), possible_next_sign) {
@@ -14109,7 +16119,13 @@ impl SumeragiV2Adapter {
             core_effects,
             broadcast,
             next_sign,
+            combined_authority_minted: false,
+            proposal_output_authority_minted: false,
+            next_vote_body_store_identity: None,
+            next_vote_output_guard: None,
             pending_prepare,
+            prepared_prepare_wal: None,
+            persisted_prepare_wal: None,
             outbound_payload,
             next_fence_generation,
             dispatch_key,
@@ -22052,7 +24068,7 @@ mod tests {
         capacity_geometry: ServicedCandidateCapacityGeometry,
     ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
         SumeragiV2Adapter::open_with_aggregator_and_publication_with_capacity(
-            directory.path().join("capacity-safety.wal"),
+            SafetyWalOpenTarget::FixturePath(directory.path().join("capacity-safety.wal")),
             verified_genesis(context()),
             Some(0),
             reducer::Generation::new(1),
@@ -25548,6 +27564,749 @@ mod tests {
         assert_registry_eq(&adapter.registry, &registry_before);
         assert_eq!(adapter.reducer_fence_generation, fence_before);
         assert_eq!(adapter.wal.recovered_records().len(), wal_before);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
+        let directory = TempDir::new().expect("temporary recovered FIFO directory");
+        let (context, keys, proofs) = authenticated_context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let local = context.leader(round.view);
+        let body_subject = subject(0xD6);
+        let outbound = encode_payload(&context, round, body_subject, b"recovered proposal FIFO")
+            .expect("encode recovered proposal payload");
+        let manifest = outbound.manifest().clone();
+        let proposal = wire::Proposal {
+            round,
+            proposer: local,
+            subject: body_subject,
+            manifest: manifest.clone(),
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        let (_, validated) = validated_receipts_for_manifest(&context, &proposal.manifest);
+        let body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+            directory.path().join("next-vote-body-owner"),
+            context.clone(),
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        )
+        .expect("open exact next-Vote body-store owner");
+        let body_store_identity = body_store.instance_identity();
+        let prepare = wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: body_subject,
+            execution_commitment: validated.execution_commitment(),
+            signer: local,
+            signature: Vec::new(),
+        };
+        let startup = write_and_reopen_authenticated_wal_startup(
+            &directory,
+            &context,
+            &proofs,
+            local,
+            [0xD6; 32],
+            vec![
+                WalRecordV2::ProposalIntent(proposal.clone()),
+                WalRecordV2::PrepareIntent(prepare.clone()),
+            ],
+        );
+        let RecoveredAdapterStartup {
+            mut adapter,
+            effects,
+        } = startup;
+        let [AdapterEffect::Sign { tag, request }] = effects.as_slice() else {
+            panic!("recovered Proposal/Prepare FIFO must expose the Proposal Sign first")
+        };
+        assert_eq!(request, &SignRequest::Proposal(proposal.clone()));
+        let tag = *tag;
+        let request = request.clone();
+        let proposal_identity = adapter
+            .authenticate_recovered_wal_frame(&adapter.wal.recovered_records()[0])
+            .expect("authenticate ProposalIntent frame")
+            .0;
+        let prepare_identity = adapter
+            .authenticate_recovered_wal_frame(&adapter.wal.recovered_records()[1])
+            .expect("authenticate PrepareIntent frame")
+            .0;
+        let local_index = usize::try_from(local).expect("fixture signer index fits usize");
+        let signature = Signature::new(
+            keys[local_index].private_key(),
+            &request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let completion =
+            super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
+                1,
+                tag,
+                request,
+                signature,
+                Some(outbound),
+                super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1::ControlProposal,
+            );
+        let mut preview = adapter
+            .prepare_recovered_lifecycle_sign_completion(completion)
+            .expect("preview exact recovered Proposal signature");
+        assert_eq!(
+            preview.shape(),
+            RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+        );
+        let broadcast = preview.broadcast_effect().clone();
+        let next_sign = preview
+            .next_sign_effect()
+            .expect("recovered FIFO retains its Prepare Sign")
+            .clone();
+        assert!(matches!(
+            &next_sign,
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(vote),
+                ..
+            } if vote == &prepare
+        ));
+
+        let mut late_prepare_sign = next_sign.clone();
+        let AdapterEffect::Sign { tag, .. } = &mut late_prepare_sign else {
+            unreachable!("fixture successor is a Vote Sign")
+        };
+        *tag = reducer::EventTag::new(
+            round.height,
+            round.view.saturating_add(1),
+            reducer::Generation::new(round.height),
+        );
+        assert!(
+            RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(
+                super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
+                broadcast.clone(),
+                late_prepare_sign,
+            )
+            .is_none(),
+            "a Prepare successor cannot move to a later EventTag view"
+        );
+
+        let mut signed_prepare = prepare.clone();
+        signed_prepare.signature = Signature::new(
+            keys[local_index].private_key(),
+            &SignRequest::Vote(prepare.clone()).signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let prepare_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(signed_prepare),
+        ));
+        let mut commit = prepare.clone();
+        commit.phase = wire::GlobalPhase::Commit;
+        let later_commit_sign = AdapterEffect::Sign {
+            tag: reducer::EventTag::new(
+                round.height,
+                round.view.saturating_add(1),
+                reducer::Generation::new(round.height),
+            ),
+            request: SignRequest::Vote(commit),
+        };
+        assert!(
+            RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(
+                super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
+                prepare_broadcast,
+                later_commit_sign,
+            )
+            .is_some(),
+            "a Commit successor may retain a later EventTag view than its vote round"
+        );
+
+        let expected_manifest_hash = Some(HashOf::new(&manifest));
+        let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+        let exact_body_lookup = preview
+            .project_broadcast_and_sign_body_lookup_for_test(
+                body_store_identity.clone(),
+                Arc::clone(&output_guard),
+            )
+            .expect("bind exact reducer body lookup to the preview/store owner");
+
+        let foreign_durable = DurableBodyReceipt::for_test(
+            context.id(),
+            round,
+            subject(0xD7),
+            HashOf::new(&manifest),
+        );
+        let foreign_body = ValidatedBodyReceipt::for_test(foreign_durable);
+        assert!(
+            RecoveredLifecycleNextVoteBodyAuthorityV1::for_test(
+                RecoveredLifecycleNextVoteBodyLookupV1::for_test(&prepare, expected_manifest_hash,)
+                    .expect("project exact reducer body lookup"),
+                foreign_body.clone(),
+                body_store_identity.clone(),
+            )
+            .is_none(),
+            "a substituted validated body cannot mint exact-owner authority"
+        );
+        let mut foreign_manifest = manifest.clone();
+        foreign_manifest.payload_size_bytes = foreign_manifest
+            .payload_size_bytes
+            .checked_add(1)
+            .expect("fixture payload length has headroom");
+        let foreign_manifest_durable = DurableBodyReceipt::for_test(
+            context.id(),
+            round,
+            body_subject,
+            HashOf::new(&foreign_manifest),
+        );
+        let foreign_manifest_body = ValidatedBodyReceipt::for_test_with_commitment(
+            foreign_manifest_durable,
+            validated.execution_commitment(),
+        );
+        assert!(
+            RecoveredLifecycleNextVoteBodyAuthorityV1::for_test(
+                RecoveredLifecycleNextVoteBodyLookupV1::for_test(&prepare, expected_manifest_hash,)
+                    .expect("project exact reducer body lookup"),
+                foreign_manifest_body,
+                body_store_identity.clone(),
+            )
+            .is_none(),
+            "same-coordinate foreign manifest cannot mint exact-owner authority"
+        );
+        let mut substituted_sign = next_sign.clone();
+        let AdapterEffect::Sign {
+            request: SignRequest::Vote(vote),
+            ..
+        } = &mut substituted_sign
+        else {
+            unreachable!("fixture successor is a Vote Sign")
+        };
+        vote.subject = subject(0xD8);
+        let substituted_sign_body = RecoveredLifecycleNextVoteBodyAuthorityV1::for_test(
+            RecoveredLifecycleNextVoteBodyLookupV1::for_test(&prepare, expected_manifest_hash)
+                .expect("project exact reducer body lookup"),
+            validated.clone(),
+            body_store_identity.clone(),
+        )
+        .expect("exact body mints opaque test authority");
+        assert!(
+            preview
+                .project_broadcast_and_substituted_sign_for_test(
+                    &substituted_sign,
+                    substituted_sign_body,
+                )
+                .is_err(),
+            "a substituted next Sign cannot consume exact body authority"
+        );
+
+        let dispatch_key = preview.dispatch_key();
+        let exact_body = RecoveredLifecycleNextVoteBodyAuthorityV1::for_test(
+            exact_body_lookup,
+            validated.clone(),
+            body_store_identity.clone(),
+        )
+        .expect("exact body mints opaque test authority");
+        assert!(exact_body.exactly_matches_for_test(&validated, &body_store_identity));
+        let combined = preview
+            .project_broadcast_and_sign_authority(exact_body)
+            .expect("seal exact recovered Broadcast and next Sign");
+        let duplicate_body = RecoveredLifecycleNextVoteBodyAuthorityV1::for_test(
+            RecoveredLifecycleNextVoteBodyLookupV1::for_test(&prepare, expected_manifest_hash)
+                .expect("project exact reducer body lookup"),
+            validated.clone(),
+            body_store_identity,
+        )
+        .expect("exact body mints a separate opaque test authority");
+        assert!(
+            preview
+                .project_broadcast_and_sign_authority(duplicate_body)
+                .is_err(),
+            "one preview cannot duplicate its combined successor authority"
+        );
+        assert!(combined.exactly_matches_for_test(
+            dispatch_key,
+            &broadcast,
+            prepare_identity,
+            &next_sign,
+            &validated,
+        ));
+        let mut substituted_broadcast = broadcast.clone();
+        let AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+            ..
+        }) = &mut substituted_broadcast
+        else {
+            unreachable!("fixture Broadcast is the signed Proposal")
+        };
+        proposal.signature.push(0xD9);
+        assert!(
+            !combined.exactly_matches_for_test(
+                dispatch_key,
+                &substituted_broadcast,
+                prepare_identity,
+                &next_sign,
+                &validated,
+            ),
+            "the combined authority retains the exact signed Broadcast"
+        );
+        assert!(
+            !combined.exactly_matches_for_test(
+                dispatch_key,
+                &broadcast,
+                proposal_identity,
+                &next_sign,
+                &validated,
+            ),
+            "a different authenticated WAL frame cannot own the next Sign"
+        );
+        assert!(
+            !combined.exactly_matches_for_test(
+                dispatch_key,
+                &broadcast,
+                prepare_identity,
+                &substituted_sign,
+                &validated,
+            ),
+            "the combined authority retains the exact next Sign"
+        );
+        assert!(
+            !combined.exactly_matches_for_test(
+                dispatch_key,
+                &broadcast,
+                prepare_identity,
+                &next_sign,
+                &foreign_body,
+            ),
+            "the combined authority retains the exact validated body"
+        );
+
+        let cold_adapter = RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(
+            super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
+            broadcast,
+            next_sign,
+        )
+        .expect("the exact durable pair mints one cold-adapter authority");
+        drop(combined);
+        drop(preview);
+        let verified = VerifiedHeightContext::genesis(context, proofs)
+            .expect("reverify the exact recovered Proposal context");
+        let confirmed = ProductionLifecycleAdapterStartupV1::recovered(adapter, Vec::new())
+            .advance_recovered_lifecycle_signed_broadcast_and_sign(&verified, cold_adapter)
+            .expect("cold adapter replays the exact fsynced Broadcast-and-Sign pair");
+        let ProductionLifecycleAdapterStartupStateV1::Recovered {
+            adapter: confirmed,
+            effects: confirmed_effects,
+            leader_wire_launch_prepared: false,
+        } = confirmed.state
+        else {
+            panic!("confirmed production startup remains in the recovered state")
+        };
+        assert!(confirmed_effects.is_empty());
+        let Some(reducer::SignableMessage::Vote(awaiting)) = confirmed.reducer.awaiting_signature()
+        else {
+            panic!("confirmed adapter must await the exact next Vote Sign")
+        };
+        assert_eq!(
+            confirmed
+                .registry
+                .unsigned_vote_to_wire(*awaiting)
+                .expect("reconstruct confirmed next Vote"),
+            prepare
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
+        let directory = TempDir::new().expect("temporary production recovered-Sign directory");
+        let (context, keys, proofs) = authenticated_context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let local = context.leader(round.view);
+        let local_index = usize::try_from(local).expect("fixture signer index fits usize");
+        let header = BlockHeader::new(
+            NonZeroU64::new(round.height).expect("fixture height is non-zero"),
+            None,
+            None,
+            None,
+            8_214,
+            round.view,
+        );
+        let block_signature =
+            SignatureOf::try_from_hash(keys[local_index].private_key(), header.hash())
+                .expect("sign exact recovered-Sign body");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(local), block_signature),
+            header,
+            Vec::new(),
+        );
+        let canonical_wire = block
+            .encode_wire()
+            .expect("encode exact recovered-Sign body");
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let outbound = encode_payload(&context, round, subject, &canonical_wire)
+            .expect("encode exact recovered-Sign payload");
+        let manifest = outbound.manifest().clone();
+        let proposal = wire::Proposal {
+            round,
+            proposer: local,
+            subject,
+            manifest: manifest.clone(),
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        let commitment = execution_commitment(0xD6);
+        let prepare = wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: commitment,
+            signer: local,
+            signature: Vec::new(),
+        };
+        let RecoveredAdapterStartup { adapter, effects } =
+            write_and_reopen_authenticated_wal_startup(
+                &directory,
+                &context,
+                &proofs,
+                local,
+                [0xD6; 32],
+                vec![
+                    WalRecordV2::ProposalIntent(proposal.clone()),
+                    WalRecordV2::PrepareIntent(prepare.clone()),
+                ],
+            );
+        let RecoveredAdapterStartup {
+            adapter: cold_adapter,
+            effects: cold_effects,
+        } = write_and_reopen_authenticated_wal_startup_at_path(
+            directory.path().join("cold-pair-preview-safety.wal"),
+            &context,
+            &proofs,
+            local,
+            [0xD6; 32],
+            vec![
+                WalRecordV2::ProposalIntent(proposal.clone()),
+                WalRecordV2::PrepareIntent(prepare.clone()),
+            ],
+        );
+        assert_eq!(cold_effects, effects);
+        let [AdapterEffect::Sign { tag, request }] = effects.as_slice() else {
+            panic!("recovered Proposal/Prepare FIFO must expose the Proposal Sign first")
+        };
+        assert_eq!(request, &SignRequest::Proposal(proposal));
+        let tag = *tag;
+        let request = request.clone();
+        let prepare_identity = adapter
+            .authenticate_recovered_wal_frame(&adapter.wal.recovered_records()[1])
+            .expect("authenticate exact PrepareIntent frame")
+            .0;
+        let signature = Signature::new(
+            keys[local_index].private_key(),
+            &request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let completion = || {
+            super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
+                1,
+                tag,
+                request.clone(),
+                signature.clone(),
+                Some(outbound.clone()),
+                super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1::ControlProposal,
+            )
+        };
+
+        let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+            directory.path().join("exact-next-vote-body"),
+            context.clone(),
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        )
+        .expect("open exact next-Vote body store");
+        let durable = body_store
+            .store(manifest.clone(), canonical_wire)
+            .expect("persist exact next-Vote body");
+        let validated = body_store
+            .validate(&durable, |_| Ok::<_, String>(commitment))
+            .expect("persist exact next-Vote validation");
+        let body_store_identity = body_store.instance_identity();
+
+        let [
+            AdapterEffect::Sign {
+                tag: cold_tag,
+                request: cold_request,
+            },
+        ] = cold_effects.as_slice()
+        else {
+            panic!("cold recovered Proposal/Prepare FIFO retains one Proposal Sign")
+        };
+        let SignRequest::Proposal(mut signed_proposal) = cold_request.clone() else {
+            panic!("cold recovered control request is a Proposal")
+        };
+        signed_proposal.signature.clone_from(&signature);
+        let cold_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(signed_proposal),
+        ));
+        let mut substituted_cold_broadcast = cold_broadcast.clone();
+        let AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(substituted_proposal),
+            ..
+        }) = &mut substituted_cold_broadcast
+        else {
+            unreachable!("cold fixture Broadcast is a signed Proposal")
+        };
+        substituted_proposal.signature.push(0xD7);
+        assert!(
+            RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1::from_recovered_wal(
+                super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
+                *cold_tag,
+                cold_request.clone(),
+                substituted_cold_broadcast,
+            )
+            .is_none(),
+            "a substituted signed Broadcast cannot mint cold preview authority"
+        );
+        let cold_authority =
+            RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1::from_recovered_wal(
+                super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
+                *cold_tag,
+                cold_request.clone(),
+                cold_broadcast.clone(),
+            )
+            .expect("WAL-authenticated Proposal Broadcast mints one cold preview authority");
+        drop(cold_effects);
+        let verified = VerifiedHeightContext::genesis(context.clone(), proofs.clone())
+            .expect("reverify cold recovered Proposal context");
+        let mut cold_preview =
+            ProductionLifecycleAdapterStartupV1::recovered(cold_adapter, Vec::new())
+                .prepare_recovered_lifecycle_signed_broadcast_and_sign(&verified, cold_authority)
+                .expect("cold adapter previews exact Broadcast and next Sign");
+        let cold_body = body_store
+            .authenticate_recovered_lifecycle_next_vote_body(&mut cold_preview)
+            .expect("exact revalidated body store authenticates the cold next Vote");
+        assert!(cold_body.exactly_matches_for_test(&validated, &body_store_identity,));
+        assert!(matches!(
+            body_store.authenticate_recovered_lifecycle_next_vote_body(&mut cold_preview),
+            Err(super::super::v2_body_store::V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch)
+        ));
+        let cold_seal = cold_preview
+            .seal_recovered_lifecycle_next_wal_vote(cold_body)
+            .expect("cold preview seals its exact WAL and body-owned next Vote");
+        let (cold_startup, sealed_broadcast, sealed_next_sign, sealed_output) = cold_seal
+            .consume_for_recovered_wal(
+                super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
+            );
+        let expected_next_sign = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(prepare.clone()),
+        };
+        assert_eq!(sealed_broadcast, cold_broadcast);
+        assert!(
+            sealed_output
+                .as_ref()
+                .is_some_and(|output| output.matches_broadcast(&sealed_broadcast))
+        );
+        assert!(sealed_next_sign.exactly_matches(
+            prepare_identity,
+            &expected_next_sign,
+            &validated,
+        ));
+        let cold_adapter_authority =
+            RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(
+                super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
+                sealed_broadcast,
+                expected_next_sign,
+            )
+            .expect("sealed cold pair retains the exact adapter replay relation");
+        drop(sealed_next_sign);
+        let cold_startup = cold_startup
+            .advance_recovered_lifecycle_signed_broadcast_and_sign(
+                &verified,
+                cold_adapter_authority,
+            )
+            .expect("sealed cold pair advances the retained original startup");
+        let ProductionLifecycleAdapterStartupStateV1::Recovered {
+            adapter: advanced_cold_adapter,
+            effects: advanced_cold_effects,
+            leader_wire_launch_prepared: false,
+        } = cold_startup.state
+        else {
+            panic!("advanced cold preview retains one recovered adapter startup")
+        };
+        assert!(advanced_cold_effects.is_empty());
+        let Some(reducer::SignableMessage::Vote(advanced_vote)) =
+            advanced_cold_adapter.reducer.awaiting_signature()
+        else {
+            panic!("advanced cold preview must await its exact next Vote")
+        };
+        assert_eq!(
+            advanced_cold_adapter
+                .registry
+                .unsigned_vote_to_wire(*advanced_vote)
+                .expect("reconstruct advanced cold next Vote"),
+            prepare,
+        );
+
+        let now = Instant::now();
+        let (mut runtime, startup_effects) = super::super::v2_runtime::SerializedV2Runtime::new(
+            adapter,
+            effects,
+            now,
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+        )
+        .expect("wrap recovered adapter in the serialized runtime");
+        let _startup_ownership = runtime
+            .take_effect_ownership(startup_effects.len())
+            .expect("transfer the recovered Sign's startup ownership");
+        let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+        let requester = context.roster[local_index].validator.clone();
+        let (mut executor, body_store) =
+            super::super::v2_effects::V2EffectExecutor::open_with_body_store(
+                runtime,
+                body_store,
+                context.clone(),
+                requester,
+                Some(local),
+                Arc::clone(&output_guard),
+                super::super::v2_effects::EffectQueueConfig::default(),
+            )
+            .expect("open executor with exact recovered body catalogs");
+
+        let (mut services, _) = super::super::v2_worker::tests::fixture();
+        let service_io =
+            super::super::v2_worker::tests::install_lifecycle_planner_io_for_validator_for_test(
+                &mut services,
+                context.clone(),
+                local,
+                Arc::clone(&output_guard),
+                body_store,
+                body_store_identity.clone(),
+                1,
+            );
+        super::super::v2_worker::tests::install_local_signer_for_test(
+            &mut services,
+            &keys[local_index],
+        );
+        let foreign_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+            directory.path().join("foreign-next-vote-body"),
+            context.clone(),
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        )
+        .expect("open foreign next-Vote body store");
+        let foreign_store_identity = foreign_store.instance_identity();
+        assert!(!foreign_store_identity.same_instance(&body_store_identity));
+        let (mut foreign_services, _) = super::super::v2_worker::tests::fixture();
+        let foreign_service_io =
+            super::super::v2_worker::tests::install_lifecycle_planner_io_for_validator_for_test(
+                &mut foreign_services,
+                context,
+                local,
+                Arc::clone(&output_guard),
+                foreign_store,
+                foreign_store_identity,
+                1,
+            );
+
+        let status_before = executor.status();
+        let tag_before = executor.current_tag();
+        let error = match foreign_services
+            .prepare_recovered_lifecycle_sign_completion_with_body(&mut executor, completion())
+        {
+            Err(error) => error,
+            Ok(_) => panic!("a foreign body-store service must fail before adapter preview"),
+        };
+        assert!(error.contains("foreign service owner"));
+        let mut status_after = executor.status();
+        status_after.captured_at = status_before.captured_at;
+        assert_eq!(status_after, status_before);
+        assert_eq!(executor.current_tag(), tag_before);
+        assert!(!output_guard.restart_required());
+
+        let (mut preview, body_authority) = services
+            .prepare_recovered_lifecycle_sign_completion_with_body(&mut executor, completion())
+            .expect("the exact production service authenticates the next-Vote body");
+        assert_eq!(
+            preview.shape(),
+            RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+        );
+        assert!(body_authority.exactly_matches_for_test(&validated, &body_store_identity));
+        let dispatch_key = preview.dispatch_key();
+        let broadcast = preview.broadcast_effect().clone();
+        assert!(matches!(
+            &broadcast,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Proposal(signed),
+                ..
+            }) if signed.manifest == manifest && signed.signature == signature
+        ));
+        let next_sign = preview
+            .next_sign_effect()
+            .expect("the recovered Proposal retains its exact Prepare Sign")
+            .clone();
+        assert!(matches!(
+            &next_sign,
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(vote),
+                ..
+            } if vote == &prepare
+        ));
+        let proposal_output = preview
+            .project_proposal_exact_output_authority()
+            .expect("seal the signed Proposal and exact recovered payload");
+        assert!(
+            preview.project_proposal_exact_output_authority().is_err(),
+            "one adapter preview cannot duplicate Proposal output authority"
+        );
+        let proposal_output = match services
+            .capture_recovered_lifecycle_proposal_exact_output(proposal_output)
+            .expect("exact launched service reserves Proposal control and chunks")
+        {
+            super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(
+                reservation,
+            ) => reservation.abort_before_publication(),
+            super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(
+                _,
+            ) => panic!("empty exact-output corridor must retain the complete Proposal batch"),
+        };
+        match services
+            .capture_recovered_lifecycle_proposal_exact_output(proposal_output)
+            .expect("typed abort returns the exact retry authority")
+        {
+            super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(
+                reservation,
+            ) => {
+                drop(reservation.abort_before_publication());
+            }
+            super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(
+                _,
+            ) => panic!("retry against the unchanged empty corridor must remain reservable"),
+        }
+        let combined = preview
+            .project_broadcast_and_sign_authority(body_authority)
+            .expect("seal the exact production-authenticated successor pair");
+        assert!(combined.exactly_matches_for_test(
+            dispatch_key,
+            &broadcast,
+            prepare_identity,
+            &next_sign,
+            &validated,
+        ));
+
+        foreign_service_io.detach(&mut foreign_services);
+        service_io.detach(&mut services);
     }
 
     include!("tests/v2_adapter_04_wal_recovery.rs");

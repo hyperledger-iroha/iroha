@@ -1,17 +1,246 @@
 """Bootstrap archive cases executed by the parent release-receipt suite."""
 
+from __future__ import annotations
+
 import json
 import importlib.util
-import base64
 import hashlib
 import os
+from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
+import time
+
+import pytest
 
 from pytests.scripts.sumeragi_v2_release_receipt_components import (
     run_fixture_cargo_cache_copy,
 )
+from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
+    canonical_json,
+    sha256,
+)
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+
+
+def _load_receipt_writer_module() -> object:
+    """Load the production writer without relying on the parent suite namespace."""
+
+    script = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
+    spec = importlib.util.spec_from_file_location(
+        "sumeragi_v2_release_receipt_archive_case_writer", script
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fixture_validator_invocation(
+    helper: object,
+    *,
+    invocation: Path,
+    bootstrap: Path,
+    source: Path,
+    receipt: Path,
+    acknowledgment: Path,
+    source_manifest_sha256: str,
+    candidate_root: Path,
+    scaling_evidence_manifest: Path,
+    expected_signer_fingerprint: str,
+    scaling_digests: dict[str, str],
+) -> dict[str, object]:
+    known = _fixture_validator_values(
+        helper,
+        invocation=invocation,
+        bootstrap=bootstrap,
+        source=source,
+        receipt=receipt,
+        acknowledgment=acknowledgment,
+        source_manifest_sha256=source_manifest_sha256,
+        candidate_root=candidate_root,
+        scaling_evidence_manifest=scaling_evidence_manifest,
+        expected_signer_fingerprint=expected_signer_fingerprint,
+        scaling_digests=scaling_digests,
+    )
+    bindings = []
+    for name in helper.VALIDATOR_OPTION_ORDER:
+        kind, value = known[name]
+        bindings.append(
+            {
+                "name": name,
+                "value_kind": kind,
+                "normalized_value_sha256": hashlib.sha256(
+                    json.dumps(
+                        {"kind": kind, "value": value},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+    record = {
+        "profile": "release",
+        "operation": "verify-existing-and-ack",
+        "python_flags": ["-I", "-S"],
+        "validator": "protected:validate-receipt.py",
+        "ordered_options": bindings,
+    }
+    return {
+        **record,
+        "invocation_sha256": hashlib.sha256(
+            json.dumps(
+                record,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+def _fixture_validator_values(
+    helper: object,
+    *,
+    invocation: Path,
+    bootstrap: Path,
+    source: Path,
+    receipt: Path,
+    acknowledgment: Path,
+    source_manifest_sha256: str,
+    candidate_root: Path,
+    scaling_evidence_manifest: Path,
+    expected_signer_fingerprint: str,
+    scaling_digests: dict[str, str],
+) -> dict[str, tuple[str, str | bool]]:
+    values: dict[str, tuple[str, str | bool]] = {
+        name: ("flag", True)
+        if name == "--verify-existing"
+        else ("path", str(invocation / "fixture" / name[2:]))
+        if name in helper.VALIDATOR_PATH_OPTIONS
+        else ("text", f"fixture:{name}")
+        for name in helper.VALIDATOR_OPTION_ORDER
+    }
+    values.update({
+        "--candidate-identity": ("path", str(bootstrap / "candidate-identity.json")),
+        "--sealed-identity": ("path", str(invocation / "sealed-identity.json")),
+        "--release-root": ("path", str(source)),
+        "--bootstrap-completion": ("path", str(bootstrap / "BOOTSTRAP_COMPLETED.json")),
+        "--bootstrap-evidence-dir": ("path", str(bootstrap)),
+        "--bootstrap-identity": ("path", str(bootstrap / "candidate-identity.json")),
+        "--bootstrap-attestation": ("path", str(bootstrap / "identity-attestation.json")),
+        "--bootstrap-transcript": ("path", str(bootstrap / "identity-transcript.json")),
+        "--expected-bootstrap-completion-sha256": (
+            "text", hashlib.sha256((bootstrap / "BOOTSTRAP_COMPLETED.json").read_bytes()).hexdigest()
+        ),
+        "--bootstrap-candidate-root": ("path", str(candidate_root)),
+        "--bootstrap-runner": (
+            "path", str(candidate_root / "scripts" / "run_sumeragi_v2_release_gates.sh")
+        ),
+        "--signature-attestation": ("path", str(bootstrap / "identity-attestation.json")),
+        "--signature-transcript": ("path", str(bootstrap / "identity-transcript.json")),
+        "--signature-raw-commit": ("path", str(bootstrap / "identity-raw-commit")),
+        "--signature-cargo-lock": ("path", str(bootstrap / "identity-Cargo.lock")),
+        "--signature-allowed-signers": ("path", str(bootstrap / "identity-allowed-signers")),
+        "--signature-revocation": ("path", str(bootstrap / "identity-revocation")),
+        "--signature-git": ("path", str(bootstrap / "identity-git")),
+        "--signature-ssh-keygen": ("path", str(bootstrap / "identity-ssh-keygen")),
+        "--expected-git-sha256": ("text", "1" * 64),
+        "--expected-ssh-keygen-sha256": ("text", "2" * 64),
+        "--expected-allowed-signers-sha256": ("text", "3" * 64),
+        "--expected-revocation-sha256": ("text", "4" * 64),
+        "--expected-signer-fingerprint": ("text", expected_signer_fingerprint),
+        "--scaling-evidence-manifest": ("path", str(scaling_evidence_manifest)),
+        "--expected-scaling-trial-harness-sha256": (
+            "text", scaling_digests["trial_harness"]
+        ),
+        "--expected-scaling-configuration-sha256": (
+            "text", scaling_digests["configuration"]
+        ),
+        "--expected-scaling-irohad-sha256": ("text", scaling_digests["irohad"]),
+        "--expected-scaling-iroha-cli-sha256": (
+            "text", scaling_digests["iroha_cli"]
+        ),
+        "--repository-root": ("path", str(source)),
+        "--output": ("path", str(receipt)),
+        "--verify-existing": ("flag", True),
+        "--validation-ack": ("path", str(acknowledgment)),
+        "--source-manifest-sha256": ("text", source_manifest_sha256),
+    })
+    return values
+
+
+def _fixture_receipt_for_validator(
+    values: dict[str, tuple[str, str | bool]],
+) -> dict[str, object]:
+    path = lambda name: {"path": values[name][1], "sha256": "1" * 64}
+    return {
+        "identity": {
+            "sealed_source_manifest_sha256": values["--source-manifest-sha256"][1]
+        },
+        "authentication": {
+            "bootstrap": {
+                "completion_sha256": values["--expected-bootstrap-completion-sha256"][1],
+                "candidate_root": values["--bootstrap-candidate-root"][1],
+                "runner": {"path": values["--bootstrap-runner"][1]},
+            },
+            "release_identity": {
+                "trust_policy": {
+                    "git_sha256": values["--expected-git-sha256"][1],
+                    "ssh_keygen_sha256": values["--expected-ssh-keygen-sha256"][1],
+                    "allowed_signers_sha256": values["--expected-allowed-signers-sha256"][1],
+                    "revocation_sha256": values["--expected-revocation-sha256"][1],
+                    "signer_fingerprint": values["--expected-signer-fingerprint"][1],
+                }
+            },
+        },
+        "evidence": {
+            "bootstrap": {
+                "candidate_identity": path("--candidate-identity"),
+                "completion": path("--bootstrap-completion"),
+                "identity_verification": {
+                    "identity_attestation": path("--bootstrap-attestation"),
+                    "identity_transcript": path("--bootstrap-transcript"),
+                },
+            },
+            "release_signature_attestation": path("--signature-attestation"),
+            "release_signature_transcript": path("--signature-transcript"),
+            "release_signature_raw_commit": path("--signature-raw-commit"),
+            "release_signature_cargo_lock": path("--signature-cargo-lock"),
+            "release_signature_allowed_signers": path("--signature-allowed-signers"),
+            "release_signature_revocation": path("--signature-revocation"),
+            "release_signature_git": path("--signature-git"),
+            "release_signature_ssh_keygen": path("--signature-ssh-keygen"),
+            "corridor_completion": path("--corridor-completion"),
+            "formal_completion": path("--formal-completion"),
+            "seed_matrix_completion": path("--seed-completion"),
+            "chaos_completion": path("--chaos-completion"),
+            "taira_completion": path("--taira-completion"),
+            "g4p_multilane": {"completion": path("--g4p-completion")},
+            "g12_cross_dataspace": {
+                "seed_completion": path("--g12-seed-completion"),
+                "fault_soak_completion": path("--g12-fault-soak-completion"),
+            },
+            "multilane_scaling_bundle": {
+                "files": [{
+                    "relative_path": "scaling_evidence.json",
+                    **path("--scaling-evidence-manifest"),
+                }]
+            },
+            "multilane_scaling_trust_anchors": {
+                "trial_harness_sha256": values["--expected-scaling-trial-harness-sha256"][1],
+                "configuration_sha256": values["--expected-scaling-configuration-sha256"][1],
+                "irohad_sha256": values["--expected-scaling-irohad-sha256"][1],
+                "iroha_cli_sha256": values["--expected-scaling-iroha-cli-sha256"][1],
+            },
+        },
+    }
 
 
 def exercise_release_helper_fail_atomicity(
@@ -197,23 +426,125 @@ def exercise_release_helper_fail_atomicity(
     receipt = release / "RELEASE_COMPLETED.json"
     validator = bootstrap / "validate-receipt.py"
     completion = bootstrap / "BOOTSTRAP_COMPLETED.json"
-    for path, data in ((identity, b"{}\n"), (receipt, b"{\"identity\":{}}\n"), (validator, b"# validator\n"), (completion, b"{}\n")):
+    completion_value = {
+        "trusted_inputs": {
+            "git": {"sha256": "1" * 64},
+            "ssh_keygen": {"sha256": "2" * 64},
+            "allowed_signers": {"sha256": "3" * 64},
+            "revocation": {"sha256": "4" * 64},
+        }
+    }
+    for path, data in (
+        (identity, b"{}\n"),
+        (receipt, b"{\"identity\":{}}\n"),
+        (validator, b"# validator\n"),
+        (completion, canonical_json(completion_value)),
+    ):
         path.write_bytes(data); path.chmod(0o400)
     manifest_digest = "a" * 64
     stdout = f"Sumeragi v2 aggregate release receipt verified: {receipt}\n".encode()
-    ack_value = {
-        "format": "iroha-sumeragi-v2-receipt-validation-ack", "schema_version": 1,
-        "profile": "release", "invocation_root": str(invocation),
-        "sealed_source": {"path": str(source), "manifest_sha256": manifest_digest},
-        "receipt": {"path": str(receipt), "sha256": hashlib.sha256(receipt.read_bytes()).hexdigest(), "size": receipt.stat().st_size},
-        "validator": {"path": str(validator), "sha256": hashlib.sha256(validator.read_bytes()).hexdigest(), "bootstrap_completion_sha256": hashlib.sha256(completion.read_bytes()).hexdigest()},
-        "argv": {"profile": "release", "python_flags": ["-I", "-S"], "validator": "protected:validate-receipt.py", "operation": "verify-existing-and-ack", "option_names_sha256": "deea2d469c8fe65392527c24562b64fa728c21f6ee9f679d595e09304e8b56b1"},
-        "exit_status": 0,
-        "stdout": {"base64": base64.b64encode(stdout).decode(), "sha256": hashlib.sha256(stdout).hexdigest(), "size": len(stdout)},
-        "stderr": {"base64": "", "sha256": hashlib.sha256(b"").hexdigest(), "size": 0},
-    }
     ack = invocation / "receipt-validation-ack.json"
+    candidate_root = private_directory(tmp_path / "fault-seal-candidate")
+    scaling_root = private_directory(tmp_path / "fault-seal-scaling")
+    scaling_manifest = scaling_root / "scaling_evidence.json"
+    scaling_manifest.write_bytes(b"{}\n")
+    expected_signer_fingerprint = "SHA256:" + "A" * 43
+    scaling_digests = {
+        "trial_harness": "5" * 64,
+        "configuration": "6" * 64,
+        "irohad": "7" * 64,
+        "iroha_cli": "8" * 64,
+    }
+    expected_invocation_values = _fixture_validator_values(
+        helper,
+        invocation=invocation,
+        bootstrap=bootstrap,
+        source=source,
+        receipt=receipt,
+        acknowledgment=ack,
+        source_manifest_sha256=manifest_digest,
+        candidate_root=candidate_root,
+        scaling_evidence_manifest=scaling_manifest,
+        expected_signer_fingerprint=expected_signer_fingerprint,
+        scaling_digests=scaling_digests,
+    )
+    receipt.chmod(0o600)
+    receipt.write_bytes(
+        canonical_json(_fixture_receipt_for_validator(expected_invocation_values))
+    )
+    receipt.chmod(0o400)
+    ack_value = {
+        "format": "iroha-sumeragi-v2-receipt-validation-ack", "schema_version": 3,
+        "profile": "release",
+        "sealed_source": {
+            "archive_id": "release-retained.source.v1",
+            "manifest_sha256": manifest_digest,
+        },
+        "receipt": {
+            "archive_id": "release-terminal.receipt.v1",
+            "mode": "0400",
+            "sha256": hashlib.sha256(receipt.read_bytes()).hexdigest(),
+            "size_bytes": receipt.stat().st_size,
+        },
+        "validator": {
+            "archive_id": "release-bootstrap.receipt-validator.v1",
+            "sha256": hashlib.sha256(validator.read_bytes()).hexdigest(),
+            "bootstrap_completion_sha256": hashlib.sha256(completion.read_bytes()).hexdigest(),
+        },
+        "invocation": _fixture_validator_invocation(
+            helper,
+            invocation=invocation,
+            bootstrap=bootstrap,
+            source=source,
+            receipt=receipt,
+            acknowledgment=ack,
+            source_manifest_sha256=manifest_digest,
+            candidate_root=candidate_root,
+            scaling_evidence_manifest=scaling_manifest,
+            expected_signer_fingerprint=expected_signer_fingerprint,
+            scaling_digests=scaling_digests,
+        ),
+        "exit_status": 0,
+        "stdout": {"sha256": hashlib.sha256(stdout).hexdigest(), "size_bytes": len(stdout)},
+        "stderr": {"sha256": hashlib.sha256(b"").hexdigest(), "size_bytes": 0},
+    }
+    helper._validate_validator_invocation(
+        ack_value["invocation"], expected_values=expected_invocation_values
+    )
+    changed_invocation = json.loads(json.dumps(ack_value["invocation"]))
+    previously_unchecked = next(
+        binding
+        for binding in changed_invocation["ordered_options"]
+        if binding["name"] == "--signature-transcript"
+    )
+    previously_unchecked["normalized_value_sha256"] = hashlib.sha256(
+        json.dumps(
+            {"kind": "path", "value": str(invocation / "attacker-transcript")},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    changed_core = {
+        key: changed_invocation[key]
+        for key in (
+            "profile", "operation", "python_flags", "validator", "ordered_options"
+        )
+    }
+    changed_invocation["invocation_sha256"] = hashlib.sha256(
+        json.dumps(
+            changed_core, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    with pytest.raises(helper.CacheCopyError, match="normalized option value"):
+        helper._validate_validator_invocation(
+            changed_invocation, expected_values=expected_invocation_values
+        )
     ack.write_bytes(canonical_json(ack_value)); ack.chmod(0o400)
+    for secret_path in (
+        invocation, bootstrap, source, candidate_root, scaling_root, validator,
+    ):
+        assert str(secret_path).encode() not in ack.read_bytes()
     original_publish = helper._publish_inventory
     failed = False
 
@@ -227,13 +558,23 @@ def exercise_release_helper_fail_atomicity(
     helper._publish_inventory = fail_first_protected
     try:
         with pytest.raises(helper.CacheCopyError, match="protected publication"):
-            helper.seal_release_result(invocation, bootstrap, manifest_digest)
+            helper.seal_release_result(
+                invocation, bootstrap, manifest_digest, candidate_root,
+                scaling_manifest, expected_signer_fingerprint,
+                scaling_digests["trial_harness"], scaling_digests["configuration"],
+                scaling_digests["irohad"], scaling_digests["iroha_cli"],
+            )
     finally:
         helper._publish_inventory = original_publish
     assert not (invocation / "retained-evidence-inventory.json").exists()
     assert not any(path.name.startswith(("RELEASE_COMPLETED", "release-runner-result", "release-retained", "receipt-validation-ack", "sealed-identity")) for path in bootstrap.iterdir() if path not in {validator, completion})
     with pytest.raises(helper.CacheCopyError, match="prior cleanup quarantine"):
-        helper.seal_release_result(invocation, bootstrap, manifest_digest)
+        helper.seal_release_result(
+            invocation, bootstrap, manifest_digest, candidate_root,
+            scaling_manifest, expected_signer_fingerprint,
+            scaling_digests["trial_harness"], scaling_digests["configuration"],
+            scaling_digests["irohad"], scaling_digests["iroha_cli"],
+        )
     helper.cleanup_invocation(tmp_path, invocation, "fault-seal-")
     assert not invocation.exists()
     quiescent = private_directory(tmp_path / "fault-quiescent")
@@ -323,7 +664,7 @@ def exercise_release_helper_fail_atomicity(
 def test_prebuilt_release_root_authentication_rejects_nesting_or_alias(
     tmp_path: Path, layout: str
 ) -> None:
-    module = load_writer_module()
+    module = _load_receipt_writer_module()
     source_root = tmp_path / "source"
     source_root.mkdir()
     external_root = tmp_path / "external"
@@ -448,6 +789,8 @@ def exercise_private_pr_outer_lifecycle(runner: Path, tmp_path: Path) -> None:
     )
     executable(tools / "python3", f'#!/bin/sh\nexec {json.dumps(str(host_python))} "$@"\n')
     executable(tools / "bash", '#!/bin/sh\nexec /bin/bash "$@"\n')
+    executable(tools / "cat", '#!/bin/sh\nexec /bin/cat "$@"\n')
+    executable(tools / "env", '#!/bin/sh\nexec /usr/bin/env "$@"\n')
     executable(tools / "cp", '#!/bin/sh\nif [ "${FAKE_PR_STAGE_COPY_FAIL:-0}" = 1 ]; then printf "%s\\n" "${3%/*}" >"$FAKE_PR_STAGE_FAILURE_LOG"; exit 89; fi\nexec /bin/cp "$@"\n')
     cargo = executable(rust_toolchain / "bin" / "cargo", "#!/bin/sh\nprintf '%s\\n' 'cargo fixture'\n")
     rustc = executable(rust_toolchain / "bin" / "rustc", "#!/bin/sh\nprintf '%s\\n' 'rustc fixture'\n")
@@ -520,14 +863,16 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         ('if [[ "$profile" == "--pr" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]', 1),
         ("--no-local --no-hardlinks --no-checkout", 2),
         ('pr_clone_helper="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"', 1),
-        ('"$release_runtime_helper"', 11),
+        ('"$release_runtime_helper"', 13),
         ('"$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"', 3),
         ('IROHA_RELEASE_PRIVATE_PR=1 \\', 1),
         ('HOME="$pr_host_root/home"', 1),
         ('TMPDIR="$pr_host_root/tmp"', 1),
         ('XDG_CACHE_HOME="$pr_host_root/cache"', 1),
         ('unset OLDPWD', 1),
-        ('/usr/bin/env -i \\', 2),
+        ('/usr/bin/env -i \\', 0),
+        ('"$pr_bin/env" -i \\', 1),
+        ('"$release_child_bin/env" -i \\', 1),
         ('GIT_EXEC_PATH="$pr_bin"', 1),
         ('GIT_EXEC_PATH="$release_git_exec_path"', 1),
         ('IROHA_RELEASE_CHILD_RESULT_PATH="$release_child_result_path"', 1),
@@ -549,14 +894,14 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     assert 'readonly release_runtime_inventory="$release_invocation_root/runtime-input.json"' in runner_source
     assert '--cleanup-base "$pr_temp_base" --invocation-root "$pr_invocation_root"' in runner_source
     assert 'RUSTUP_HOME="$pr_host_root/rustup-home"' in runner_source
-    assert '$(dirname "$IROHA_RELEASE_BASH_BIN"):/usr/bin:/bin"' in runner_source
+    assert 'export PATH="${IROHA_RELEASE_INVOCATION_ROOT}/runtime/bin"' in runner_source
     assert '--verify-cache-sources' in runner_source
     assert 'os.symlink(str(Path(source).resolve(strict=True))' not in runner_source
     assert runner_source.count('/dev/fd/9') == 1 and 'run_pr_helper() {' in runner_source
     assert 'exec 9<' in runner_source and 'exec 9<&-' in runner_source and 'exec {' not in runner_source
     assert runner_source.index('trap - EXIT\n    unset OLDPWD') < runner_source.index('exec 9<&-')
-    assert runner_source.index('exec 9<&-') < runner_source.index('/usr/bin/env -i')
-    assert runner_source.index('readonly release_child_result_path=') < runner_source.rindex('/usr/bin/env -i') < runner_source.index(
+    assert runner_source.index('exec 9<&-') < runner_source.index('"$pr_bin/env" -i')
+    assert runner_source.index('readonly release_child_result_path=') < runner_source.index('"$release_child_bin/env" -i') < runner_source.index(
         '"$release_child_bin/bash" "$sealed_repo_root/scripts/run_sumeragi_v2_release_gates.sh" --release'
     )
     assert '"$pr_python_bin" -I -S "$pr_cleanup_helper"' not in runner_source
@@ -598,13 +943,29 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     verus = executable(verus_root / "verus", "verus fixture 1")
     cargo_verus = executable(verus_root / "cargo-verus", "cargo-verus fixture 1")
     (verus_root / "support.bin").write_bytes(b"verus support\n")
+    release_shell_utilities = (
+        "awk", "basename", "cat", "chmod", "cmp", "cp", "cut", "diff",
+        "dirname", "env", "find", "grep", "ln", "ls", "mkdir", "mkfifo",
+        "mktemp", "mv", "openssl", "rm", "rmdir", "sed", "sh", "sleep",
+        "tail", "tee", "tr", "uname", "wc", "xargs",
+        "shasum" if sys.platform == "darwin" else "sha256sum",
+    )
     ordinary = {
         name: executable(runtime_sources / name, f"{name} fixture 1")
         for name in (
             "python3", "git", "ssh-keygen", "bash", "node", "tlapm",
-            "git-upload-pack", "git-index-pack",
+            "git-upload-pack", "git-index-pack", *release_shell_utilities,
         )
     }
+    framework_name = sysconfig.get_config_var("PYTHONFRAMEWORK")
+    framework_python = (
+        sys.platform == "darwin"
+        and isinstance(framework_name, str)
+        and bool(framework_name)
+    )
+    fixture_python = ordinary["python3"]
+    if framework_python:
+        ordinary["python3"] = Path(sys.executable).resolve(strict=True)
     tla2tools = runtime_sources / "tla2tools.jar"
     tla2tools.write_bytes(b"jar fixture\n")
     tla2tools.chmod(0o600)
@@ -616,6 +977,7 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         cargo, rustc, ordinary["node"], swift, ordinary["tlapm"], java,
         verus, cargo_verus, tla2tools, tlapm_stdlib,
         ordinary["git-upload-pack"], ordinary["git-index-pack"],
+        *(ordinary[name] for name in release_shell_utilities),
     ]
     runtime = tmp_path / "runtime"
     runtime_inventory = tmp_path / "runtime-input.json"
@@ -630,6 +992,100 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     runtime_document = json.loads(runtime_inventory.read_bytes())
     assert runtime_document["source_disclosure"] == "withheld"
     assert runtime_document["input_record_count"] == len(runtime_document["input_records"])
+    if framework_python:
+        stdlib_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        runtime_records = {
+            record["path"]: record for record in runtime_document["records"]
+        }
+        assert len(runtime_records) == len(runtime_document["records"])
+        for path, kind in {
+            "bin/python3": "file",
+            framework_name: "file",
+            "Resources": "directory",
+            "Resources/Python.app/Contents/MacOS/Python": "file",
+            "lib": "directory",
+            f"lib/{stdlib_name}": "directory",
+            f"lib/{stdlib_name}/lib-dynload": "directory",
+        }.items():
+            assert runtime_records[path]["kind"] == kind
+
+        observed_paths: set[str] = set()
+
+        def observe_runtime_members(directory: Path, relative: str = "") -> None:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    path = entry.name if not relative else f"{relative}/{entry.name}"
+                    observed_paths.add(path)
+                    if entry.is_dir(follow_symlinks=False):
+                        observe_runtime_members(Path(entry.path), path)
+
+        observe_runtime_members(runtime)
+        assert observed_paths == set(runtime_records)
+        source_root = ordinary["python3"].parent.parent
+        source_records: dict[str, tuple[object, ...]] = {
+            str(framework_name): (
+                "file",
+                (source_root / str(framework_name)).stat().st_size,
+                hashlib.sha256(
+                    (source_root / str(framework_name)).read_bytes()
+                ).hexdigest(),
+            )
+        }
+
+        def observe_source_members(directory: Path, relative: str) -> None:
+            source_records[relative] = ("directory",)
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    path = f"{relative}/{entry.name}"
+                    metadata = entry.stat(follow_symlinks=False)
+                    if entry.is_symlink():
+                        source_records[path] = ("symlink", os.readlink(entry.path))
+                    elif entry.is_dir(follow_symlinks=False):
+                        observe_source_members(Path(entry.path), path)
+                    elif entry.is_file(follow_symlinks=False):
+                        source_records[path] = (
+                            "file",
+                            metadata.st_size,
+                            hashlib.sha256(Path(entry.path).read_bytes()).hexdigest(),
+                        )
+                    else:
+                        raise AssertionError(
+                            f"framework source has special member: {entry.path}"
+                        )
+
+        observe_source_members(source_root / "Resources", "Resources")
+        observe_source_members(source_root / "lib", "lib")
+        for path, expected in source_records.items():
+            actual = runtime_records[path]
+            assert actual["kind"] == expected[0]
+            if expected[0] == "file":
+                assert (actual["size"], actual["sha256"]) == expected[1:]
+            elif expected[0] == "symlink":
+                assert actual["target"] == expected[1]
+        archived_python = runtime / "bin" / "python3"
+        python_probe = subprocess.run(
+            [
+                str(archived_python),
+                "-I",
+                "-S",
+                "-c",
+                "import sys;sys.stdout.write(sys.executable+'\\n')",
+            ],
+            cwd=runtime,
+            env={
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": str(runtime / "bin"),
+            },
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        assert python_probe.returncode == 0
+        assert python_probe.stdout == f"{archived_python}\n"
+        assert python_probe.stderr == ""
     for name in ("cargo", "rustc"):
         probe = subprocess.run(
             [str(runtime / "bin" / name), "--version"],
@@ -653,6 +1109,7 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     pr_sources = [
         ordinary["python3"], ordinary["git"], ordinary["bash"], cargo, rustc,
         ordinary["git-upload-pack"], ordinary["git-index-pack"],
+        *(ordinary[name] for name in release_shell_utilities),
     ]
     pr_arguments = sum((["--runtime-source", str(path)] for path in pr_sources), [])
     copied_pr_runtime = subprocess.run(
@@ -713,11 +1170,74 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     assert helper_spec is not None and helper_spec.loader is not None
     helper_module = importlib.util.module_from_spec(helper_spec)
     helper_spec.loader.exec_module(helper_module)
+    if framework_python:
+        source_framework_root = ordinary["python3"].parent.parent
+        with pytest.raises(
+            helper_module.CacheCopyError,
+            match="must be disjoint",
+        ):
+            helper_module._reject_framework_python_destination_overlap(
+                source_framework_root,
+                source_framework_root / "private-runtime-overlap",
+                tmp_path / "disjoint-inventory.json",
+            )
+        with pytest.raises(
+            helper_module.CacheCopyError,
+            match="must be disjoint",
+        ):
+            helper_module._reject_framework_python_destination_overlap(
+                source_framework_root,
+                tmp_path / "disjoint-runtime",
+                source_framework_root / "private-runtime-inventory.json",
+            )
+
+        unsafe_framework = tmp_path / "unsafe-framework"
+        (unsafe_framework / "Resources").mkdir(parents=True, mode=0o700)
+        (unsafe_framework / "lib").mkdir(mode=0o700)
+        unsafe_library = unsafe_framework / str(framework_name)
+        unsafe_library.write_bytes(b"framework\n")
+        unsafe_library.chmod(0o622)
+        with pytest.raises(
+            helper_module.CacheCopyError,
+            match="framework member is unsafe",
+        ):
+            helper_module._validate_framework_python_sources(
+                unsafe_framework, str(framework_name),
+            )
+        unsafe_library.chmod(0o600)
+        outside_framework = tmp_path / "outside-framework-member"
+        outside_framework.write_bytes(b"outside\n")
+        (unsafe_framework / "lib" / "escape").symlink_to(
+            "../../outside-framework-member"
+        )
+        with pytest.raises(
+            helper_module.CacheCopyError,
+            match="symlink escapes",
+        ):
+            helper_module._validate_framework_python_sources(
+                unsafe_framework, str(framework_name),
+            )
+        (unsafe_framework / "lib" / "escape").unlink()
+        original_euid = helper_module.os.geteuid
+        helper_module.os.geteuid = lambda: original_euid() + 1
+        try:
+            with pytest.raises(
+                helper_module.CacheCopyError,
+                match="framework member is unsafe",
+            ):
+                helper_module._validate_framework_python_sources(
+                    unsafe_framework, str(framework_name),
+                )
+        finally:
+            helper_module.os.geteuid = original_euid
     cleanup_base = tmp_path / "cleanup-base"
     cleanup_base.mkdir(mode=0o700)
     helper_module.cleanup_invocation(cleanup_base, cleanup_base / "absent", "absent")
     helper_module.cleanup_invocation(cleanup_base, cleanup_base / "absent", "absent")
-    exercise_release_helper_fail_atomicity(helper_module, tmp_path, sources)
+    fail_atomicity_sources = [fixture_python, *sources[1:]]
+    exercise_release_helper_fail_atomicity(
+        helper_module, tmp_path, fail_atomicity_sources,
+    )
     fake_git_root = tmp_path / "fake-git-closure"
     ambient_git = fake_git_root / "ambient"
     closed_git = fake_git_root / "closed"
@@ -870,7 +1390,7 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     )
     assert finalized.returncode == 0, finalized.stderr
 
-    module = load_writer_module()
+    module = _load_receipt_writer_module()
     fields = {
         "cargo_home_path": str(cargo_home.resolve()),
         "runtime_home_path": str((artifact_root / "home").resolve()),

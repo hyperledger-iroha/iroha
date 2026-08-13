@@ -514,6 +514,46 @@ RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
         *POP_BROKER_RETIRED_SECRET_MARKERS,
     ),
 }
+SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
+    {
+        ".github/workflows/sorafs-cli-release.yml",
+        "ci/check_sorafs_cli_release.sh",
+        "scripts/build_sorafs_topology_qualification_envelope.py",
+        "scripts/check_sorafs_release_automation.py",
+        "scripts/check_sorafs_release_version_map.py",
+        "scripts/sccp_release_common.py",
+        "scripts/sorafs_checker_preflight.py",
+        "scripts/sorafs_evidence_fingerprint.py",
+        "scripts/sorafs_evidence_json.py",
+        "scripts/sorafs_evidence_paths.py",
+        "scripts/sorafs_evidence_sensitivity.py",
+        "scripts/sorafs_evidence_validation.py",
+        "scripts/sorafs_l1_lane_evidence_inventory.py",
+        "scripts/sorafs_path_identity.py",
+        "scripts/sorafs_production_readiness_contract.py",
+        "scripts/sorafs_response_args.py",
+        "scripts/sorafs_runner_preflight.py",
+        "scripts/sorafs_software_signer_evidence.py",
+        "scripts/sorafs_topology_qualification.py",
+        "scripts/taira_constants.py",
+        "scripts/tests/check_sorafs_release_automation_test.py",
+        "scripts/tests/sorafs_evidence_json_test.py",
+        "scripts/tests/sorafs_resilience_test_support.py",
+        "scripts/tests/sorafs_response_args_test.py",
+        "scripts/tests/sorafs_topology_qualification_test.py",
+        "scripts/requirements.txt",
+        "scripts/examples/sorafs_l1_topology_qualification_envelope.md",
+        "specs/sorafs/l1_deployment_qualification.md",
+    }
+)
+SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS = frozenset(
+    {
+        "IrohaSwift/IrohaSwift.podspec",
+        "IrohaSwift/README.md",
+        "IrohaSwift/VERSION",
+        "specs/sdk/swift/index.md",
+    }
+)
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
         '"sorafs-cli-v*"',
@@ -568,6 +608,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/sorafs_response_args_test.py"',
         '- "scripts/examples/sorafs_l1_topology_qualification_envelope.md"',
         '- "specs/sorafs/l1_deployment_qualification.md"',
+        '- "specs/sorafs_pdp_plan.md"',
         "run: bash ci/check_sorafs_cli_release.sh",
         "scripts/package_sorafs_validate_release.sh",
         "scripts/package_sorafs_cli_candidate.py",
@@ -1342,6 +1383,25 @@ def _validate_runtime_provider_deployment_contract(root: Path) -> list[str]:
     return errors
 
 
+def _pull_request_paths(source: str) -> frozenset[str] | None:
+    """Return the exact quoted ``pull_request.paths`` entries, if present."""
+
+    pull_request = re.search(
+        r"(?ms)^  pull_request:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:|\Z)",
+        source,
+    )
+    if pull_request is None:
+        return None
+    paths = re.search(
+        r"(?ms)^    paths:\n(?P<body>(?:      - [^\n]+\n)+)",
+        pull_request.group("body"),
+    )
+    if paths is None:
+        return None
+    entries = re.findall(r'(?m)^      - "([^"]+)"\s*$', paths.group("body"))
+    return frozenset(entries)
+
+
 def _validate_workflow_source(relative: str, source: str) -> list[str]:
     """Return deterministic contract errors for one workflow source."""
 
@@ -1360,6 +1420,26 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
     for marker in WORKFLOWS[relative]:
         if marker not in source:
             errors.append(f"{relative}: missing contract marker `{marker}`")
+
+    if relative == ".github/workflows/sorafs-cli-release.yml":
+        pull_request_paths = _pull_request_paths(source)
+        missing_triggers = sorted(
+            SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS - (pull_request_paths or frozenset())
+        )
+        if missing_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits topology-envelope "
+                f"dependency trigger(s): {', '.join(missing_triggers)}"
+            )
+        missing_version_map_triggers = sorted(
+            SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS
+            - (pull_request_paths or frozenset())
+        )
+        if missing_version_map_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits Swift version-map "
+                f"dependency trigger(s): {', '.join(missing_version_map_triggers)}"
+            )
 
     if relative.endswith("sorafs-orchestrator-sdk.yml"):
         jobs_source = source[source.index("jobs:\n") + len("jobs:\n") :]

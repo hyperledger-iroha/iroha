@@ -137,6 +137,94 @@ QC, certified bundle, merge candidate, carrier, Kura/WSV application, and
 `queue_finalized`. A stalled stage is a failure to diagnose, not permission to
 skip the source.
 
+### Protected release approval contract
+
+Before execution, obtain four separate canonical JSON v1 approvals with class
+IDs `offline-toolchain-sdk`, `formal-proof-tools`, `network-scale-soak`, and
+`final-bootstrap-publication`. The exact top-level schema is
+`approval_id`, `approved_at`, `candidate_oid`, `candidate_tree`, `class_id`,
+`evidence_root_id`, `expected_duration_seconds`, `format`, `operations`,
+`profile`, `protected_tool_manifest_sha256`, and `schema_version`; each
+operation has exactly `arguments`, `operation_id`, `ordinal`, and `tool_id`.
+Every file must be owner-held mode `0400`, single-link, bounded canonical JSON
+below trusted non-writable ancestry. Duplicate keys, non-finite or floating
+values, path-bearing arguments, wrong ordering, or any mismatch against the
+candidate-specific expectation fail closed.
+
+The ordered operation inventories are exact:
+
+- `offline-toolchain-sdk` (23; plan SHA-256
+  `291bbb0af4efdd2480561ceefd24fe12b71d9085da0f995f978aa5a020ea0d36`):
+  `offline-rustc-version`,
+  `offline-cargo-version`, `offline-workspace-build`,
+  `g-unit-production-854`, `g-unit-focused-525`,
+  `offline-workspace-clippy`, `offline-workspace-format`,
+  `offline-no-legacy-codec`, `sdk-rust-regeneration-first`,
+  `sdk-rust-regeneration-second`, `sdk-regeneration-byte-identity`,
+  `sdk-grouped-openapi`, `sdk-grouped-python`, `sdk-grouped-javascript`,
+  `sdk-grouped-swift`, `sdk-grouped-kotlin`, `sdk-grouped-java`,
+  `sdk-diagnostics-rust`, `sdk-diagnostics-python`,
+  `sdk-diagnostics-javascript`, `sdk-diagnostics-swift`,
+  `sdk-diagnostics-kotlin`, `sdk-diagnostics-java`.
+- `formal-proof-tools` (38; plan SHA-256
+  `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`):
+  `formal-proof-ledger`, `formal-tlaps`,
+  `formal-mutation-service-rank`, `formal-mutation-productive`,
+  `formal-mutation-candidate-restart`,
+  `formal-mutation-commit-import-provenance`,
+  `formal-mutation-restart-locked-fetch-order`,
+  `formal-mutation-persist-install-generation`,
+  `formal-mutation-persist-install-validation`,
+  `formal-mutation-apply-authority`,
+  `formal-mutation-replay-locked-body-carrier`,
+  `formal-mutation-certificate-ref-recovery`,
+  `formal-mutation-certified-response-source-lineage`,
+  `formal-mutation-certified-response-identity-separation`,
+  `formal-mutation-progress`, `formal-mutation-begin-timeout-ready`,
+  `formal-mutation-command-execution-ready`,
+  `formal-mutation-post-decision-timeout`,
+  `formal-mutation-decision-recovery-lifecycle`,
+  `formal-mutation-certified-response-registration`,
+  `formal-mutation-effect-capacity-ownership`,
+  `formal-mutation-applied-phase-admission`,
+  `formal-mutation-ingress-causal-freshness`,
+  `formal-mutation-liveness-ownership`,
+  `formal-mutation-serve-scheduler-ordinal`,
+  `formal-mutation-indexed-service-activation`,
+  `formal-mutation-adequate-leader-readiness`,
+  `formal-mutation-indexed-height`, `formal-mutation-item-carrier-typing`,
+  `formal-mutation-reply-writer-deadline`,
+  `formal-mutation-historical-discovery-occurrence-rank`,
+  `formal-mutation-typed-rollover-handoff`,
+  `formal-tlc-positive-and-mutations`, `formal-apalache-refinement`,
+  `formal-production-trace-replay`, `formal-rust-verus-correspondence`,
+  `formal-verus-evidence-validation`, `formal-cross-tool-evidence`.
+- `network-scale-soak` (8; plan SHA-256
+  `e922b8afbfe4848e8b2b5f858654477a28d710c3afcf7698a77276a8294681cf`):
+  `network-release-seed-matrix`,
+  `network-g4p-mandatory-cases`, `network-g12p-ten-seeds`,
+  `network-g12p-rotating-fault-soak`, `scale-five-paired-trials`,
+  `scale-evidence-validation`, `network-chaos-100000-height`,
+  `network-taira-24h-soak`.
+- `final-bootstrap-publication` (8; plan SHA-256
+  `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`):
+  `final-protected-bootstrap`,
+  `final-release-runner`, `final-canonical-receipt-publication`,
+  `final-no-clobber-validator-acknowledgment`,
+  `final-private-state-prune`,
+  `final-retained-inventory-and-result-publication`,
+  `final-bootstrap-independent-authentication`,
+  `final-external-completion-publication`.
+
+The command records contain only path-free protected tool IDs, canonical
+relative arguments, and stable archive/evidence IDs. These approvals are
+filesystem-protected operator decisions, not digital signatures or claims of
+cryptographic approver identity. The candidate's signed commit remains a
+separate authentication control. Until bootstrap, validator, and writer import
+the component and the receipt archives and independently replays all four
+sanitized projections, this contract is source preparation only and authorizes
+no execution or publication.
+
 ### Fresh four-peer suite (`G-4P`)
 
 Run every required DA/RBC case with skips treated as failures:

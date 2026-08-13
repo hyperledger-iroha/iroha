@@ -7,6 +7,20 @@ readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_proof_ledger.py"
 readonly RESOURCE_GUARD="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_tlapm_guard.py"
 readonly RESOURCE_AUTH_MAGIC="IROHA_RESOURCE_GUARD_AUTH_V1"
+readonly RELEASE_PROCESS_OBSERVATION_MODE="owned-darwin-process-group-v1"
+
+resource_guard_mode_argument=""
+if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then
+  if [[ "${IROHA_RELEASE_FORMAL_PROCESS_OBSERVATION_MODE:-}" \
+    != "$RELEASE_PROCESS_OBSERVATION_MODE" ]]; then
+    echo "sealed TLAPS requires authenticated owned-process-group accounting" >&2
+    exit 2
+  fi
+  resource_guard_mode_argument="--release-owned-darwin-process-group"
+elif [[ -n "${IROHA_RELEASE_FORMAL_PROCESS_OBSERVATION_MODE:-}" ]]; then
+  echo "release process observation mode requires a sealed release worktree" >&2
+  exit 2
+fi
 
 unset SUMERAGI_TLAPS_SUPERVISOR_PID
 resource_auth_fd="${IROHA_RESOURCE_GUARD_AUTH_FD:-}"
@@ -36,10 +50,17 @@ require_external_release_artifact_root "$REPO_ROOT"
 require_release_artifact_directory "$EVIDENCE_DIR"
 
 if [[ -z "$resource_auth_fd" && -z "$resource_auth_token" ]]; then
+  if [[ -n "$resource_guard_mode_argument" ]]; then
+    exec python3 "$RESOURCE_GUARD" \
+      "$resource_guard_mode_argument" \
+      --jsonl "$RESOURCE_JSONL" \
+      --summary "$RESOURCE_SUMMARY" \
+      -- "$(command -v bash)" "$0" "$@"
+  fi
   exec python3 "$RESOURCE_GUARD" \
     --jsonl "$RESOURCE_JSONL" \
     --summary "$RESOURCE_SUMMARY" \
-    -- /bin/bash "$0" "$@"
+    -- "$(command -v bash)" "$0" "$@"
 fi
 if ! IFS= read -r -t 2 -u "$resource_auth_fd" resource_auth_record; then
   echo "resource-guard authorization capability is unavailable" >&2

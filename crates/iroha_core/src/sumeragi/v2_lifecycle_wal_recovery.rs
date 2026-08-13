@@ -6,13 +6,15 @@ use super::{
     CandidateAdmission, CapacityClass, DurablePayloadReference, DurableValidateReplayEvidenceV1,
     InitialLifecycleState, LifecycleStageKind, LifecycleWorkClass, PredecessorScope,
     RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyReplayLineageV1,
-    RecoveredWalControlCandidateProjectionV1, RecoveredWalControlReplayEvidenceV1,
-    RecoveredWalDecisionFetchCandidateProjectionV1, RecoveredWalDecisionFetchReplayEvidenceV1,
+    RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
     body_pipeline_transition::{
         durable_continuation_successor_is_exact, durable_validate_payload_is_exact,
     },
     ledger::{AuthenticatedRecoveredWalValidateLedgerParent, DurableWalVoteLedgerRepairReceipt},
     projection,
+    replay_authority::{
+        RecoveredWalControlCandidateProjectionV1, RecoveredWalDecisionFetchCandidateProjectionV1,
+    },
     schema::DurableContinuationEdge,
 };
 use crate::sumeragi::{
@@ -28,6 +30,7 @@ use crate::sumeragi::{
     v2_runtime::{
         PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit,
         RecoveredWalVoteProjectionFailure, RecoveredWalVoteSuccessor,
+        project_recovered_lifecycle_next_wal_vote_candidate,
     },
 };
 
@@ -101,6 +104,83 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastProjectionV1 {
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
     candidate: CandidateAdmission,
+    cold_proposal_output: Option<crate::sumeragi::v2::RecoveredLifecycleColdProposalOutputV1>,
+}
+
+/// Opaque recovered signature successor retaining both reducer children.
+///
+/// The signed Broadcast has been projected through its exact recovered parent,
+/// while the follow-on Vote Sign remains sealed to its latest authenticated
+/// WAL frame and validated body receipt. No parts accessor exists; live
+/// publication and cold recovery must consume the pair as one transaction input.
+#[must_use = "combined recovered Broadcast and Sign projection must remain inseparable"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
+    broadcast: RecoveredLifecycleSignedBroadcastProjectionV1,
+    next_sign: super::replay_authority::RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+    cold_adapter_authority_minted: bool,
+}
+
+/// Opaque durable source for refanout of one recovered signed Broadcast.
+///
+/// The live Broadcast row remains the crash-recovery owner. Only the exact
+/// service permit can unpack the message, so refanout cannot be redirected to
+/// a substitute height or envelope.
+#[must_use = "recovered signed Broadcast output authority must be consumed by its service"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastOutputAuthorityV1 {
+    context_id: wire::HeightContextId,
+    height: u64,
+    message: wire::ConsensusMessageV2,
+    cold_proposal_output: Option<crate::sumeragi::v2::RecoveredLifecycleColdProposalOutputV1>,
+}
+
+impl RecoveredLifecycleSignedBroadcastOutputAuthorityV1 {
+    /// Build one context-bound output authority for focused service tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        context: &wire::HeightContext,
+        message: wire::ConsensusMessageV2,
+    ) -> Self {
+        Self {
+            context_id: context.id(),
+            height: context.height,
+            message,
+            cold_proposal_output: None,
+        }
+    }
+
+    /// Build one cold Proposal output authority for focused service tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_cold_proposal_test(
+        context: &wire::HeightContext,
+        message: wire::ConsensusMessageV2,
+        output: crate::sumeragi::v2::RecoveredLifecycleColdProposalOutputV1,
+    ) -> Self {
+        Self {
+            context_id: context.id(),
+            height: context.height,
+            message,
+            cold_proposal_output: Some(output),
+        }
+    }
+
+    /// Release the fixed output projection only to the service-private permit.
+    pub(in crate::sumeragi) fn consume_for_service(
+        self,
+        _permit: crate::sumeragi::v2_worker::RecoveredLifecycleSignBroadcastOutputPermitV1,
+    ) -> (
+        wire::HeightContextId,
+        u64,
+        wire::ConsensusMessageV2,
+        Option<crate::sumeragi::v2::RecoveredLifecycleColdProposalOutputV1>,
+    ) {
+        (
+            self.context_id,
+            self.height,
+            self.message,
+            self.cold_proposal_output,
+        )
+    }
 }
 
 /// WAL-module permit for unpacking an adapter-authenticated Broadcast.
@@ -124,6 +204,12 @@ impl RecoveredLifecycleSignBroadcastProjectionPermitV1 {
             _linearity: RecoveredLifecycleSignBroadcastProjectionPermitLinearityV1,
         }
     }
+
+    /// Mint the same move-only permit for a directly coupled adapter fixture.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test() -> Self {
+        Self::new()
+    }
 }
 
 impl RecoveredLifecycleSignedBroadcastProjectionV1 {
@@ -132,6 +218,11 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
         self.effect == other.effect
             && self.pending == other.pending
             && self.candidate == other.candidate
+            && match (&self.cold_proposal_output, &other.cold_proposal_output) {
+                (Some(left), Some(right)) => left.exactly_matches(right),
+                (None, None) => true,
+                (Some(_), None) | (None, Some(_)) => false,
+            }
     }
 
     /// Return the exact installed digest while retaining all replay authority.
@@ -142,6 +233,27 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
     /// Borrow the closed admission for one staged parent-to-child transition.
     pub(super) const fn candidate(&self) -> &CandidateAdmission {
         &self.candidate
+    }
+
+    /// Project one fixed refanout authority from the still-live durable child.
+    pub(super) fn project_output_authority(
+        &self,
+        verified: &VerifiedHeightContext,
+    ) -> Option<RecoveredLifecycleSignedBroadcastOutputAuthorityV1> {
+        let AdapterEffect::Broadcast(message) = &self.effect else {
+            return None;
+        };
+        let context = projection::lifecycle_context(verified.context());
+        (self.pending.exactly_binds_adapter_effect(&self.effect)
+            && self.candidate.replay_authority_is_exact(context)
+            && self.candidate.key.context() == context.id()
+            && self.candidate.key.round().height() == context.height())
+        .then(|| RecoveredLifecycleSignedBroadcastOutputAuthorityV1 {
+            context_id: verified.context().id(),
+            height: verified.context().height,
+            message: message.clone(),
+            cold_proposal_output: self.cold_proposal_output.clone(),
+        })
     }
 
     /// Compare the complete Ready child against one exact LedgerV1 row.
@@ -221,6 +333,48 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             && coordinator.ready_index.contains(&address.ordinal)
     }
 
+    /// Compare the exact claimed Broadcast row and its sole active lease.
+    pub(super) fn matches_current_claimed_record(
+        &self,
+        context: super::LifecycleContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: super::LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+        lease: &super::TurnLease,
+    ) -> bool {
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let (Some(record), Some(metadata)) = (
+            coordinator.records.get(&address.ordinal),
+            coordinator.durable_records.get(&address.ordinal),
+        ) else {
+            return false;
+        };
+        self.validates_at_raw_context(context, address, digest)
+            && coordinator.fault.is_none()
+            && coordinator.active_context == context
+            && coordinator.active_lease.as_ref() == Some(lease)
+            && lease.ordinal() == address.ordinal
+            && lease.owner() == address.owner
+            && lease.work_class() == LifecycleWorkClass::Broadcast
+            && lease.physical_slots() == &physical
+            && record.key == self.candidate.key
+            && record.owner == address.owner
+            && record.ordinal == address.ordinal
+            && record.work_class == LifecycleWorkClass::Broadcast
+            && record.stage == self.candidate.stage
+            && record.state == super::LifecycleState::Claimed(lease.id())
+            && record.physical_slots == physical
+            && record.episode.slot_universe == universe
+            && record.episode.consumed_slots == consumed
+            && metadata.matches_admission(&self.candidate)
+            && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
+            && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
+            && !coordinator.ready_index.contains(&address.ordinal)
+    }
+
     fn validates_at_raw_context(
         &self,
         context: super::LifecycleContext,
@@ -289,6 +443,247 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             .as_ref()
                 == Some(&self.candidate)
     }
+
+    /// Revalidate this child against one exact standalone recovered WAL Vote.
+    pub(super) fn validates_from_next_wal_vote(
+        &self,
+        verified: &VerifiedHeightContext,
+        parent: &super::replay_authority::RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+    ) -> bool {
+        self.cold_proposal_output.is_none()
+            && parent.signed_broadcast_successor_is_exact(
+                verified,
+                &self.effect,
+                &self.pending,
+                &self.candidate,
+            )
+    }
+}
+
+impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
+    fn children_are_exact(&self, verified: &VerifiedHeightContext) -> bool {
+        let context = projection::lifecycle_context(verified.context());
+        self.broadcast
+            .pending
+            .exactly_binds_adapter_effect(&self.broadcast.effect)
+            && self.broadcast.candidate.replay_authority_is_exact(context)
+            && self.broadcast.candidate.work_class == LifecycleWorkClass::Broadcast
+            && self.broadcast.candidate.initial_state == InitialLifecycleState::Ready
+            && self.broadcast.candidate.payload == DurablePayloadReference::None
+            && self.broadcast.candidate.producer_turn.is_none()
+            && self
+                .broadcast
+                .cold_proposal_output
+                .as_ref()
+                .is_none_or(|output| output.matches_broadcast(&self.broadcast.effect))
+            && self.next_sign.is_exact(verified)
+            && self
+                .next_sign
+                .is_distinct_from_broadcast_candidate(&self.broadcast.candidate)
+    }
+
+    /// Compare the retained Broadcast with one independently frame-authenticated child.
+    pub(super) fn broadcast_exactly_matches(
+        &self,
+        expected: &RecoveredLifecycleSignedBroadcastProjectionV1,
+    ) -> bool {
+        self.broadcast.exactly_matches(expected)
+    }
+
+    /// Mint one comparison-only authority for replaying the historical Sign.
+    ///
+    /// The executable pair stays retained here for Ledger/registry recovery.
+    /// Affinity prevents two adapter startups from advancing the same durable
+    /// pair to its destination next-Sign fence during one owner assembly.
+    pub(super) fn project_cold_adapter_replay_authority(
+        &mut self,
+        verified: &VerifiedHeightContext,
+    ) -> Option<crate::sumeragi::v2::RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1>
+    {
+        if self.cold_adapter_authority_minted || !self.children_are_exact(verified) {
+            return None;
+        }
+        let next_sign = self.next_sign.project_cold_adapter_next_sign(
+            verified,
+            RecoveredLifecycleSignBroadcastProjectionPermitV1::new(),
+        )?;
+        let authority = crate::sumeragi::v2::RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(
+            RecoveredLifecycleSignBroadcastProjectionPermitV1::new(),
+            self.broadcast.effect.clone(),
+            next_sign,
+        )?;
+        self.cold_adapter_authority_minted = true;
+        Some(authority)
+    }
+
+    /// Clone both inert admissions only under the transition module's affine permit.
+    ///
+    /// The executable Broadcast and next-Sign carriers remain owned here; the
+    /// tuple can exist only inside the staged, pre-fsync two-child transition.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn project_transition_candidates(
+        &self,
+        permit: super::body_pipeline_transition::RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1,
+    ) -> (CandidateAdmission, CandidateAdmission) {
+        let next_sign = self
+            .next_sign
+            .project_candidate_for_combined_transition(permit);
+        (self.broadcast.candidate.clone(), next_sign)
+    }
+
+    /// Rejoin both opaque children to one staged coordinator successor.
+    ///
+    /// This is the sole live bridge between inert admission staging and the
+    /// still-unsplit executable projection. It returns no candidate, effect,
+    /// pending, WAL, or body constituent.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn matches_staged_ready_children(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &super::LifecycleCoordinator,
+        broadcast_ordinal: u128,
+        next_sign_ordinal: u128,
+    ) -> bool {
+        let Some(expected_next) = broadcast_ordinal.checked_add(1) else {
+            return false;
+        };
+        if expected_next != next_sign_ordinal
+            || coordinator.high_water != next_sign_ordinal
+            || !self.children_are_exact(verified)
+        {
+            return false;
+        }
+        let (Some(broadcast_record), Some(next_sign_record)) = (
+            coordinator.records.get(&broadcast_ordinal),
+            coordinator.records.get(&next_sign_ordinal),
+        ) else {
+            return false;
+        };
+        let (Some((&broadcast_slot, &broadcast_digest)), Some((&next_slot, &next_digest))) = (
+            broadcast_record.physical_slots.first_key_value(),
+            next_sign_record.physical_slots.first_key_value(),
+        ) else {
+            return false;
+        };
+        let (Some(broadcast_address), Some(next_sign_address)) = (
+            super::work_registry::ConcreteWorkAddress::new(
+                broadcast_record.owner,
+                broadcast_ordinal,
+                broadcast_slot,
+            ),
+            super::work_registry::ConcreteWorkAddress::new(
+                next_sign_record.owner,
+                next_sign_ordinal,
+                next_slot,
+            ),
+        ) else {
+            return false;
+        };
+        broadcast_record.physical_slots.len() == 1
+            && next_sign_record.physical_slots.len() == 1
+            && broadcast_record.owner.causal_root() == self.broadcast.candidate.causal_root
+            && next_sign_record.owner.first_admission_ordinal() == next_sign_ordinal
+            && broadcast_record.owner != next_sign_record.owner
+            && self.broadcast.matches_current_ready_record(
+                coordinator.active_context,
+                broadcast_address,
+                broadcast_digest,
+                coordinator,
+            )
+            && self.next_sign.matches_current_ready_record(
+                verified,
+                next_sign_address,
+                next_digest,
+                coordinator,
+            )
+    }
+
+    /// Split executable ownership only in the assertion-only post-fsync registry tail.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn into_registry_children(
+        self,
+        _permit: super::work_registry::RecoveredLifecycleBroadcastAndSignRegistryCommitPermitV1,
+    ) -> (
+        RecoveredLifecycleSignedBroadcastProjectionV1,
+        super::replay_authority::RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+    ) {
+        (self.broadcast, self.next_sign)
+    }
+
+    /// Compare both opaque children with two exact fresh standalone rows.
+    ///
+    /// The Broadcast retains its inherited Sign causal root. The follow-on
+    /// Sign instead owns the independent causal root reconstructed from its
+    /// own WAL replay source. Neither candidate is released by this oracle.
+    pub(super) fn exactly_matches_fresh_records(
+        &self,
+        context: super::LifecycleContext,
+        broadcast_record: &super::ledger::LifecycleLedgerRecordV1,
+        next_sign_record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        let broadcast_owner = broadcast_record.owner();
+        broadcast_record.ordinal() != next_sign_record.ordinal()
+            && self
+                .next_sign
+                .is_distinct_from_broadcast_candidate(&self.broadcast.candidate)
+            && broadcast_owner.causal_root() == self.broadcast.candidate.causal_root
+            && self.broadcast.candidate.key.context() == context.id()
+            && self.broadcast.candidate.key.round().height() == context.height()
+            && self
+                .broadcast
+                .exactly_matches_record(broadcast_record, broadcast_owner)
+            && self
+                .next_sign
+                .exactly_matches_fresh_record(context, next_sign_record)
+    }
+
+    /// Splice both candidates only after the complete fresh-row pair matches.
+    ///
+    /// The preflight checks both keys before either insertion, so a rejected
+    /// cold cut cannot leave a partial candidate census.
+    pub(super) fn splice_candidates_from_records(
+        &self,
+        context: super::LifecycleContext,
+        broadcast_record: &super::ledger::LifecycleLedgerRecordV1,
+        next_sign_record: &super::ledger::LifecycleLedgerRecordV1,
+        candidates: &mut std::collections::BTreeMap<super::LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        if !self.exactly_matches_fresh_records(context, broadcast_record, next_sign_record)
+            || candidates.contains_key(&self.broadcast.candidate.key)
+            || !self.next_sign.is_absent_from_candidates(candidates)
+        {
+            return false;
+        }
+        let broadcast_inserted = candidates
+            .insert(
+                self.broadcast.candidate.key,
+                self.broadcast.candidate.clone(),
+            )
+            .is_none();
+        let next_inserted = self.next_sign.splice_candidate_from_fresh_record(
+            context,
+            next_sign_record,
+            candidates,
+        );
+        if !broadcast_inserted || !next_inserted {
+            candidates.remove(&self.broadcast.candidate.key);
+            return false;
+        }
+        true
+    }
+
+    /// Require the complete cold census to retain both exact opaque children.
+    ///
+    /// Unrelated authenticated carriers are deliberately preserved: the pair
+    /// need not end at the ledger high-water mark and cannot claim the whole
+    /// height census as its own.
+    pub(super) fn owns_spliced_candidates(
+        &self,
+        candidates: &std::collections::BTreeMap<super::LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        candidates.get(&self.broadcast.candidate.key) == Some(&self.broadcast.candidate)
+            && self.next_sign.owns_spliced_candidate(candidates)
+    }
 }
 
 fn project_recovered_signed_broadcast(
@@ -308,10 +703,79 @@ fn project_recovered_signed_broadcast(
         effect: broadcast_effect.clone(),
         pending: broadcast_pending,
         candidate,
+        cold_proposal_output: None,
     };
     projection
         .validates_from_sign(verified, sign_effect, sign_pending)
         .then_some(projection)
+}
+
+/// Rejoin one adapter-authenticated signed Broadcast to its exact standalone
+/// recovered WAL Vote without exposing either projection's constituent parts.
+pub(super) fn project_recovered_next_wal_vote_signed_broadcast(
+    parent: &super::replay_authority::RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+    verified: &VerifiedHeightContext,
+    authority: crate::sumeragi::v2::RecoveredLifecycleSignBroadcastProjectionAuthorityV1,
+) -> Option<(
+    super::work_registry::RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredLifecycleSignedBroadcastProjectionV1,
+)> {
+    let (key, broadcast) = authority
+        .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+    let closed = parent.project_authenticated_signed_broadcast(verified, broadcast)?;
+    let (effect, pending, candidate) =
+        closed.consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+    let projection = RecoveredLifecycleSignedBroadcastProjectionV1 {
+        effect,
+        pending,
+        candidate,
+        cold_proposal_output: None,
+    };
+    projection
+        .validates_from_next_wal_vote(verified, parent)
+        .then_some((key, projection))
+}
+
+/// Rejoin an adapter-authenticated Broadcast-and-next-Sign pair to its exact
+/// standalone recovered WAL Vote parent.
+///
+/// The adapter authority is unpacked only here. Its next Vote remains sealed
+/// through body/WAL authentication and is converted to executable admission
+/// before the pair is returned as the existing opaque combined projection.
+pub(super) fn project_recovered_next_wal_vote_signed_broadcast_and_sign(
+    parent: &super::replay_authority::RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+    verified: &VerifiedHeightContext,
+    authority: crate::sumeragi::v2::RecoveredLifecycleSignBroadcastAndSignAuthorityV1,
+) -> Option<(
+    super::work_registry::RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+)> {
+    let (key, broadcast, next_sign) = authority
+        .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+    if !next_sign.matches_verified_height(verified) {
+        return None;
+    }
+    let next_sign =
+        project_recovered_lifecycle_next_wal_vote_candidate(verified, next_sign).ok()?;
+    let closed = parent.project_authenticated_signed_broadcast(verified, broadcast)?;
+    let (effect, pending, candidate) =
+        closed.consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+    let broadcast = RecoveredLifecycleSignedBroadcastProjectionV1 {
+        effect,
+        pending,
+        candidate,
+        cold_proposal_output: None,
+    };
+    let combined = RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
+        broadcast,
+        next_sign,
+        cold_adapter_authority_minted: false,
+    };
+    (combined
+        .broadcast
+        .validates_from_next_wal_vote(verified, parent)
+        && combined.children_are_exact(verified))
+    .then_some((key, combined))
 }
 
 /// Dedicated durable/registry handoff for one recovered control Sign.
@@ -609,6 +1073,84 @@ impl AuthenticatedRecoveredWalControlProjection {
             request.clone(),
             broadcast.effect.clone(),
         )
+    }
+
+    /// Preview one exact durable Proposal Broadcast and its follow-on Vote Sign.
+    ///
+    /// Unlike live completion, this cold path has no worker dispatch key. The
+    /// recovered control WAL projection supplies the historical unsigned
+    /// Proposal, while the frame-authenticated Broadcast supplies only its
+    /// verified signature. The adapter retains both children unpublished until
+    /// the next Vote has rejoined this height's exact body store and WAL frame.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn prepare_cold_signed_broadcast_and_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+        broadcast: &RecoveredLifecycleSignedBroadcastProjectionV1,
+    ) -> Result<
+        crate::sumeragi::v2::PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1,
+        &'static str,
+    > {
+        if !self.is_exact(verified)
+            || !broadcast.validates_from_sign(verified, &self.effect, &self.pending)
+        {
+            return Err("recovered control Broadcast changed before cold pair preview");
+        }
+        let AdapterEffect::Sign { tag, request } = &self.effect else {
+            return Err("recovered control parent is not a Sign effect");
+        };
+        let authority = crate::sumeragi::v2::RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1::from_recovered_wal(
+            RecoveredLifecycleSignBroadcastProjectionPermitV1::new(),
+            *tag,
+            request.clone(),
+            broadcast.effect.clone(),
+        )
+        .ok_or("recovered control Broadcast is not an exact Proposal child")?;
+        startup.prepare_recovered_lifecycle_signed_broadcast_and_sign(verified, authority)
+    }
+
+    /// Rejoin the cold adapter/body seal to this exact control WAL parent.
+    ///
+    /// The returned startup is still at the historical Sign fence. The caller
+    /// must consume the comparison-only cold replay authority from the combined
+    /// projection and advance that same startup before opening live ownership.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn project_authenticated_cold_signed_broadcast_and_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        seal: crate::sumeragi::v2::RecoveredLifecycleSignedBroadcastAndSignColdSealV1,
+    ) -> Option<(
+        crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+        RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    )> {
+        if !self.is_exact(verified) {
+            return None;
+        }
+        let (startup, broadcast, next_sign, cold_proposal_output) = seal
+            .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+        if !next_sign.matches_verified_height(verified) {
+            return None;
+        }
+        let next_sign =
+            project_recovered_lifecycle_next_wal_vote_candidate(verified, next_sign).ok()?;
+        let mut broadcast =
+            project_recovered_signed_broadcast(verified, &self.effect, &self.pending, &broadcast)?;
+        if cold_proposal_output
+            .as_ref()
+            .is_some_and(|output| !output.matches_broadcast(&broadcast.effect))
+        {
+            return None;
+        }
+        broadcast.cold_proposal_output = cold_proposal_output;
+        let combined = RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
+            broadcast,
+            next_sign,
+            cold_adapter_authority_minted: false,
+        };
+        combined
+            .children_are_exact(verified)
+            .then_some((startup, combined))
     }
 
     /// Prove one opened ledger contains this exact standalone row once.
@@ -912,6 +1454,42 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             &broadcast,
         )?;
         Some((key, projection))
+    }
+
+    /// Project the exact signed Broadcast while retaining its WAL/body-bound Sign.
+    ///
+    /// Live publication consumes this pair atomically. Cold owner assembly must
+    /// still join it to the frame-bound Ledger pair and complete startup census.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn project_authenticated_signed_broadcast_and_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        authority: crate::sumeragi::v2::RecoveredLifecycleSignBroadcastAndSignAuthorityV1,
+    ) -> Option<(
+        super::work_registry::RecoveredLifecycleSignDispatchKeyV1,
+        RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    )> {
+        let (key, broadcast, next_sign) = authority
+            .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+        if !next_sign.matches_verified_height(verified) {
+            return None;
+        }
+        let next_sign =
+            project_recovered_lifecycle_next_wal_vote_candidate(verified, next_sign).ok()?;
+        let projection = project_recovered_signed_broadcast(
+            verified,
+            &self.projection.effect,
+            &self.projection.pending,
+            &broadcast,
+        )?;
+        let combined = RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
+            broadcast: projection,
+            next_sign,
+            cold_adapter_authority_minted: false,
+        };
+        combined
+            .children_are_exact(verified)
+            .then_some((key, combined))
     }
 
     /// Reconstruct a durable signed child only through this exact control WAL owner.
@@ -1867,7 +2445,7 @@ fn control_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bool {
 
 impl AuthenticatedRecoveredWalVoteProjection {
     /// Assemble the one successful result of the consuming runtime projection.
-    pub(in crate::sumeragi) const fn from_runtime_projection(
+    pub(in crate::sumeragi) fn from_runtime_projection(
         _permit: RecoveredWalCandidateProjectionPermit,
         successor: RecoveredWalVoteSuccessor,
         parent: CandidateAdmission,
@@ -2033,6 +2611,7 @@ impl AuthenticatedWalVoteLifecycleRepair {
             effect: broadcast,
             pending,
             candidate,
+            cold_proposal_output: None,
         };
         self.matches_signed_broadcast(verified, &projection)
             .then_some(projection)
@@ -2142,9 +2721,55 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
             effect: broadcast,
             pending,
             candidate,
+            cold_proposal_output: None,
         };
         self.matches_signed_broadcast(verified, &projection)
             .then_some((key, projection))
+    }
+
+    /// Project the exact signed Broadcast while retaining its WAL/body-bound Sign.
+    ///
+    /// Live publication consumes this pair atomically. Cold owner assembly must
+    /// still join it to the frame-bound Ledger pair and complete startup census.
+    pub(super) fn project_authenticated_signed_broadcast_and_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        authority: crate::sumeragi::v2::RecoveredLifecycleSignBroadcastAndSignAuthorityV1,
+    ) -> Option<(
+        super::work_registry::RecoveredLifecycleSignDispatchKeyV1,
+        RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    )> {
+        let (key, broadcast, next_sign) = authority
+            .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+        if !next_sign.matches_verified_height(verified)
+            || !next_sign.matches_phase_vote_repair(self)
+        {
+            return None;
+        }
+        let next_sign =
+            project_recovered_lifecycle_next_wal_vote_candidate(verified, next_sign).ok()?;
+        let pending = self
+            .repair
+            .projection
+            .successor
+            .project_signed_broadcast_successor(&broadcast)?;
+        let candidate = super::replay_authority::exact_signed_broadcast_successor_candidate(
+            verified, &broadcast, &pending,
+        )?;
+        let broadcast = RecoveredLifecycleSignedBroadcastProjectionV1 {
+            effect: broadcast,
+            pending,
+            candidate,
+            cold_proposal_output: None,
+        };
+        let combined = RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
+            broadcast,
+            next_sign,
+            cold_adapter_authority_minted: false,
+        };
+        (self.matches_signed_broadcast(verified, &combined.broadcast)
+            && combined.children_are_exact(verified))
+        .then_some((key, combined))
     }
 
     /// Reconstruct a durable signed child only through this exact phase-vote WAL owner.
@@ -2165,6 +2790,84 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
     ) -> Option<crate::sumeragi::v2::RecoveredLifecycleSignColdAdapterAuthorityV1> {
         self.repair
             .project_cold_adapter_authority(verified, broadcast)
+    }
+
+    /// Preview an exact durable Prepare Broadcast and its follow-on Commit Sign.
+    ///
+    /// The historical Prepare Sign remains owned by this repair. The adapter
+    /// startup is replayed only on clones and the next Vote cannot become
+    /// executable until the exact revalidated body marker and latest WAL owner
+    /// rejoin through the returned preview.
+    pub(super) fn prepare_cold_signed_broadcast_and_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+        broadcast: &RecoveredLifecycleSignedBroadcastProjectionV1,
+    ) -> Result<
+        crate::sumeragi::v2::PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1,
+        &'static str,
+    > {
+        if !self.matches_signed_broadcast(verified, broadcast) {
+            return Err("recovered phase Broadcast changed before cold pair preview");
+        }
+        let AdapterEffect::Sign { tag, request } = self.installed_child_effect() else {
+            return Err("recovered phase parent is not a Sign effect");
+        };
+        let authority = crate::sumeragi::v2::RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1::from_recovered_wal(
+            RecoveredLifecycleSignBroadcastProjectionPermitV1::new(),
+            *tag,
+            request.clone(),
+            broadcast.effect.clone(),
+        )
+        .ok_or("recovered phase Broadcast is not an exact Prepare-vote child")?;
+        startup.prepare_recovered_lifecycle_signed_broadcast_and_sign(verified, authority)
+    }
+
+    /// Rejoin the cold adapter/body seal to this exact phase-vote repair.
+    ///
+    /// The returned startup is still at the historical Prepare-Sign fence.
+    /// The caller must advance it with the comparison-only authority retained
+    /// by the combined projection before opening live ownership.
+    pub(super) fn project_authenticated_cold_signed_broadcast_and_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        seal: crate::sumeragi::v2::RecoveredLifecycleSignedBroadcastAndSignColdSealV1,
+    ) -> Option<(
+        crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+        RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    )> {
+        let (startup, broadcast, next_sign, cold_proposal_output) = seal
+            .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+        if cold_proposal_output.is_some()
+            || !next_sign.matches_verified_height(verified)
+            || !next_sign.matches_phase_vote_repair(self)
+        {
+            return None;
+        }
+        let next_sign =
+            project_recovered_lifecycle_next_wal_vote_candidate(verified, next_sign).ok()?;
+        let pending = self
+            .repair
+            .projection
+            .successor
+            .project_signed_broadcast_successor(&broadcast)?;
+        let candidate = super::replay_authority::exact_signed_broadcast_successor_candidate(
+            verified, &broadcast, &pending,
+        )?;
+        let broadcast = RecoveredLifecycleSignedBroadcastProjectionV1 {
+            effect: broadcast,
+            pending,
+            candidate,
+            cold_proposal_output: None,
+        };
+        let combined = RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
+            broadcast,
+            next_sign,
+            cold_adapter_authority_minted: false,
+        };
+        (self.matches_signed_broadcast(verified, &combined.broadcast)
+            && combined.children_are_exact(verified))
+        .then_some((startup, combined))
     }
 
     /// Recheck a retained Broadcast successor against the sealed recovered vote.

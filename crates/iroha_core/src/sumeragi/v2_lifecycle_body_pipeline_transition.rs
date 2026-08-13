@@ -1,17 +1,19 @@
-//! Inert coordinator staging for adjacent direct body-pipeline successors.
+//! Sealed coordinator staging and publication for adjacent body-pipeline successors.
 
 use super::{
     AdapterEffectAdmissionError, AdmissionDecision, AdmissionRequest, CandidateAdmission,
     CapacityClass, CoordinatorFault, InitialLifecycleState, LifecycleCoordinator, LifecyclePhase,
     LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId, PhysicalSlotId,
-    PredecessorScope, TerminalOutcome, TurnLease,
+    PredecessorScope, TerminalOutcome, TurnLease, WaitSource, WaitToken,
     schema::{DurableContinuation, DurableContinuationEdge, DurablePayloadReference},
     work_registry::{
+        BoundRecoveredLifecycleSignBroadcastAndSignSuccessor,
         LiveValidateSignRegistryPublicationError, PreparedCertifiedFetchStoreSuccessor,
         PreparedDurableStoreValidateSuccessor, PreparedInvalidBodyReportReplayPreAdmission,
         PreparedLiveValidateSignRegistryPublication, PreparedReadyDurableValidateAdapterPreview,
         PreparedReadyDurableValidatePersistedSignPreAdmission,
         PreparedRecoveredDecisionFetchStoreSuccessor,
+        PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor,
         PreparedRecoveredLifecycleSignBroadcastSuccessor, SealedBodySuccessorProjectionError,
         SealedValidateTerminalProjectionError,
     },
@@ -301,6 +303,25 @@ struct StagedBodyStageTransition {
     child_digest: super::LifecycleDigest,
 }
 
+/// Fully checked staged state for one recovered Sign with two reducer children.
+///
+/// The Broadcast remains the typed continuation of the claimed Sign. The
+/// follow-on Vote Sign is a separate WAL-owned Ready row, admitted in the same
+/// invisible coordinator copy at the immediately following ordinal.
+#[cfg_attr(not(test), allow(dead_code))]
+struct StagedRecoveredLifecycleSignBroadcastAndSignTransition {
+    staged: LifecycleCoordinator,
+    parent_ordinal: u128,
+    broadcast_ordinal: u128,
+    next_sign_ordinal: u128,
+    broadcast_owner: OwnerId,
+    next_sign_owner: OwnerId,
+    broadcast_slot: PhysicalSlotId,
+    broadcast_digest: super::LifecycleDigest,
+    next_sign_slot: PhysicalSlotId,
+    next_sign_digest: super::LifecycleDigest,
+}
+
 /// Fully checked staged state for one consumed Validate with no successor.
 struct StagedBodyNoSuccessorTransition {
     staged: LifecycleCoordinator,
@@ -374,6 +395,33 @@ impl SealedValidateSignProjectionPermit {
     fn new() -> Self {
         Self {
             _linearity: SealedValidateSignProjectionLinearity,
+        }
+    }
+}
+
+/// One-shot authority for reading the two admissions of a combined Sign result.
+///
+/// WAL recovery retains both executable children in one opaque projection.
+/// Only this transition module can mint the permit which clones their inert
+/// admissions into an unpublished coordinator copy; registry ownership stays
+/// inseparable until the later post-fsync commit.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) struct RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1 {
+    _linearity: RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+struct RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1;
+
+impl Drop for RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1,
         }
     }
 }
@@ -752,6 +800,184 @@ fn stage_recovered_lifecycle_sign_broadcast_transition(
         edge,
         BodyStagePayloadRelationV1::RecoveredLifecycleSign,
     )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn recovered_broadcast_and_next_sign_are_exact(
+    broadcast: &CandidateAdmission,
+    next_sign: &CandidateAdmission,
+) -> bool {
+    let exact_stages = matches!(
+        (
+            broadcast.key.phase(),
+            broadcast.stage.kind(),
+            next_sign.key.phase(),
+            next_sign.stage.kind(),
+        ),
+        (
+            LifecyclePhase::BroadcastProposal,
+            LifecycleStageKind::BroadcastProposal,
+            LifecyclePhase::Prepare,
+            LifecycleStageKind::SignPrepareVote,
+        ) | (
+            LifecyclePhase::BroadcastPrepareVote,
+            LifecycleStageKind::BroadcastPrepareVote,
+            LifecyclePhase::Commit,
+            LifecycleStageKind::SignCommitVote,
+        )
+    );
+    let commitment_is_exact = match broadcast.key.phase() {
+        LifecyclePhase::BroadcastProposal => {
+            broadcast.key.execution_commitment().is_none()
+                && next_sign.key.execution_commitment().is_some()
+        }
+        LifecyclePhase::BroadcastPrepareVote => {
+            broadcast.key.execution_commitment() == next_sign.key.execution_commitment()
+        }
+        _ => false,
+    };
+    exact_stages
+        && commitment_is_exact
+        && broadcast.key.context() == next_sign.key.context()
+        && broadcast.key.round() == next_sign.key.round()
+        && broadcast.key.proposal_round() == next_sign.key.proposal_round()
+        && broadcast.key.subject() == next_sign.key.subject()
+}
+
+/// Stage one recovered `Signed` reducer result containing Broadcast plus Sign.
+///
+/// The first child uses the ordinary typed Sign-to-Broadcast continuation and
+/// consumes the claimed parent's Consensus overlay. The independently
+/// WAL-owned follow-on Sign is then admitted at the next ordinal in the same
+/// unpublished coordinator copy. No live coordinator state changes here.
+#[cfg_attr(not(test), allow(dead_code))]
+fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    broadcast: CandidateAdmission,
+    next_sign: CandidateAdmission,
+) -> Result<StagedRecoveredLifecycleSignBroadcastAndSignTransition, BodyStageTransitionError> {
+    let next_sign_candidate = next_sign.clone();
+    let next_sign_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+    let Ok((next_slots, next_universe, next_consumed)) = next_sign.physical_geometry.normalized()
+    else {
+        return Err(BodyStageTransitionError::InvalidChildProjection);
+    };
+    let Some(&next_sign_digest) = next_slots.get(&next_sign_slot) else {
+        return Err(BodyStageTransitionError::InvalidChildProjection);
+    };
+    if !recovered_broadcast_and_next_sign_are_exact(&broadcast, &next_sign)
+        || next_sign.work_class != LifecycleWorkClass::SignVote
+        || next_sign.stage.predecessor_scope() != PredecessorScope::Independent
+        || next_sign.initial_state != InitialLifecycleState::Ready
+        || next_sign.payload != DurablePayloadReference::None
+        || next_sign.producer_turn.is_some()
+        || next_sign.causal_root == lease.owner().causal_root()
+        || coordinator.owner_index.contains_key(&next_sign.causal_root)
+        || next_sign.reconstruction_source != next_sign.causal_root.digest()
+        || !next_sign.replay_authority_is_exact(coordinator.active_context)
+        || next_slots.len() != 1
+        || next_universe.len() != 1
+        || next_consumed != next_universe
+        || !next_universe.contains(&next_sign_slot)
+    {
+        return Err(BodyStageTransitionError::InvalidChildProjection);
+    }
+
+    let capacity_used_before = coordinator.capacity_used.clone();
+    let capacity_generation_before = coordinator.capacity_generation.clone();
+    let records_before = coordinator.records.len();
+    let durable_records_before = coordinator.durable_records.len();
+    let first = stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast)?;
+    let expected_next_sign_ordinal = first
+        .child_ordinal
+        .checked_add(1)
+        .ok_or(BodyStageTransitionError::OrdinalExhausted)?;
+    let StagedBodyStageTransition {
+        mut staged,
+        parent_ordinal,
+        child_ordinal: broadcast_ordinal,
+        owner: broadcast_owner,
+        child_slot: broadcast_slot,
+        child_digest: broadcast_digest,
+    } = first;
+    let decision = staged.reduce_admit(AdmissionRequest::Candidate(next_sign));
+    let AdmissionDecision::Admitted {
+        owner: next_sign_owner,
+        ordinal: next_sign_ordinal,
+        producer_turn_ordinal: None,
+    } = decision
+    else {
+        return Err(BodyStageTransitionError::ChildAdmission(Box::new(decision)));
+    };
+    if next_sign_ordinal != expected_next_sign_ordinal
+        || next_sign_owner.causal_root() != next_sign_candidate.causal_root
+        || next_sign_owner == broadcast_owner
+    {
+        return Err(BodyStageTransitionError::InvalidChildOwner);
+    }
+
+    let next_record_is_exact = staged
+        .records
+        .get(&next_sign_ordinal)
+        .is_some_and(|record| {
+            record.owner == next_sign_owner
+                && record.ordinal == next_sign_ordinal
+                && record.key == next_sign_candidate.key
+                && record.work_class == LifecycleWorkClass::SignVote
+                && record.stage == next_sign_candidate.stage
+                && record.state == LifecycleState::Ready
+                && record.physical_slots == next_slots
+                && record.episode.slot_universe == next_universe
+                && record.episode.consumed_slots == next_consumed
+        });
+    if !next_record_is_exact
+        || staged.active_lease.is_some()
+        || staged.high_water != next_sign_ordinal
+        || staged.records.len() != records_before.saturating_add(2)
+        || staged.durable_records.len() != durable_records_before.saturating_add(2)
+        || staged.key_index.get(&next_sign_candidate.key) != Some(&next_sign_ordinal)
+        || staged.owner_index.get(&next_sign_candidate.causal_root) != Some(&next_sign_owner)
+        || !staged.ready_index.contains(&broadcast_ordinal)
+        || !staged.ready_index.contains(&next_sign_ordinal)
+        || staged
+            .durable_records
+            .get(&next_sign_ordinal)
+            .is_none_or(|metadata| {
+                !metadata.matches_admission(&next_sign_candidate)
+                    || metadata.continuation != DurableContinuation::None
+            })
+        || staged.capacity_used[&CapacityClass::Effect]
+            != capacity_used_before[&CapacityClass::Effect]
+        || staged.capacity_generation[&CapacityClass::Effect]
+            != capacity_generation_before[&CapacityClass::Effect].saturating_add(1)
+        || staged.capacity_used[&CapacityClass::Consensus]
+            != capacity_used_before[&CapacityClass::Consensus].saturating_add(1)
+        || staged.capacity_generation[&CapacityClass::Consensus]
+            != capacity_generation_before[&CapacityClass::Consensus]
+        || CapacityClass::ALL
+            .into_iter()
+            .filter(|class| !matches!(class, CapacityClass::Effect | CapacityClass::Consensus))
+            .any(|class| {
+                staged.capacity_used[&class] != capacity_used_before[&class]
+                    || staged.capacity_generation[&class] != capacity_generation_before[&class]
+            })
+    {
+        return Err(BodyStageTransitionError::InvalidStagedRecords);
+    }
+
+    Ok(StagedRecoveredLifecycleSignBroadcastAndSignTransition {
+        staged,
+        parent_ordinal,
+        broadcast_ordinal,
+        next_sign_ordinal,
+        broadcast_owner,
+        next_sign_owner,
+        broadcast_slot,
+        broadcast_digest,
+        next_sign_slot,
+        next_sign_digest,
+    })
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1204,6 +1430,36 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastTransition<
     child_digest: super::LifecycleDigest,
 }
 
+/// Fully staged recovered Proposal Broadcast-and-next-Sign publication.
+///
+/// Both concrete child addresses have rejoined the opaque registry successor,
+/// and, for Proposal, the exact output reservation remains held outside this
+/// token until the LedgerV1 successor is fsynced. Proposal publication parks
+/// its Broadcast behind that owner; Vote publication leaves Broadcast Ready
+/// for typed refanout. The independently WAL-owned next Sign remains Ready and
+/// a crash reconstructs the Broadcast output debt from LedgerV1.
+#[must_use = "combined recovered Sign transition has not been published"]
+pub(super) struct PreparedRecoveredLifecycleSignBroadcastAndSignTransition<
+    'coordinator,
+    'registry,
+    'adapter,
+> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    successor: BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter>,
+    staged: LifecycleCoordinator,
+    parent_ordinal: u128,
+    broadcast_ordinal: u128,
+    next_sign_ordinal: u128,
+    broadcast_owner: OwnerId,
+    next_sign_owner: OwnerId,
+    broadcast_slot: PhysicalSlotId,
+    broadcast_digest: super::LifecycleDigest,
+    next_sign_slot: PhysicalSlotId,
+    next_sign_digest: super::LifecycleDigest,
+    broadcast_wait: WaitToken,
+    publication_is_vote: bool,
+}
+
 impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
     /// Fsync the exact staged LedgerV1 successor while all volatile owners remain borrowed.
     pub(super) fn persist_exact_successor(
@@ -1234,6 +1490,94 @@ impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
         let adapter = successor.commit_after_publication();
         *coordinator = staged;
         adapter.commit_after_durable_broadcast();
+    }
+}
+
+impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {
+    /// Fsync the exact two-child LedgerV1 successor while all owners stay borrowed.
+    pub(super) fn persist_exact_successor(
+        &self,
+    ) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.coordinator
+            .persist_exact_staged_successor(&self.staged)
+    }
+
+    /// Publish both children under the preauthenticated output mode.
+    pub(super) fn commit_after_publication(self) {
+        let Self {
+            coordinator,
+            successor,
+            staged,
+            parent_ordinal,
+            broadcast_ordinal,
+            next_sign_ordinal,
+            broadcast_owner,
+            next_sign_owner,
+            broadcast_slot,
+            broadcast_digest,
+            next_sign_slot,
+            next_sign_digest,
+            broadcast_wait,
+            publication_is_vote,
+        } = self;
+        assert!(staged.records.get(&parent_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        }));
+        assert!(
+            staged
+                .records
+                .get(&broadcast_ordinal)
+                .is_some_and(|record| {
+                    record.owner == broadcast_owner
+                        && record.state == LifecycleState::Ready
+                        && record.physical_slots.get(&broadcast_slot) == Some(&broadcast_digest)
+                })
+        );
+        assert!(
+            staged
+                .records
+                .get(&next_sign_ordinal)
+                .is_some_and(|record| {
+                    record.owner == next_sign_owner
+                        && record.state == LifecycleState::Ready
+                        && record.physical_slots.get(&next_sign_slot) == Some(&next_sign_digest)
+                })
+        );
+        assert!(staged.active_lease.is_none());
+
+        let adapter = successor.commit_after_publication();
+        *coordinator = staged;
+        if publication_is_vote {
+            assert!(coordinator.ready_index.contains(&broadcast_ordinal));
+            assert!(
+                coordinator
+                    .records
+                    .get(&broadcast_ordinal)
+                    .is_some_and(|record| { record.state == LifecycleState::Ready })
+            );
+        } else {
+            assert!(coordinator.ready_index.remove(&broadcast_ordinal));
+            coordinator
+                .records
+                .get_mut(&broadcast_ordinal)
+                .expect("published combined Broadcast retains its staged row")
+                .state = LifecycleState::Waiting(broadcast_wait);
+            assert!(
+                coordinator
+                    .observed_generation
+                    .insert(
+                        broadcast_wait.source(),
+                        broadcast_wait.observed_generation()
+                    )
+                    .is_none_or(|known| known == broadcast_wait.observed_generation())
+            );
+        }
+        assert!(coordinator.ready_index.contains(&next_sign_ordinal));
+        if publication_is_vote {
+            adapter.commit_after_durable_vote_broadcast_and_sign();
+        } else {
+            adapter.commit_after_durable_broadcast_and_sign();
+        }
     }
 }
 
@@ -1437,6 +1781,70 @@ impl LifecycleCoordinator {
             child_ordinal: transition.child_ordinal,
             child_slot: transition.child_slot,
             child_digest: transition.child_digest,
+        })
+    }
+
+    /// Stage the exact two-child result of one recovered `Signed` event.
+    ///
+    /// Both opaque admissions fit one coordinator snapshot, and the registry
+    /// binds the same fresh addresses without splitting executable authority.
+    /// The returned value retains every owner through the one allowed fsync.
+    pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_transition<
+        'coordinator,
+        'registry,
+        'adapter,
+    >(
+        &'coordinator mut self,
+        lease: &TurnLease,
+        successor: PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
+        if self.ledger_store.is_none() {
+            return Err(BodyStageTransitionError::InvalidStagedRecords);
+        }
+        let publication_is_vote = successor
+            .publication_is_vote()
+            .ok_or(BodyStageTransitionError::InvalidChildProjection)?;
+        let (broadcast, next_sign) = successor.project_transition_candidates(
+            RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1::new(),
+        );
+        let transition = stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
+            self, lease, broadcast, next_sign,
+        )?;
+        let successor = successor
+            .bind_staged_children(
+                &transition.staged,
+                transition.broadcast_ordinal,
+                transition.next_sign_ordinal,
+            )
+            .map_err(|_| BodyStageTransitionError::InvalidChildProjection)?;
+        let broadcast_wait_source = WaitSource::Recovery(transition.broadcast_digest);
+        let broadcast_wait_generation = transition
+            .staged
+            .observed_generation
+            .get(&broadcast_wait_source)
+            .copied()
+            .unwrap_or(0);
+        if broadcast_wait_generation == u64::MAX {
+            return Err(BodyStageTransitionError::InvalidStagedRecords);
+        }
+        Ok(PreparedRecoveredLifecycleSignBroadcastAndSignTransition {
+            coordinator: self,
+            successor,
+            staged: transition.staged,
+            parent_ordinal: transition.parent_ordinal,
+            broadcast_ordinal: transition.broadcast_ordinal,
+            next_sign_ordinal: transition.next_sign_ordinal,
+            broadcast_owner: transition.broadcast_owner,
+            next_sign_owner: transition.next_sign_owner,
+            broadcast_slot: transition.broadcast_slot,
+            broadcast_digest: transition.broadcast_digest,
+            next_sign_slot: transition.next_sign_slot,
+            next_sign_digest: transition.next_sign_digest,
+            broadcast_wait: WaitToken::new(broadcast_wait_source, broadcast_wait_generation),
+            publication_is_vote,
         })
     }
 
@@ -2095,6 +2503,314 @@ mod static_tests {
     }
 
     #[test]
+    fn recovered_broadcast_and_next_sign_relation_accepts_only_adjacent_wal_vote() {
+        let commitment = LifecycleDigest::new([0x63; 32]);
+        let mut broadcast = fetch_store_fixture(4).store_candidate;
+        broadcast.key = key(LifecyclePhase::BroadcastProposal, true, true, None);
+        broadcast.work_class = LifecycleWorkClass::Broadcast;
+        broadcast.stage = stage(
+            LifecycleStageKind::BroadcastProposal,
+            PredecessorScope::Independent,
+        );
+        let mut next_sign = broadcast.clone();
+        next_sign.key = key(LifecyclePhase::Prepare, true, true, Some(commitment));
+        next_sign.work_class = LifecycleWorkClass::SignVote;
+        next_sign.stage = stage(
+            LifecycleStageKind::SignPrepareVote,
+            PredecessorScope::Independent,
+        );
+        assert!(recovered_broadcast_and_next_sign_are_exact(
+            &broadcast, &next_sign
+        ));
+
+        let mut prepare_broadcast = broadcast.clone();
+        prepare_broadcast.key = key(
+            LifecyclePhase::BroadcastPrepareVote,
+            true,
+            true,
+            Some(commitment),
+        );
+        prepare_broadcast.stage = stage(
+            LifecycleStageKind::BroadcastPrepareVote,
+            PredecessorScope::Independent,
+        );
+        let mut commit_sign = next_sign.clone();
+        commit_sign.key = key(LifecyclePhase::Commit, true, true, Some(commitment));
+        commit_sign.stage = stage(
+            LifecycleStageKind::SignCommitVote,
+            PredecessorScope::Independent,
+        );
+        assert!(recovered_broadcast_and_next_sign_are_exact(
+            &prepare_broadcast,
+            &commit_sign
+        ));
+
+        let mut foreign = commit_sign.clone();
+        foreign.key.execution_commitment = Some(LifecycleDigest::new([0x64; 32]));
+        assert!(!recovered_broadcast_and_next_sign_are_exact(
+            &prepare_broadcast,
+            &foreign
+        ));
+        foreign = next_sign.clone();
+        foreign.key.round = LifecycleRound::new(7, 4);
+        assert!(!recovered_broadcast_and_next_sign_are_exact(
+            &broadcast, &foreign
+        ));
+    }
+
+    #[test]
+    fn combined_recovered_sign_staging_is_two_child_affine_and_inert() {
+        let source = include_str!("v2_lifecycle_body_pipeline_transition.rs");
+        let adapter_source = include_str!("v2.rs");
+        let registry_source = include_str!("v2_lifecycle_work_registry.rs");
+        let registry_recovery_source =
+            include_str!("v2_lifecycle_work_registry_validate_recovery.rs");
+        let reducer = source
+            .split_once("fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(")
+            .expect("locate combined Sign reducer")
+            .1
+            .split_once("#[allow(clippy::too_many_arguments")
+            .expect("locate end of combined Sign reducer")
+            .0;
+        let broadcast = reducer
+            .find("stage_recovered_lifecycle_sign_broadcast_transition(")
+            .expect("stage inherited Broadcast first");
+        let next_ordinal = reducer
+            .find(".checked_add(1)")
+            .expect("derive adjacent next-Sign ordinal");
+        let next_admission = reducer
+            .find("staged.reduce_admit(AdmissionRequest::Candidate(next_sign))")
+            .expect("admit next WAL Sign in the same copy");
+        assert!(broadcast < next_ordinal && next_ordinal < next_admission);
+        for required in [
+            "coordinator.owner_index.contains_key(&next_sign.causal_root)",
+            "next_sign_owner.causal_root() != next_sign_candidate.causal_root",
+            "staged.records.len() != records_before.saturating_add(2)",
+            "staged.high_water != next_sign_ordinal",
+            "capacity_used_before[&CapacityClass::Consensus].saturating_add(1)",
+        ] {
+            assert!(
+                reducer.contains(required),
+                "combined Sign reducer omitted {required}"
+            );
+        }
+        assert!(!reducer.contains("persist_exact"));
+
+        let entry = source
+            .split_once(
+                "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_transition",
+            )
+            .expect("locate sealed combined Sign entrypoint")
+            .1
+            .split_once("/// Stage the sole live post-WAL Validate-to-Sign transaction.")
+            .expect("locate end of sealed combined Sign entrypoint")
+            .0;
+        for required in [
+            "RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1::new()",
+            ".publication_is_vote()",
+            "stage_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+            ".bind_staged_children(",
+            "successor",
+            "broadcast_wait: WaitToken::new(",
+        ] {
+            assert!(
+                entry.contains(required),
+                "sealed entrypoint omitted {required}"
+            );
+        }
+        for forbidden in ["persist_exact", "commit_after", "into_registry_children"] {
+            assert!(
+                !entry.contains(forbidden),
+                "preparation entrypoint exposed {forbidden}"
+            );
+        }
+
+        let publication = source
+            .split_once("impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_>")
+            .expect("locate combined transition publication")
+            .1
+            .split_once("fn map_sealed_successor_projection_error(")
+            .expect("locate end of combined transition publication")
+            .0;
+        let persist = publication
+            .find("persist_exact_staged_successor(&self.staged)")
+            .expect("fsync the exact combined successor");
+        let registry_commit = publication
+            .find("successor.commit_after_publication()")
+            .expect("split the registry pair only after fsync");
+        let coordinator_commit = publication
+            .find("*coordinator = staged")
+            .expect("publish the exact staged coordinator");
+        let mode = publication
+            .find("if publication_is_vote")
+            .expect("separate Vote debt from pre-reserved Proposal output");
+        let vote_ready = publication
+            .find("ready_index.contains(&broadcast_ordinal)")
+            .expect("leave a Vote Broadcast Ready for typed refanout");
+        let park = publication
+            .find("LifecycleState::Waiting(broadcast_wait)")
+            .expect("park only a Proposal Broadcast behind output ownership");
+        let next_ready = publication
+            .find("ready_index.contains(&next_sign_ordinal)")
+            .expect("leave the WAL-backed Sign Ready");
+        let vote_adapter_commit = publication
+            .find("adapter.commit_after_durable_vote_broadcast_and_sign()")
+            .expect("advance the Vote adapter only in the assertion-only tail");
+        let adapter_commit = publication
+            .find("adapter.commit_after_durable_broadcast_and_sign()")
+            .expect("advance the Proposal adapter only in the assertion-only tail");
+        assert!(
+            persist < registry_commit
+                && registry_commit < coordinator_commit
+                && coordinator_commit < mode
+                && mode < vote_ready
+                && coordinator_commit < park
+                && park < next_ready
+                && next_ready < vote_adapter_commit
+                && next_ready < adapter_commit
+        );
+        let tail = &publication[registry_commit..];
+        assert!(!tail.contains("return "));
+        assert!(!tail.contains(".is_err()"));
+
+        let adapter_commit = adapter_source
+            .split_once("fn commit_after_durable_broadcast_and_sign(self)")
+            .expect("locate combined adapter publication")
+            .1
+            .split_once("/// Borrow-bound adapter successor for one registry-owned recovered Apply")
+            .expect("locate end of combined adapter publication")
+            .0;
+        for required in [
+            "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
+            "combined_authority_minted: true",
+            "proposal_output_authority_minted: true",
+            "next_sign: Some(_)",
+            "outbound_payload: Some(_)",
+            "adapter.reducer = next_reducer",
+            "adapter.registry = next_registry",
+        ] {
+            assert!(
+                adapter_commit.contains(required),
+                "combined adapter publication omitted {required}"
+            );
+        }
+        let vote_adapter_commit = adapter_source
+            .split_once("fn commit_after_durable_vote_broadcast_and_sign(self)")
+            .expect("locate combined Vote adapter publication")
+            .1
+            .split_once("/// Borrow-bound adapter successor for one registry-owned recovered Apply")
+            .expect("locate end of combined Vote adapter publication")
+            .0;
+        for required in [
+            "self.is_vote_broadcast_and_sign()",
+            "combined_authority_minted: true",
+            "proposal_output_authority_minted: false",
+            "next_sign: Some(_)",
+            "outbound_payload: None",
+            "adapter.reducer = next_reducer",
+            "adapter.registry = next_registry",
+        ] {
+            assert!(
+                vote_adapter_commit.contains(required),
+                "combined Vote adapter publication omitted {required}"
+            );
+        }
+
+        let registry_prepare = registry_source
+            .split_once(
+                "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor",
+            )
+            .expect("locate combined registry preparation")
+            .1
+            .split_once(
+                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor",
+            )
+            .expect("locate end of combined registry preparation")
+            .0;
+        let parent = registry_prepare
+            .find("let parent_is_exact = match &sign.kind")
+            .expect("authenticate the installed parent first");
+        let body = registry_prepare
+            .find(".project_broadcast_and_sign_authority(body)")
+            .expect("consume only the opaque body authority");
+        let wal = registry_prepare
+            .find(".project_authenticated_signed_broadcast_and_sign(")
+            .expect("rejoin the exact parent WAL carrier");
+        let retain = registry_prepare
+            .find("PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor {")
+            .expect("retain the unsplit executable pair");
+        assert!(parent < body && body < wal && wal < retain);
+        for forbidden in [
+            "ValidatedBodyReceipt",
+            "fn receipt(",
+            "fn candidate(",
+            "into_parts",
+            ".entries.insert(",
+            ".entries.remove(",
+        ] {
+            assert!(
+                !registry_prepare.contains(forbidden),
+                "combined registry preparation exposed {forbidden}"
+            );
+        }
+
+        let commit = registry_source
+            .split_once(
+                "impl<'registry, 'adapter>\n    BoundRecoveredLifecycleSignBroadcastAndSignSuccessor",
+            )
+            .expect("locate combined successor publication tail")
+            .1
+            .split_once("include!(\"v2_lifecycle_work_registry_validate_recovery.rs\")")
+            .expect("locate end of combined successor publication tail")
+            .0;
+        let remove_parent = commit
+            .find(".remove(&sign_address)")
+            .expect("remove the exact claimed Sign parent");
+        let split = commit
+            .find("successor.into_registry_children(")
+            .expect("split the opaque pair only after publication");
+        let broadcast_insert = commit
+            .find(".insert(broadcast_address, broadcast_work)")
+            .expect("install the inherited Broadcast carrier");
+        let next_sign_insert = commit
+            .find(".insert(next_sign_address, next_sign_work)")
+            .expect("install the fresh next-WAL Sign carrier");
+        assert!(
+            remove_parent < split
+                && split < broadcast_insert
+                && broadcast_insert < next_sign_insert
+        );
+        for required in [
+            "RecoveredLifecycleBroadcastAndSignRegistryCommitPermitV1::new()",
+            "DurableRecoveredLifecycleSignedBroadcastWork",
+            "DurableRecoveredLifecycleNextWalVoteSignWork",
+            "dispatch_key: None",
+        ] {
+            assert!(
+                commit.contains(required),
+                "combined commit omitted {required}"
+            );
+        }
+        assert!(!commit.contains("pub(super) fn into_"));
+
+        let sign_dispatch = registry_recovery_source
+            .split_once("pub(super) fn attest_ready_recovered_lifecycle_sign(")
+            .expect("locate recovered Sign attestation")
+            .1
+            .split_once("/// Attest one exact Ready recovered Decision Fetch")
+            .expect("bound recovered Sign attestation and dispatch")
+            .0;
+        assert_eq!(
+            sign_dispatch
+                .matches("DurableRecoveredLifecycleNextWalVoteSign")
+                .count(),
+            2
+        );
+        assert!(sign_dispatch.contains("PreparedRecoveredLifecycleSignCarrier::NextWalVote"));
+        assert!(sign_dispatch.contains(".project_task(identity)"));
+    }
+
+    #[test]
     fn transition_surface_is_ordered_borrow_bound_and_inert() {
         let source = include_str!("v2_lifecycle_body_pipeline_transition.rs");
         let production = source
@@ -2439,6 +3155,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 
+    use super::super::projection;
     use super::*;
     use crate::sumeragi::{
         v2_core::{EventTag, Generation},
@@ -3050,7 +3767,7 @@ mod tests {
             ordinal,
             producer_turn_ordinal: None,
             ..
-        } = coordinator.admit(AdmissionRequest::Candidate(validate_candidate))
+        } = coordinator.admit(AdmissionRequest::Candidate(validate_candidate.clone()))
         else {
             panic!("admit Validate parent fixture")
         };

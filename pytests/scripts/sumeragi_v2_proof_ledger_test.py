@@ -15417,6 +15417,384 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "drop-inert recovered Sign adapter preview must preserve exact production order",
         ),
         (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(",
+            "vote.phase == wire::GlobalPhase::Prepare",
+            "true",
+            "closed recovered Sign adapter successor shapes omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(",
+            "output_guard.begin_fail_stop_operation()",
+            "output_guard.is_open()",
+            "restart-closed recovered Sign-to-Broadcast settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(",
+            "transition.persist_exact_successor().is_err()",
+            "transition.skip_durable_publication().is_err()",
+            "restart-closed recovered Sign-to-Broadcast settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+            "services.matches_lifecycle_body_store(body_store_identity)",
+            "true",
+            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+            "settle_turn(lease, super::TurnOutcome::Blocked(wait))",
+            "settle_turn(lease, super::TurnOutcome::Terminal(TerminalOutcome::Completed(None)))",
+            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+            "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
+            "recovered_lifecycle_signed_broadcast_unchecked_adjacent_ordinal",
+            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+            "for ready_ordinal in &exact_ready",
+            "for ready_ordinal in core::iter::once(&ordinal)",
+            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_signed_broadcast_refanout(",
+            "authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new())",
+            "authority.into_parts()",
+            "durable recovered signed-Broadcast service capture omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_cold_proposal_message(",
+            "pending.prepare_atomic_fanout_batch(fanouts)",
+            "Ok(None)",
+            "durable recovered signed-Broadcast service capture omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
+            "fn recover_durable_signed_broadcast(",
+            "verified.verify_consensus_message(message)",
+            "Ok(())",
+            "cold recovered signed-Broadcast WAL and roster join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn advance_recovered_lifecycle_signed_broadcast(",
+            "let [reducer::Effect::Broadcast(message)] = core_effects.as_slice()",
+            "let [message, ..] = core_effects.as_slice()",
+            "cold recovered signed-Broadcast reducer fast-forward omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+            "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
+            "RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast)",
+            "RecoveredWalStartupProjectionV1::PhaseVote(projection)",
+            "cold recovered phase-Broadcast storage assembly omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn authenticate_recovered_phase_signed_broadcast_and_sign(",
+            "combined.broadcast_exactly_matches(&broadcast)",
+            "true",
+            "cold recovered phase Broadcast-and-Sign ledger join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+            "fn prepare_cold_adapter_startup(",
+            "authenticate_recovered_lifecycle_next_vote_body(&mut preview)",
+            "authenticate_recovered_lifecycle_next_vote_body_unchecked(&mut preview)",
+            "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+            "fn install_recovered_broadcast_and_next_vote(",
+            "paired_next_sign: Some((next_sign_address, next_sign_digest))",
+            "paired_next_sign: None",
+            "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+            "fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup(",
+            "RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(",
+            "RecoveredWalStartupProjectionV1::PhaseBroadcast(",
+            "cold recovered signed-Broadcast storage census omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn install_recovered_sign(",
+            "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
+            "prepare_cold_adapter_startup_unchecked(&verified, adapter_startup, body_store)",
+            "cold recovered phase owner handoff omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(",
+            ".prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
+            ".prepare_recovered_lifecycle_sign_completion(completion)",
+            "single-preview recovered next-Vote body service join must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
+            "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
+            "fn production_recovered_proposal_sign_skips_next_vote_body_store()",
+            "recovered Sign adapter preview behavior regression omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn project_proposal_exact_output_authority(",
+            "self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
+            "false",
+            "affine recovered Proposal exact-output projection must remain shape closed",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "if self.proposal_work_retired",
+            "if false",
+            "recovered Proposal output must remain terminal after Decision",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "identity.same_instance(&body_store_identity)",
+            "true",
+            "recovered Proposal exact-output capture must retain its body-store owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "Arc::ptr_eq(&self.output_guard, &authority_output_guard)",
+            "true",
+            "recovered Proposal exact-output capture must retain its output guard",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(\n                retry_authority,\n            )",
+            "RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(unreachable!())",
+            "recovered Proposal capacity retry must remain source-token guarded",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn prepare_atomic_fanout_batch(",
+            "if !self.ownership_capacity_available(&additions)?",
+            "if false",
+            "atomic Proposal fanout preflight must preserve aggregate capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn prepare_atomic_fanout_batch(",
+            "aggregate.checked_add(count)",
+            "aggregate.saturating_add(count)",
+            "atomic Proposal fanout preflight must preserve aggregate capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "proposal\n            .validate(&self.context)",
+            "Ok::<(), String>(())\n            .map_err(|error| error.to_string())",
+            "retry-safe recovered Proposal exact-output capture omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn broadcast_consensus(",
+            "self.enqueue_atomic_fanout_batch_while_guarded(",
+            "self.enqueue_exact_fanout_while_guarded(",
+            "live Proposal output must not split control from chunk ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
+            "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
+            "fn recovered_proposal_exact_output_allows_partial_control()",
+            "atomic Proposal output behavior regression omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit()",
+            "fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit()",
+            "fn atomic_fanout_batch_allows_one_child_prefix()",
+            "atomic Proposal aggregate-capacity regression omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn authenticate_recovered_lifecycle_next_vote_body_catalogs(",
+            "durable_bodies.get(&key) != Some(durable)",
+            "false",
+            "exact recovered next-Vote body catalog join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn consume_for_adapter(",
+            "body_store_identity.same_instance(expected_body_store_identity)",
+            "true",
+            "opaque recovered next-Vote body authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn project_broadcast_and_sign_authority(",
+            "self.adapter.authenticate_recovered_lifecycle_next_vote(",
+            "self.adapter.trust_recovered_lifecycle_next_vote(",
+            "affine recovered Broadcast-and-next-Sign adapter projection must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
+            "fn into_candidate_projection(",
+            "self.wal_identity.is_exact()",
+            "true",
+            "full executable recovered next-WAL-Vote candidate must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
+            "fn project_cold_adapter_replay_authority(",
+            "self.cold_adapter_authority_minted = true",
+            "self.cold_adapter_authority_minted = false",
+            "affine recovered Broadcast-and-next-Sign cold adapter projection must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
+            "fn owns_spliced_candidates(",
+            "candidates.get(&self.broadcast.candidate.key) == Some(&self.broadcast.candidate)",
+            "true",
+            "combined cold census must retain the exact Broadcast without claiming unrelated carriers",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
+            "fn project_cold_adapter_next_sign(",
+            "self.is_exact(verified)",
+            "true",
+            "sealed recovered next-WAL-Vote cold adapter projection must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
+            "verified.verify_consensus_message(message)",
+            "Ok::<(), AdapterError>(())",
+            "recovered Broadcast-and-next-Sign cold adapter replay must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1",
+            "wire::GlobalPhase::Commit => tag.view() >= next_vote.round.view",
+            "wire::GlobalPhase::Commit => tag.view() == next_vote.round.view",
+            "opaque recovered Broadcast-and-next-Sign cold adapter authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
+            "replayed_next_sign != next_sign",
+            "false",
+            "recovered Broadcast-and-next-Sign cold adapter replay must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(",
+            "let next_sign_ordinal = broadcast_ordinal.checked_add(1)?",
+            "let next_sign_ordinal = broadcast_ordinal.checked_add(2)?",
+            "frame-bound recovered Broadcast-and-next-Sign ledger classifier omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn recovered_lifecycle_signed_broadcast_and_sign_pairs(",
+            "&index,",
+            "&RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1::new(&self.records),",
+            "combined Broadcast-and-next-Sign enumeration must reuse one bounded frame index",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn exactly_matches_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {",
+            "project_recovered_lifecycle_signed_broadcast_and_sign_at(self.broadcast_ordinal)",
+            "project_recovered_lifecycle_signed_broadcast_and_sign_at(0)",
+            "combined Broadcast-and-next-Sign reauthentication must retain the exact ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(",
+            ".filter(|record| record.owner() == next_sign_owner)\n                .count()\n                != 1",
+            ".filter(|record| record.owner() == next_sign_owner)\n                .count()\n                != 0",
+            "frame-bound recovered Broadcast-and-next-Sign ledger classifier omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+            "fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor<",
+            "adapter.project_broadcast_and_sign_authority(body)",
+            "adapter.project_broadcast_and_sign_without_body()",
+            "opaque recovered Broadcast-and-next-Sign registry preparation must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+            "fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+            ".checked_add(1)",
+            ".checked_add(0)",
+            "inert recovered Broadcast-and-next-Sign coordinator staging must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
+            "ready_index.remove(&broadcast_ordinal)",
+            "ready_index.remove(&next_sign_ordinal)",
+            "durable recovered Proposal Broadcast-and-next-Sign publication must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
+            "adapter.commit_after_durable_broadcast_and_sign()",
+            "drop(adapter)",
+            "durable recovered Proposal Broadcast-and-next-Sign publication must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
+            "adapter.commit_after_durable_vote_broadcast_and_sign()",
+            "drop(adapter)",
+            "durable recovered Broadcast-and-next-Sign publication must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn commit_after_durable_broadcast_and_sign(self)",
+            "proposal_output_authority_minted: true",
+            "proposal_output_authority_minted: _",
+            "durable recovered Proposal adapter two-child commit must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
+            "transition.persist_exact_successor().is_err()",
+            "false",
+            "restart-closed recovered Proposal Broadcast-and-next-Sign settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
+            "output.abort_before_publication()",
+            "drop(output)",
+            "typed recovered Proposal pre-fsync output release must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
+            "preview.is_vote_broadcast_and_sign_shape()",
+            "preview.is_vote_broadcast_and_sign()",
+            "restart-closed recovered Vote Broadcast-and-next-Sign settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
+            "transition.persist_exact_successor().is_err()",
+            "false",
+            "restart-closed recovered Vote Broadcast-and-next-Sign settlement must preserve exact production order",
+        ),
+        (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
             "fn dispatch_recovered_decision_fetch_with_runner_debt(",
             "capture_recovered_decision_fetch_exact_output(&owner)",
@@ -15571,11 +15949,11 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "production lifecycle owner retained Serve census omits production refinement tokens",
         ),
         (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn complete_tip_retirement_and_successor_owner_bind_are_release_bound()",
-            "crate::sumeragi::v2_lifecycle_coordinator::run_complete_tip_retirement_release_regressions",
-            "crate::sumeragi::v2_lifecycle_coordinator::skip_complete_tip_retirement_release_regressions",
-            "CompleteTip retirement release wrapper omits production refinement tokens",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn authorizes_successor_status(",
+            "self.complete_tip.successor_context_id() == successor.height_context_id",
+            "true",
+            "CompleteTip restart publication authority must preserve exact production order",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
@@ -15757,16 +16135,17 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/safety_wal.rs",
-            "fn publish_atomic(&self, frame: &[u8], maximum: u64",
+            "fn publish_atomic(&self, frame: &[u8], maximum: u64, label: &str)",
             "let durable = rustix::fs::statat(",
             "let durable = promoted;",
             "opened safety-WAL directory authority omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
-            "pub(crate) fn open_with_safety_wal_authority(",
-            "storage: SafetyWalLeaderWireStoreAuthority",
+            "pub(crate) fn open_with_safety_wal_authority(\n"
+            "        storage: SafetyWalServicedCandidateStoreAuthority,",
             "storage: SafetyWalServicedCandidateStoreAuthority",
+            "storage: SafetyWalLeaderWireStoreAuthority",
             "typed WAL-adjacent production stores omits production refinement tokens",
         ),
         (
@@ -15848,16 +16227,16 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "fn exactly_matches_successor_owner(",
-            ".authorizes_successor_kura(owner.kura_binding.as_ref())",
-            ".authorizes_successor_kura(None)",
-            "CompleteTip canonical predecessor store join omits production refinement tokens",
+            "fn authorizes_retained_successor(",
+            "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+            "true",
+            "CompleteTip restart publication authority must preserve exact production order",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "fn open_ingress_for_active_height(",
-            "activation.publish(successor)",
-            "drop(activation); let _ = successor",
+            "output_guard.begin_fail_stop_operation()",
+            "output_guard.acquire()",
             "open_ingress_for_active_height must preserve exact production order",
         ),
         (
@@ -16042,14 +16421,14 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn recovered(authority: RecoveredSuccessorActivationAuthority)",
+            "fn recovered(\n        authority: RecoveredSuccessorActivationAuthority,",
             "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
             "let published_height = 0;",
             "PendingSuccessorActivation omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn recovered(authority: RecoveredSuccessorActivationAuthority)",
+            "fn recovered(\n        authority: RecoveredSuccessorActivationAuthority,",
             "let Some(checked_lifecycle) =\n"
             "            check_production_successor_startup_lifecycle_transition(lifecycle)\n"
             "        else {\n"
@@ -16221,6 +16600,18 @@ def test_successor_production_source_mapping_mutations_fail_closed(
 
     errors = module._successor_production_source_fidelity_errors(tmp_path)
     assert any(error_fragment in error for error in errors), errors
+    if (
+        relative_path == "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"
+        and region_marker == "fn authorizes_retained_successor("
+    ):
+        successor_reload = (
+            "self.successor_store.load().ok().as_ref() "
+            "== Some(&self.successor_ledger)"
+        )
+        assert source.count(successor_reload) == 1
+        path.write_text(source.replace(successor_reload, "true", 1), encoding="utf-8")
+        errors = module._successor_production_source_fidelity_errors(tmp_path)
+        assert any(error_fragment in error for error in errors), errors
 
 
 def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mutants(
@@ -30013,6 +30404,31 @@ def test_serviced_candidate_production_contract_is_complete(
         in module.validate_ledger.__code__.co_names
     )
     assert_authenticated_wal_v4_negatives(module, tmp_path)
+
+    safety_path = (
+        tmp_path / "crates/iroha_core/src/sumeragi/safety_wal.rs"
+    )
+    canonical_safety = safety_path.read_text(encoding="utf-8")
+    selector = "let linked_before = match rustix::fs::statat("
+    assert canonical_safety.count(selector) == 1
+    safety_path.write_text(
+        canonical_safety.replace(
+            selector,
+            "let linked_before = match disconnected_adjacent_statat(",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._serviced_candidate_production_source_fidelity_errors(
+        tmp_path
+    )
+    assert any(
+        "require exactly one parsed bounded adjacent read function named "
+        "read_bounded; found 0" in error
+        for error in errors
+    ), errors
+    safety_path.write_text(canonical_safety, encoding="utf-8")
+
 
 @pytest.mark.parametrize(
     ("relative", "old", "new", "expected_error"),

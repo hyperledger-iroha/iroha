@@ -37,7 +37,7 @@ use super::v2_core::{
     Generation, production_reliable_flush_trace_refines_outbound_ownership_kernel,
 };
 #[cfg(test)]
-use super::v2_runtime::RuntimeQueueSnapshot;
+use super::v2_runtime::{LocalProposalEffectOwnership, RuntimeQueueSnapshot};
 use iroha_config::parameters::{
     actual::{
         KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN,
@@ -9037,22 +9037,22 @@ pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyCompletionV1 {
     work_ack: RecoveredDecisionApplyWorkAckV1,
 }
 
-/// Guarded lifecycle-owned recovered Sign completion parked for future settlement.
+/// Guarded lifecycle-owned recovered Sign completion parked for fixed settlement.
 ///
 /// This token deliberately has no raw result, signature, payload, request,
-/// parts, acknowledgement, or settlement method. Its sole fixed projection
+/// parts, acknowledgement, or generic settlement method. Its fixed projection
 /// mints an adapter-private preview authority while retaining the guarded
 /// result. Its queue `Arc` remains alive while the guarded completion drops,
 /// so abandonment closes output while the exact dedicated command owner is
 /// still representable for crash recovery.
-#[must_use = "recovered Sign completion remains guarded until restart-closed settlement exists"]
+#[must_use = "recovered Sign completion must enter restart-closed owner settlement"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {
     guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
     queue: Arc<V2IoCommandQueue>,
 }
 
-/// Guarded durable recovered-Fetch body parked until restart-closed settlement exists.
+/// Guarded durable recovered-Fetch body parked for restart-closed Store settlement.
 #[must_use = "recovered Decision Fetch persistence remains guarded and indexed"]
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchBodyCompletionV1 {
     guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
@@ -10329,8 +10329,9 @@ impl V2IoHandle {
             V2IoCompletionAcknowledgement::LifecycleWorkRetained => {}
             V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained => {}
             V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained => {
-                // No settlement exists, so neither the dedicated command
-                // index nor its completion-channel owner may be removed.
+                // Generic acknowledgement cannot perform the typed owner
+                // settlement, so neither the command index nor its completion
+                // owner may be removed here.
                 return Ok(());
             }
             V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained => {
@@ -13153,6 +13154,22 @@ struct PendingExactOutput {
     max_peers_per_fanout: usize,
 }
 
+/// Fully precomputed mutation for one inseparable topology-fanout batch.
+///
+/// The owning mutex remains held from construction through commit. Every
+/// fallible validation, aggregate-capacity calculation, FIFO allocation, and
+/// source-index projection therefore precedes this assertion-only state swap.
+struct PendingExactOutputBatchPlan {
+    existing_fanout_count: usize,
+    rebased_existing_fifo_ids: Option<Vec<ExactFanoutFifoId>>,
+    fanouts: Vec<PendingExactFanout>,
+    source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
+    reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
+    ownership_units: usize,
+    shared_ownership_units: usize,
+    next_fanout_fifo_id: ExactFanoutFifoId,
+}
+
 impl PendingExactOutput {
     fn new(
         shared_ownership_unit_capacity: usize,
@@ -13221,6 +13238,153 @@ impl PendingExactOutput {
             max_messages_per_fanout,
             max_peers_per_fanout,
         })
+    }
+
+    /// Preflight an all-or-nothing batch of fresh topology fanouts.
+    ///
+    /// Reply coalescence and sidecar replacement have their own stateful
+    /// transactions and are deliberately excluded. Proposal control and chunk
+    /// fanouts are fresh topology owners, so their reservation multiplicities
+    /// can be aggregated once and charged with each frozen credit at most once.
+    #[allow(clippy::too_many_lines)]
+    fn prepare_atomic_fanout_batch(
+        &self,
+        mut fanouts: Vec<PendingExactFanout>,
+    ) -> Result<Option<PendingExactOutputBatchPlan>, String> {
+        let existing_fanout_count = self.fanouts.len();
+        let mut additions = BTreeMap::<ExactTargetReservation, usize>::new();
+        for fanout in &fanouts {
+            self.validate_fanout_bounds(fanout)?;
+            if fanout.is_complete()
+                || fanout.reply_routes.is_some()
+                || fanout.ingress_ownership.is_some()
+                || fanout
+                    .targets
+                    .iter()
+                    .any(|target| !matches!(target.route, ExactTargetRoute::Topology))
+                || self
+                    .fanouts
+                    .iter()
+                    .any(|retained| retained.can_coalesce_retry(fanout))
+                || self
+                    .stranded_responder_control_replacement_index(fanout)
+                    .is_some()
+                || self.retains_retryable_sidecar_responder_control_for(fanout)
+            {
+                return Err(
+                    "Sumeragi v2 atomic Proposal output changed fresh topology geometry".to_owned(),
+                );
+            }
+            for (reservation, count) in fanout.outstanding_reservation_counts()? {
+                let aggregate = additions.entry(reservation).or_default();
+                *aggregate = aggregate.checked_add(count).ok_or_else(|| {
+                    "Sumeragi v2 atomic Proposal output ownership overflowed".to_owned()
+                })?;
+            }
+        }
+        if !self.ownership_capacity_available(&additions)? {
+            return Ok(None);
+        }
+        let (reservation_owner_counts, ownership_units, shared_ownership_units) =
+            self.ownership_state_after_additions(&additions)?;
+
+        let project_ids = |first: ExactFanoutFifoId| {
+            let mut cursor = first;
+            let mut ids = Vec::with_capacity(fanouts.len());
+            for _ in &fanouts {
+                if cursor == ExactFanoutFifoId::MAX {
+                    return None;
+                }
+                ids.push(cursor);
+                cursor = cursor.checked_add(1)?;
+            }
+            Some((ids, cursor))
+        };
+        let (
+            rebased_existing_fifo_ids,
+            fanout_fifo_ids,
+            next_fanout_fifo_id,
+            mut source_fifo_owners,
+        ) = if let Some((ids, next)) = project_ids(self.next_fanout_fifo_id) {
+            (None, ids, next, self.source_fifo_owners.clone())
+        } else {
+            let mut rebuilt = BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
+            let mut existing_ids = Vec::with_capacity(self.fanouts.len());
+            for (index, retained) in self.fanouts.iter().enumerate() {
+                let fifo_id = ExactFanoutFifoId::try_from(index).map_err(|_| {
+                    "Sumeragi v2 atomic Proposal FIFO rebase is not representable".to_owned()
+                })?;
+                existing_ids.push(fifo_id);
+                for source in retained.outstanding_sources()? {
+                    rebuilt.entry(source).or_default().insert(fifo_id);
+                }
+            }
+            let first = ExactFanoutFifoId::try_from(self.fanouts.len()).map_err(|_| {
+                "Sumeragi v2 atomic Proposal FIFO sequence is not representable".to_owned()
+            })?;
+            let (ids, next) = project_ids(first)
+                .ok_or_else(|| "Sumeragi v2 atomic Proposal FIFO sequence exhausted".to_owned())?;
+            (Some(existing_ids), ids, next, rebuilt)
+        };
+
+        if fanout_fifo_ids.iter().any(|fifo_id| {
+            source_fifo_owners
+                .values()
+                .any(|owners| owners.contains(fifo_id))
+        }) {
+            return Err("Sumeragi v2 atomic Proposal FIFO reused a live identity".to_owned());
+        }
+        for (fanout, fifo_id) in fanouts.iter_mut().zip(fanout_fifo_ids) {
+            for source in fanout.outstanding_sources()? {
+                source_fifo_owners
+                    .entry(source)
+                    .or_default()
+                    .insert(fifo_id);
+            }
+            fanout.fifo_id = Some(fifo_id);
+        }
+
+        Ok(Some(PendingExactOutputBatchPlan {
+            existing_fanout_count,
+            rebased_existing_fifo_ids,
+            fanouts,
+            source_fifo_owners,
+            reservation_owner_counts,
+            ownership_units,
+            shared_ownership_units,
+            next_fanout_fifo_id,
+        }))
+    }
+
+    /// Commit a batch prepared while this exact mutex guard remained held.
+    fn commit_atomic_fanout_batch(&mut self, plan: PendingExactOutputBatchPlan) {
+        let PendingExactOutputBatchPlan {
+            existing_fanout_count,
+            rebased_existing_fifo_ids,
+            fanouts,
+            source_fifo_owners,
+            reservation_owner_counts,
+            ownership_units,
+            shared_ownership_units,
+            next_fanout_fifo_id,
+        } = plan;
+        assert_eq!(
+            self.fanouts.len(),
+            existing_fanout_count,
+            "atomic Proposal output retained the corridor mutex"
+        );
+        if let Some(rebased) = rebased_existing_fifo_ids {
+            assert_eq!(rebased.len(), self.fanouts.len());
+            for (fanout, fifo_id) in self.fanouts.iter_mut().zip(rebased) {
+                fanout.fifo_id = Some(fifo_id);
+            }
+        }
+        self.fanouts.extend(fanouts);
+        self.source_fifo_owners = source_fifo_owners;
+        self.reservation_owner_counts = reservation_owner_counts;
+        self.ownership_units = ownership_units;
+        self.shared_ownership_units = shared_ownership_units;
+        self.next_fanout_fifo_id = next_fanout_fifo_id;
     }
 
     fn is_pending(&self) -> bool {
@@ -16741,11 +16905,11 @@ pub(crate) struct ProductionV2Services {
     clean_teardown: bool,
 }
 
-/// Service-private permit for unpacking one adapter-sealed signed Broadcast.
+/// Service-private permit for unpacking one durable signed Broadcast.
 ///
-/// The constructor is private to this module. The adapter projection accepts
-/// the value only by move, preventing another sibling from extracting or
-/// substituting the signed envelope.
+/// The constructor is private to this module. The WAL/registry projection
+/// accepts the value only by move, preventing another sibling from extracting
+/// or substituting the signed envelope.
 pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputPermitV1 {
     _linearity: RecoveredLifecycleSignBroadcastOutputPermitLinearityV1,
 }
@@ -16764,7 +16928,82 @@ impl RecoveredLifecycleSignBroadcastOutputPermitV1 {
     }
 }
 
+/// Service-private one-shot permit for resolving a next-Vote body lookup.
+///
+/// The exact executor mint requires this capability, so no sibling can bypass
+/// the launched worker/store identity join by calling the catalog projection
+/// directly.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1,
+    context: wire::HeightContext,
+    requester: PeerId,
+    output_guard: Arc<ConsensusOutputGuard>,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+}
+
+struct RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
+    fn new(
+        context: wire::HeightContext,
+        requester: PeerId,
+        output_guard: Arc<ConsensusOutputGuard>,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+    ) -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1,
+            context,
+            requester,
+            output_guard,
+            body_store_identity,
+        }
+    }
+
+    /// Consume only against the same executor/store owner joined by the service.
+    pub(in crate::sumeragi) fn consume_for_executor(
+        self,
+        context: &wire::HeightContext,
+        requester: &PeerId,
+        output_guard: &Arc<ConsensusOutputGuard>,
+        body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> Option<V2BodyStoreInstanceIdentity> {
+        (self.context == *context
+            && self.requester == *requester
+            && Arc::ptr_eq(&self.output_guard, output_guard)
+            && self.body_store_identity.same_instance(body_store_identity))
+        .then_some(self.body_store_identity)
+    }
+}
+
+/// Service-private permit for consuming one adapter-sealed Proposal payload.
+///
+/// The adapter authority releases its signed control message and canonical
+/// encoded payload only to this module. The service retains both behind one
+/// exact-output reservation, so no sibling can split the pair first.
+pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputPermitV1 {
+    _linearity: RecoveredLifecycleProposalExactOutputPermitLinearityV1,
+}
+
+struct RecoveredLifecycleProposalExactOutputPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleProposalExactOutputPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleProposalExactOutputPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleProposalExactOutputPermitLinearityV1,
+        }
+    }
+}
+
 /// Result of reserving exact output for a recovered signed Broadcast.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
 pub(in crate::sumeragi) enum RecoveredLifecycleSignBroadcastOutputCaptureV1<'service> {
     /// The bounded corridor cannot retain this fanout yet; nothing changed.
     Unavailable,
@@ -16772,47 +17011,121 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignBroadcastOutputCaptureV1<'ser
     Reserved(RecoveredLifecycleSignBroadcastOutputReservationV1<'service>),
 }
 
-/// Borrow-bound exact-output reservation for one Broadcast-only Sign successor.
+/// Borrow-bound exact-output reservation for one durable recovered Broadcast.
 ///
-/// Proposal payload fanout and multi-effect reducer successors are rejected by
-/// this first closed transaction. Dropping an armed reservation fail-stops;
-/// pre-publication aborts must consume [`Self::abort_before_publication`].
-#[must_use = "recovered Sign output must commit or use its typed abort"]
+/// Dropping the armed reservation fail-stops. The caller must first park the
+/// volatile claim while leaving LedgerV1 Ready, then commit the fanout.
+#[must_use = "recovered signed Broadcast output must enter its exact corridor"]
 pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputReservationV1<'service> {
-    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     operation: Option<ConsensusFailStopOperation<'service>>,
-    fanout: Option<PendingExactFanout>,
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
+    output: Option<RecoveredLifecycleSignBroadcastPreparedOutputV1>,
+}
+
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum RecoveredLifecycleSignBroadcastPreparedOutputV1 {
+    Single(Option<PendingExactFanout>),
+    Proposal(PendingExactOutputBatchPlan),
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleSignBroadcastOutputReservationV1<'_> {
-    /// Release an unchanged reservation before LedgerV1 publication.
-    pub(in crate::sumeragi) fn abort_before_publication(mut self) {
-        drop(self.pending.take());
-        self.operation
-            .take()
-            .expect("armed recovered Sign output retains its fail-stop operation")
-            .complete();
-    }
-
     /// Publish the preflighted fanout in the assertion-only post-fsync tail.
     pub(in crate::sumeragi) fn commit_after_publication(mut self) {
         let mut pending = self
             .pending
             .take()
             .expect("recovered Sign output reservation retains its corridor mutex");
-        if let Some(fanout) = self.fanout.take() {
-            assert_eq!(
-                pending.enqueue(fanout),
-                Ok(ExactFanoutOwnership::Owned),
-                "preflighted recovered Sign fanout must enter exact-output ownership"
-            );
+        let operation = self
+            .operation
+            .take()
+            .expect("recovered Sign output commit retains its fail-stop operation");
+        match self
+            .output
+            .take()
+            .expect("recovered Sign output retains its exact publication")
+        {
+            RecoveredLifecycleSignBroadcastPreparedOutputV1::Single(fanout) => {
+                if let Some(fanout) = fanout {
+                    assert_eq!(
+                        pending.enqueue(fanout),
+                        Ok(ExactFanoutOwnership::Owned),
+                        "preflighted recovered Sign fanout must enter exact-output ownership"
+                    );
+                }
+            }
+            RecoveredLifecycleSignBroadcastPreparedOutputV1::Proposal(batch) => {
+                pending.commit_atomic_fanout_batch(batch);
+            }
         }
         drop(pending);
+        operation.complete();
+    }
+}
+
+/// Result of atomically reserving Proposal control and payload fanouts.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+pub(in crate::sumeragi) enum RecoveredLifecycleProposalExactOutputCaptureV1<'service> {
+    /// Aggregate ownership does not fit; the corridor remains unchanged and
+    /// the exact authority is returned for a later bounded retry.
+    Unavailable(super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1),
+    /// Both fanouts remain behind one mutex and fail-stop operation.
+    Reserved(RecoveredLifecycleProposalExactOutputReservationV1<'service>),
+}
+
+/// Borrow-bound atomic Proposal output reservation.
+///
+/// Dropping while armed fail-stops output. Every recoverable prepublication
+/// path must consume [`Self::abort_before_publication`].
+#[must_use = "recovered Proposal output must commit atomically or use its typed abort"]
+pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputReservationV1<'service> {
+    operation: Option<ConsensusFailStopOperation<'service>>,
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
+    batch: Option<PendingExactOutputBatchPlan>,
+    authority: Option<super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
+    /// Release an unchanged aggregate reservation before durable publication.
+    pub(in crate::sumeragi) fn abort_before_publication(
+        mut self,
+    ) -> super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1 {
+        drop(self.pending.take());
+        drop(self.batch.take());
         self.operation
             .take()
-            .expect("recovered Sign output commit retains its fail-stop operation")
+            .expect("armed recovered Proposal output retains its fail-stop operation")
             .complete();
+        self.authority
+            .take()
+            .expect("armed recovered Proposal output retains its retry authority")
+    }
+
+    /// Install both preflighted fanouts in one assertion-only publication tail.
+    pub(in crate::sumeragi) fn commit_after_publication(mut self) {
+        let mut pending = self
+            .pending
+            .take()
+            .expect("recovered Proposal output retains its corridor mutex");
+        // Take this after the mutex guard: reverse local-drop order closes
+        // output before unlocking the corridor if any assertion below unwinds.
+        let operation = self
+            .operation
+            .take()
+            .expect("recovered Proposal output retains its fail-stop operation");
+        let batch = self
+            .batch
+            .take()
+            .expect("recovered Proposal output retains its aggregate batch");
+        let authority = self
+            .authority
+            .take()
+            .expect("recovered Proposal output commit retains its exact authority");
+        pending.commit_atomic_fanout_batch(batch);
+        drop(pending);
+        drop(authority);
+        operation.complete();
     }
 }
 
@@ -16880,25 +17193,41 @@ fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
 }
 
 impl ProductionV2Services {
-    /// Reserve the exact control fanout for one Broadcast-only recovered Sign.
+    /// Reserve exact output from one still-live durable recovered Broadcast.
     ///
-    /// Proposal payloads and reducer shapes with another successor remain
-    /// outside this bounded transaction. No output is enqueued until the
-    /// returned reservation commits after LedgerV1 fsync.
-    pub(in crate::sumeragi) fn capture_recovered_lifecycle_sign_broadcast_output(
+    /// The authority is minted only after the closed registry carrier rejoins
+    /// its exact claimed LedgerV1 row. A successful capture does not retire
+    /// that durable row; it remains the crash-recovery output-debt source.
+    pub(in crate::sumeragi) fn capture_recovered_lifecycle_signed_broadcast_refanout(
         &self,
-        authority: super::v2::RecoveredLifecycleSignBroadcastOutputAuthorityV1,
+        authority: super::v2_lifecycle_coordinator::RecoveredLifecycleSignedBroadcastOutputAuthorityV1,
     ) -> Result<RecoveredLifecycleSignBroadcastOutputCaptureV1<'_>, String> {
-        let (dispatch_key, message, outbound_payload) =
+        let (context_id, height, message, cold_proposal_output) =
             authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new());
-        if !dispatch_key.matches_height_context(&self.context)
-            || outbound_payload.is_some()
-            || !matches!(
-                &message.payload,
-                wire::ConsensusMessageV2Payload::Vote(_)
-                    | wire::ConsensusMessageV2Payload::TimeoutVote(_)
-            )
+        if context_id != self.context.id()
+            || height != self.context.height
             || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(
+                "recovered signed Broadcast refanout belongs to another service cut".to_owned(),
+            );
+        }
+        if let Some(output) = cold_proposal_output {
+            self.capture_recovered_lifecycle_cold_proposal_message(message, output)
+        } else {
+            self.capture_recovered_lifecycle_signed_broadcast_message(message)
+        }
+    }
+
+    fn capture_recovered_lifecycle_signed_broadcast_message(
+        &self,
+        message: wire::ConsensusMessageV2,
+    ) -> Result<RecoveredLifecycleSignBroadcastOutputCaptureV1<'_>, String> {
+        if !matches!(
+            &message.payload,
+            wire::ConsensusMessageV2Payload::Vote(_)
+                | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) || self.exact_output_handoff_owner.is_sealed()
         {
             return Err(
                 "recovered Sign Broadcast is outside the exact single-child service cut".to_owned(),
@@ -16919,20 +17248,281 @@ impl ProductionV2Services {
             .ok_or_else(|| "recovered Sign exact output requires restart".to_owned())?;
         let pending = self.lock_pending_exact_output()?;
         if self.exact_output_handoff_owner.is_sealed() {
+            drop(operation);
+            drop(pending);
             return Err("recovered Sign exact output sealed during capture".to_owned());
         }
-        if let Some(fanout) = fanout.as_ref()
-            && !pending.can_enqueue(fanout)?
-        {
-            drop(pending);
-            operation.complete();
-            return Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Unavailable);
+        if let Some(fanout) = fanout.as_ref() {
+            let available = match pending.can_enqueue(fanout) {
+                Ok(available) => available,
+                Err(error) => {
+                    drop(operation);
+                    drop(pending);
+                    return Err(error);
+                }
+            };
+            if !available {
+                drop(pending);
+                operation.complete();
+                return Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Unavailable);
+            }
         }
         Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(
             RecoveredLifecycleSignBroadcastOutputReservationV1 {
-                pending: Some(pending),
                 operation: Some(operation),
-                fanout,
+                pending: Some(pending),
+                output: Some(RecoveredLifecycleSignBroadcastPreparedOutputV1::Single(
+                    fanout,
+                )),
+            },
+        ))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn capture_recovered_lifecycle_cold_proposal_message(
+        &self,
+        message: wire::ConsensusMessageV2,
+        output: super::v2::RecoveredLifecycleColdProposalOutputV1,
+    ) -> Result<RecoveredLifecycleSignBroadcastOutputCaptureV1<'_>, String> {
+        if self.proposal_work_retired || self.exact_output_handoff_owner.is_sealed() {
+            return Err(
+                "cold recovered Proposal output is outside the live service cut".to_owned(),
+            );
+        }
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload else {
+            return Err(
+                "cold recovered Proposal output lost its signed control message".to_owned(),
+            );
+        };
+        let (payload, body_store_identity) =
+            output.consume_for_service(RecoveredLifecycleProposalExactOutputPermitV1::new());
+        if self.io.is_none()
+            || self.local_validator != Some(proposal.proposer)
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || self
+                .lifecycle_body_store_identity
+                .as_ref()
+                .is_none_or(|identity| !identity.same_instance(&body_store_identity))
+            || proposal.manifest != *payload.manifest()
+        {
+            return Err("cold recovered Proposal output belongs to another service cut".to_owned());
+        }
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        proposal
+            .validate(&self.context)
+            .map_err(|error| error.to_string())?;
+        let (manifest, chunks) = payload.into_parts();
+        manifest
+            .validate(&self.context)
+            .map_err(|error| error.to_string())?;
+        let manifest_hash = HashOf::new(&manifest);
+        let sender = proposal.proposer;
+        let mut chunk_messages = Vec::with_capacity(chunks.len());
+        for (index, bytes) in chunks.into_iter().enumerate() {
+            let mut chunk = wire::PayloadChunk {
+                manifest_hash,
+                index: u32::try_from(index)
+                    .map_err(|_| "cold recovered Proposal chunk index overflowed".to_owned())?,
+                bytes,
+                sender,
+                signature: Vec::new(),
+            };
+            let preimage = chunk
+                .signature_preimage(&self.context, &manifest)
+                .map_err(|error| error.to_string())?;
+            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
+                .map_err(|error| error.to_string())?
+                .payload()
+                .to_vec();
+            chunk_messages.push(Self::preencode_v2_network_message(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
+            )?);
+        }
+        let peers = self.remote_voters();
+        let control = PendingExactFanout::claimed(
+            vec![Self::preencode_v2_network_message(message)?],
+            peers.clone(),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )?;
+        let chunks = PendingExactFanout::claimed(
+            chunk_messages,
+            peers,
+            ExactOutputRolloverClaim::PayloadChunks {
+                scope: self.exact_output_scope(),
+                manifest,
+            },
+        )?;
+        let fanouts = control.into_iter().chain(chunks).collect::<Vec<_>>();
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "cold recovered Proposal exact output requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            drop(operation);
+            drop(pending);
+            return Err("cold recovered Proposal output sealed during capture".to_owned());
+        }
+        let batch = match pending.prepare_atomic_fanout_batch(fanouts) {
+            Ok(batch) => batch,
+            Err(error) => {
+                drop(operation);
+                drop(pending);
+                return Err(error);
+            }
+        };
+        let Some(batch) = batch else {
+            drop(pending);
+            operation.complete();
+            return Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Unavailable);
+        };
+        Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(
+            RecoveredLifecycleSignBroadcastOutputReservationV1 {
+                operation: Some(operation),
+                pending: Some(pending),
+                output: Some(RecoveredLifecycleSignBroadcastPreparedOutputV1::Proposal(
+                    batch,
+                )),
+            },
+        ))
+    }
+
+    /// Atomically reserve a signed recovered Proposal and all canonical chunks.
+    ///
+    /// Both topology fanouts are built and their aggregate target/class debt is
+    /// charged while one corridor mutex is held. Capacity failure completes the
+    /// fail-stop operation and leaves every FIFO, index, and fanout unchanged;
+    /// no control-only prefix can escape without its protected body.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn capture_recovered_lifecycle_proposal_exact_output(
+        &self,
+        authority: super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1,
+    ) -> Result<RecoveredLifecycleProposalExactOutputCaptureV1<'_>, String> {
+        if self.proposal_work_retired {
+            return Err("recovered Proposal output is terminal after Decision".to_owned());
+        }
+        let (dispatch_key, tag, message, payload, body_store_identity, authority_output_guard) =
+            authority.consume_for_service(RecoveredLifecycleProposalExactOutputPermitV1::new());
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload else {
+            return Err("recovered Proposal output lost its signed control message".to_owned());
+        };
+        if !dispatch_key.matches_height_context(&self.context)
+            || tag != self.active_tag
+            || proposal.round.context_id != self.context.id()
+            || proposal.round.height != self.context.height
+            || proposal.round.view != tag.view()
+            || self.local_validator != Some(proposal.proposer)
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || proposal.manifest != *payload.manifest()
+            || self.io.is_none()
+            || self
+                .lifecycle_body_store_identity
+                .as_ref()
+                .is_none_or(|identity| !identity.same_instance(&body_store_identity))
+            || !Arc::ptr_eq(&self.output_guard, &authority_output_guard)
+            || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err("recovered Proposal output belongs to another service cut".to_owned());
+        }
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        proposal
+            .validate(&self.context)
+            .map_err(|error| error.to_string())?;
+        let retry_authority =
+            super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(
+                RecoveredLifecycleProposalExactOutputPermitV1::new(),
+                &self.context,
+                dispatch_key,
+                tag,
+                message.clone(),
+                payload.clone(),
+                body_store_identity,
+                authority_output_guard,
+            )
+            .ok_or_else(|| {
+                "recovered Proposal output could not retain its exact retry authority".to_owned()
+            })?;
+        let (manifest, chunks) = payload.into_parts();
+        manifest
+            .validate(&self.context)
+            .map_err(|error| error.to_string())?;
+        let manifest_hash = HashOf::new(&manifest);
+        let sender = proposal.proposer;
+        let mut chunk_messages = Vec::with_capacity(chunks.len());
+        for (index, bytes) in chunks.into_iter().enumerate() {
+            let mut chunk = wire::PayloadChunk {
+                manifest_hash,
+                index: u32::try_from(index)
+                    .map_err(|_| "recovered Proposal chunk index overflowed".to_owned())?,
+                bytes,
+                sender,
+                signature: Vec::new(),
+            };
+            let preimage = chunk
+                .signature_preimage(&self.context, &manifest)
+                .map_err(|error| error.to_string())?;
+            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
+                .map_err(|error| error.to_string())?
+                .payload()
+                .to_vec();
+            chunk_messages.push(Self::preencode_v2_network_message(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
+            )?);
+        }
+        let peers = self.remote_voters();
+        let control = PendingExactFanout::claimed(
+            vec![Self::preencode_v2_network_message(message)?],
+            peers.clone(),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )?;
+        let chunks = PendingExactFanout::claimed(
+            chunk_messages,
+            peers,
+            ExactOutputRolloverClaim::PayloadChunks {
+                scope: self.exact_output_scope(),
+                manifest,
+            },
+        )?;
+        let fanouts = control.into_iter().chain(chunks).collect::<Vec<_>>();
+
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "recovered Proposal exact output requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            // Activate fail-stop while the corridor remains locked; releasing
+            // the mutex first would leave a brief open-admission window.
+            drop(operation);
+            drop(pending);
+            return Err("recovered Proposal exact output sealed during capture".to_owned());
+        }
+        let batch = match pending.prepare_atomic_fanout_batch(fanouts) {
+            Ok(batch) => batch,
+            Err(error) => {
+                drop(operation);
+                drop(pending);
+                return Err(error);
+            }
+        };
+        let Some(batch) = batch else {
+            drop(pending);
+            operation.complete();
+            return Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(
+                retry_authority,
+            ));
+        };
+        Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(
+            RecoveredLifecycleProposalExactOutputReservationV1 {
+                operation: Some(operation),
+                pending: Some(pending),
+                batch: Some(batch),
+                authority: Some(retry_authority),
             },
         ))
     }
@@ -17098,6 +17688,57 @@ impl ProductionV2Services {
                 .lifecycle_body_store_identity
                 .as_ref()
                 .is_some_and(|worker_identity| worker_identity.same_instance(owner_identity))
+    }
+
+    fn recovered_lifecycle_next_vote_body_executor_permit<R: EffectRuntime>(
+        &self,
+        executor: &V2EffectExecutor<R>,
+    ) -> Result<RecoveredLifecycleNextVoteBodyExecutorPermitV1, String> {
+        let body_store_identity = self.lifecycle_body_store_identity.as_ref().ok_or_else(|| {
+            "recovered next-Vote body authentication lost its launched store".to_owned()
+        })?;
+        if self.io.is_none()
+            || !executor.matches_recovered_lifecycle_body_service(
+                &self.context,
+                &self.local_peer,
+                &self.output_guard,
+                body_store_identity,
+            )
+        {
+            return Err(
+                "recovered next-Vote body authentication found a foreign service owner".to_owned(),
+            );
+        }
+        Ok(RecoveredLifecycleNextVoteBodyExecutorPermitV1::new(
+            self.context.clone(),
+            self.local_peer.clone(),
+            Arc::clone(&self.output_guard),
+            body_store_identity.clone(),
+        ))
+    }
+
+    /// Preview one recovered Sign and authenticate its next body in one borrow.
+    ///
+    /// The service joins the exact worker/store owner before the executor
+    /// creates its runtime-borrowing adapter preview. The executor then splits
+    /// that runtime borrow from its retained catalogs internally, so callers
+    /// never need a second preview or a conflicting whole-executor reborrow.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(
+        &self,
+        executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+        completion: RecoveredLifecycleSignAdapterCompletionAuthorityV1,
+    ) -> Result<
+        (
+            super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'executor>,
+            super::v2::RecoveredLifecycleNextVoteBodyAuthorityV1,
+        ),
+        String,
+    > {
+        let permit = self.recovered_lifecycle_next_vote_body_executor_permit(executor)?;
+        executor
+            .prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)
+            .map_err(|error| error.to_string())
     }
 
     /// Publish the live completion owner only from final runner activation.
@@ -20392,6 +21033,30 @@ impl ProductionV2Services {
         Ok(ownership)
     }
 
+    /// Transfer an inseparable set of fresh topology fanouts into one corridor cut.
+    ///
+    /// Every fallible bound, aggregate-capacity, and FIFO check runs while the
+    /// same mutex is held. A full corridor therefore returns the whole batch to
+    /// its semantic producer without admitting a control-only prefix.
+    fn enqueue_atomic_fanout_batch_while_guarded(
+        &self,
+        fanouts: Vec<PendingExactFanout>,
+        _permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            return Err(
+                "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+            );
+        }
+        let Some(batch) = pending.prepare_atomic_fanout_batch(fanouts)? else {
+            return Ok(ExactFanoutOwnership::SourceRetained);
+        };
+        pending.commit_atomic_fanout_batch(batch);
+        let _ = self.drive_pending_exact_output(&mut pending)?;
+        Ok(ExactFanoutOwnership::Owned)
+    }
+
     fn enqueue_owned_exact_reply_routes_while_guarded(
         &self,
         message: NetworkMessage,
@@ -21920,10 +22585,19 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn broadcast_consensus(
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<ConsensusBroadcastDisposition, Self::Error> {
+        if self.proposal_work_retired
+            && matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::Proposal(_)
+            )
+        {
+            return Err("Sumeragi v2 Proposal output is terminal after Decision".to_owned());
+        }
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
@@ -21947,14 +22621,6 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
             | wire::ConsensusMessageV2Payload::VrfReveal(_) => self.remote_voters(),
         };
-        let control = vec![Self::preencode_v2_network_message(message.clone())?];
-        let mut source_retained = self.enqueue_exact_fanout_while_guarded(
-            control,
-            control_targets,
-            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
-            operation.permit(),
-        )? == ExactFanoutOwnership::SourceRetained;
-
         if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {
             let manifest_hash = HashOf::new(&proposal.manifest);
             let chunks = self
@@ -21973,22 +22639,52 @@ impl V2EffectServices for ProductionV2Services {
                 .map(Self::preencode_v2_network_message)
                 .collect::<Result<Vec<_>, _>>()?;
             let committee = self.committee_for_round(proposal.round)?;
-            let first_fast_path_send = self.fast_path_proposals.insert(proposal.round);
+            let first_fast_path_send = !self.fast_path_proposals.contains(&proposal.round);
             let payload_targets = if first_fast_path_send {
                 self.remote_voters_for_indices(committee.set_a())?
             } else {
                 self.remote_voters()
             };
-            source_retained |= self.enqueue_exact_fanout_while_guarded(
+            let control = PendingExactFanout::claimed(
+                vec![Self::preencode_v2_network_message(message.clone())?],
+                control_targets,
+                ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            )?;
+            let chunks = PendingExactFanout::claimed(
                 encoded_chunks,
                 payload_targets,
                 ExactOutputRolloverClaim::PayloadChunks {
                     scope: self.exact_output_scope(),
                     manifest: proposal.manifest.clone(),
                 },
+            )?;
+            let ownership = self.enqueue_atomic_fanout_batch_while_guarded(
+                control.into_iter().chain(chunks).collect(),
                 operation.permit(),
-            )? == ExactFanoutOwnership::SourceRetained;
+            )?;
+            if ownership == ExactFanoutOwnership::Owned && first_fast_path_send {
+                self.fast_path_proposals.insert(proposal.round);
+            }
+            if ownership == ExactFanoutOwnership::SourceRetained {
+                iroha_logger::debug!(
+                    "deferred atomic Sumeragi v2 Proposal control/chunk fanout to reducer retransmission"
+                );
+            }
+            operation.complete();
+            return Ok(if ownership == ExactFanoutOwnership::SourceRetained {
+                ConsensusBroadcastDisposition::SourceRetained
+            } else {
+                ConsensusBroadcastDisposition::ExactServiceAccepted
+            });
         }
+
+        let control = vec![Self::preencode_v2_network_message(message)?];
+        let source_retained = self.enqueue_exact_fanout_while_guarded(
+            control,
+            control_targets,
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            operation.permit(),
+        )? == ExactFanoutOwnership::SourceRetained;
         if source_retained {
             iroha_logger::debug!("deferred Sumeragi v2 control fanout to reducer retransmission");
         }
@@ -23172,11 +23868,40 @@ pub(super) mod tests {
         identity: V2BodyStoreInstanceIdentity,
         class_capacity: usize,
     ) -> LifecyclePlannerIoFixture {
+        install_lifecycle_planner_io_for_validator_for_test(
+            services,
+            context,
+            0,
+            output_guard,
+            body_store,
+            identity,
+            class_capacity,
+        )
+    }
+
+    /// Install a moved exact store for a chosen local-validator service fixture.
+    pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
+        services: &mut ProductionV2Services,
+        context: wire::HeightContext,
+        local_validator: wire::ValidatorIndex,
+        output_guard: Arc<ConsensusOutputGuard>,
+        body_store: V2BodyStore,
+        identity: V2BodyStoreInstanceIdentity,
+        class_capacity: usize,
+    ) -> LifecyclePlannerIoFixture {
         assert!(class_capacity > 0, "test I/O capacity must be non-zero");
         assert!(
             body_store.instance_identity().same_instance(&identity),
             "the worker identity must come from the moved exact store"
         );
+        let local_index =
+            usize::try_from(local_validator).expect("test validator index fits usize");
+        let local_peer = context
+            .roster
+            .get(local_index)
+            .expect("test validator belongs to the service context")
+            .validator
+            .clone();
         let admission = Arc::new(
             V2IoAdmission::new(class_capacity, class_capacity)
                 .expect("bounded lifecycle planner I/O admission"),
@@ -23190,8 +23915,8 @@ pub(super) mod tests {
         );
         let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
         services.context = context.clone();
-        services.local_peer = context.roster[0].validator.clone();
-        services.local_validator = Some(0);
+        services.local_peer = local_peer;
+        services.local_validator = Some(local_validator);
         services.active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
         services.output_guard = output_guard;
         services.lifecycle_body_store_identity = Some(identity);
@@ -23206,6 +23931,19 @@ pub(super) mod tests {
             command_rx,
             _body_store: body_store,
         }
+    }
+
+    /// Install the exact private signer matching the test service's local peer.
+    pub(in crate::sumeragi) fn install_local_signer_for_test(
+        services: &mut ProductionV2Services,
+        key_pair: &KeyPair,
+    ) {
+        assert_eq!(
+            services.local_peer.public_key(),
+            key_pair.public_key(),
+            "test signer must match the already bound local service peer"
+        );
+        services.key_pair = key_pair.clone();
     }
 
     #[test]
@@ -24224,7 +24962,7 @@ pub(super) mod tests {
             &mut self,
             tag: EventTag,
             manifest: &wire::PayloadManifest,
-        ) -> Result<RuntimeEffectOwnership, String> {
+        ) -> Result<LocalProposalEffectOwnership, String> {
             let mut identity = Vec::from(b"body-pipeline".as_slice());
             identity.extend_from_slice(&manifest.round.encode());
             identity.extend_from_slice(&manifest.subject.encode());
@@ -24234,9 +24972,15 @@ pub(super) mod tests {
                 round: manifest.round,
                 subject: manifest.subject,
             };
-            bind_adapter_effect_batch_ownership(std::slice::from_ref(&effect), vec![ownership])?
-                .pop()
-                .ok_or_else(|| "saturated local proposal StoreBody binding was empty".to_owned())
+            let ownership = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&effect),
+                vec![ownership],
+            )?
+            .pop()
+            .ok_or_else(|| "saturated local proposal StoreBody binding was empty".to_owned())?;
+            LocalProposalEffectOwnership::for_test(ownership, &effect, manifest).ok_or_else(|| {
+                "saturated local proposal replay seal did not match its Store owner".to_owned()
+            })
         }
 
         fn reconcile_active_view_producer(
@@ -24496,6 +25240,14 @@ pub(super) mod tests {
         let proposal_owner = runtime
             .mint_local_proposal_effect_ownership(tag, &manifest)
             .expect("mint local proposal owner");
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let proposal_effect_owner = proposal_owner
+            .exact_store_task_ownership(&store, &manifest)
+            .expect("local proposal composite retains its exact Store owner");
         let fetch = AdapterEffect::FetchBody {
             tag,
             round: manifest.round,
@@ -24509,16 +25261,16 @@ pub(super) mod tests {
             .expect("derive positional fetch owner")
             .pop()
             .expect("one effect has one owner");
-        assert_eq!(fetch_owner, proposal_owner);
+        assert_eq!(fetch_owner, proposal_effect_owner);
 
         runtime
-            .set_external_lifecycle_owners(vec![proposal_owner.owner().clone()])
+            .set_external_lifecycle_owners(vec![proposal_effect_owner.owner().clone()])
             .expect("one external owner fits");
         assert_eq!(runtime.external_lifecycle_owners.len(), 1);
         assert!(
             runtime
                 .set_external_lifecycle_owners(vec![
-                    proposal_owner.owner().clone();
+                    proposal_effect_owner.owner().clone();
                     MAX_EFFECTS_PER_STEP + 2
                 ])
                 .is_err()
@@ -26065,6 +26817,119 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let fanout = || {
+            PendingExactFanout::new(
+                vec![lane_commit_qc_message(peer.clone())],
+                vec![peer.clone()],
+            )
+            .expect("one exact topology fanout")
+        };
+
+        let mut tight = PendingExactOutput::new(1, 1, 1, &[])
+            .expect("one individual fanout fits the exact corridor");
+        assert!(
+            tight
+                .prepare_atomic_fanout_batch(vec![fanout()])
+                .expect("one fanout is structurally exact")
+                .is_some(),
+            "each child fits independently"
+        );
+        tight.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
+        assert!(
+            tight
+                .prepare_atomic_fanout_batch(vec![fanout(), fanout()])
+                .expect("the pair is structurally exact")
+                .is_none(),
+            "aggregate demand must be checked before admitting either child"
+        );
+        assert!(tight.fanouts.is_empty());
+        assert!(tight.source_fifo_owners.is_empty());
+        assert!(tight.reservation_owner_counts.is_empty());
+        assert_eq!(tight.next_fanout_fifo_id, ExactFanoutFifoId::MAX);
+
+        let mut roomy = PendingExactOutput::new(2, 1, 1, &[])
+            .expect("the exact pair fits the aggregate corridor");
+        roomy.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
+        let plan = roomy
+            .prepare_atomic_fanout_batch(vec![fanout(), fanout()])
+            .expect("prepare the exact pair")
+            .expect("aggregate capacity retains both children");
+        assert!(
+            roomy.fanouts.is_empty(),
+            "preflight cannot publish the pair"
+        );
+        assert_eq!(roomy.next_fanout_fifo_id, ExactFanoutFifoId::MAX);
+        roomy.commit_atomic_fanout_batch(plan);
+        assert_eq!(roomy.fanouts.len(), 2);
+        assert_eq!(roomy.fanouts[0].fifo_id, Some(0));
+        assert_eq!(roomy.fanouts[1].fifo_id, Some(1));
+        assert_eq!(roomy.next_fanout_fifo_id, 2);
+        assert_eq!(roomy.ownership_units, 2);
+        assert_eq!(roomy.shared_ownership_units, 2);
+    }
+
+    #[test]
+    fn armed_recovered_proposal_output_reservation_fails_stop_on_drop() {
+        use super::super::v2_lifecycle_coordinator::{
+            RecoveredLifecycleSignClassV1, RecoveredLifecycleSignDispatchIdentityV1,
+        };
+
+        let (mut service, keys) = fixture_with_block_payload();
+        let (_, payload, mut proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = service.active_tag;
+        let request = super::super::v2::SignRequest::Proposal(proposal.clone());
+        let dispatch_key = RecoveredLifecycleSignDispatchIdentityV1::for_test(
+            92,
+            tag,
+            &request,
+            RecoveredLifecycleSignClassV1::ControlProposal,
+        )
+        .expect("mint exact recovered Proposal dispatch identity")
+        .key();
+        let proposer = usize::try_from(proposal.proposer).expect("fixture proposer index");
+        proposal.signature =
+            Signature::new(keys[proposer].private_key(), &proposal.signature_preimage())
+                .payload()
+                .to_vec();
+        set_local_validator(&mut service, &keys, proposal.proposer);
+        let directory = TempDir::new().expect("temporary armed Proposal output store");
+        let identity = V2BodyStore::open(directory.path(), service.context.clone())
+            .expect("open armed Proposal output store")
+            .instance_identity();
+        let authority =
+            super::super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::for_test(
+                &service.context,
+                dispatch_key,
+                tag,
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal)),
+                payload,
+                identity,
+                Arc::clone(&service.output_guard),
+            )
+            .expect("mint exact armed Proposal authority");
+        let operation = service
+            .output_guard
+            .begin_fail_stop_operation()
+            .expect("arm the exact Proposal output cut");
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("retain the exact Proposal corridor mutex");
+        drop(RecoveredLifecycleProposalExactOutputReservationV1 {
+            operation: Some(operation),
+            pending: Some(pending),
+            batch: None,
+            authority: Some(authority),
+        });
+        assert!(
+            service.output_guard.restart_required(),
+            "dropping an armed Proposal reservation must close process output"
+        );
+    }
+
+    #[test]
     fn actor_backpressure_cannot_change_returned_payload_identity() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
@@ -27046,6 +27911,430 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn durable_recovered_broadcast_capture_owns_and_retries_one_exact_fanout() {
+        let (mut service, _) = fixture();
+        service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let vote = routing_vote(&service, 0, wire::GlobalPhase::Commit);
+        let authority = super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignedBroadcastOutputAuthorityV1::for_test(
+            &service.context,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
+        );
+        let capture = service
+            .capture_recovered_lifecycle_signed_broadcast_refanout(authority)
+            .expect("exact durable Broadcast authority enters the service cut");
+        let RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(output) = capture else {
+            panic!("an empty exact-output corridor must reserve the durable Broadcast")
+        };
+        output.commit_after_publication();
+        assert!(
+            service
+                .has_pending_exact_output()
+                .expect("inspect the retained recovered Broadcast fanout")
+        );
+
+        service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        assert!(
+            !service
+                .retry_pending_exact_output()
+                .expect("the exact-output owner retries the durable Broadcast")
+        );
+        assert!(
+            !service
+                .has_pending_exact_output()
+                .expect("the admitted recovered Broadcast leaves no pending suffix")
+        );
+        assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn cold_durable_proposal_refanout_atomically_owns_control_and_chunks() {
+        let (mut service, keys) = fixture_with_block_payload();
+        let directory = TempDir::new().expect("temporary cold Proposal output store");
+        let body_store = V2BodyStore::open(directory.path(), service.context.clone())
+            .expect("open exact cold Proposal output store");
+        let body_store_identity = body_store.instance_identity();
+        let output_guard = ConsensusOutputGuard::isolated();
+        let (_, payload, mut proposal) = proposal_body_and_payload(&service.context, &keys);
+        let proposer = usize::try_from(proposal.proposer).expect("fixture proposer index");
+        proposal.signature =
+            Signature::new(keys[proposer].private_key(), &proposal.signature_preimage())
+                .payload()
+                .to_vec();
+        set_local_validator(&mut service, &keys, proposal.proposer);
+        let service_context = service.context.clone();
+        let _service_io = install_lifecycle_planner_io_for_validator_for_test(
+            &mut service,
+            service_context.clone(),
+            proposal.proposer,
+            Arc::clone(&output_guard),
+            body_store,
+            body_store_identity.clone(),
+            1,
+        );
+        install_local_signer_for_test(&mut service, &keys[proposer]);
+        service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+
+        let cold_output = super::super::v2::RecoveredLifecycleColdProposalOutputV1::for_test(
+            payload.clone(),
+            body_store_identity,
+        );
+        let authority = super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignedBroadcastOutputAuthorityV1::for_cold_proposal_test(
+            &service_context,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+                proposal.clone(),
+            )),
+            cold_output,
+        );
+        let capture = service
+            .capture_recovered_lifecycle_signed_broadcast_refanout(authority)
+            .expect("cold Proposal re-enters its exact body-store service");
+        let RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(output) = capture else {
+            panic!("empty aggregate corridor must reserve Proposal control and chunks")
+        };
+        output.commit_after_publication();
+        {
+            let pending = service
+                .lock_pending_exact_output()
+                .expect("inspect the atomic cold Proposal fanouts");
+            assert_eq!(pending.fanouts.len(), 2);
+            assert!(matches!(
+                &pending.fanouts[0].rollover_claim,
+                ExactOutputRolloverClaim::GlobalV2(_)
+            ));
+            assert!(matches!(
+                &pending.fanouts[1].rollover_claim,
+                ExactOutputRolloverClaim::PayloadChunks { .. }
+            ));
+            assert_eq!(pending.fanouts[0].fifo_id, Some(0));
+            assert_eq!(pending.fanouts[1].fifo_id, Some(1));
+        }
+        service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        assert!(
+            !service
+                .retry_pending_exact_output()
+                .expect("retry the atomic cold Proposal fanout")
+        );
+        assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
+        use super::super::v2_lifecycle_coordinator::{
+            RecoveredLifecycleSignClassV1, RecoveredLifecycleSignDispatchIdentityV1,
+        };
+
+        let (mut service, keys) = fixture_with_block_payload();
+        let directory = TempDir::new().expect("temporary recovered Proposal output store");
+        let body_store = V2BodyStore::open(directory.path(), service.context.clone())
+            .expect("open exact recovered Proposal output store");
+        let body_store_identity = body_store.instance_identity();
+        let output_guard = ConsensusOutputGuard::isolated();
+        let (_, payload, mut proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = service.active_tag;
+        let request = super::super::v2::SignRequest::Proposal(proposal.clone());
+        let dispatch_key = RecoveredLifecycleSignDispatchIdentityV1::for_test(
+            91,
+            tag,
+            &request,
+            RecoveredLifecycleSignClassV1::ControlProposal,
+        )
+        .expect("mint exact recovered Proposal dispatch identity")
+        .key();
+        let proposer = usize::try_from(proposal.proposer).expect("fixture proposer index");
+        proposal.signature =
+            Signature::new(keys[proposer].private_key(), &proposal.signature_preimage())
+                .payload()
+                .to_vec();
+        set_local_validator(&mut service, &keys, proposal.proposer);
+        let service_context = service.context.clone();
+        let service_io = install_lifecycle_planner_io_for_validator_for_test(
+            &mut service,
+            service_context.clone(),
+            proposal.proposer,
+            Arc::clone(&output_guard),
+            body_store,
+            body_store_identity.clone(),
+            1,
+        );
+        install_local_signer_for_test(&mut service, &keys[proposer]);
+        service
+            .set_exact_output_shared_unit_capacity_for_test(1)
+            .expect("install adversarial one-unit output corridor");
+
+        let authority_context = service_context;
+        let authority = |identity: V2BodyStoreInstanceIdentity,
+                         guard: Arc<ConsensusOutputGuard>| {
+            super::super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::for_test(
+                &authority_context,
+                dispatch_key,
+                tag,
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+                    proposal.clone(),
+                )),
+                payload.clone(),
+                identity,
+                guard,
+            )
+            .expect("fixture Proposal output authority is structurally exact")
+        };
+
+        let foreign_directory = TempDir::new().expect("temporary foreign Proposal output store");
+        let foreign_identity = V2BodyStore::open(foreign_directory.path(), service.context.clone())
+            .expect("open foreign Proposal output store")
+            .instance_identity();
+        assert!(
+            service
+                .capture_recovered_lifecycle_proposal_exact_output(authority(
+                    foreign_identity,
+                    Arc::clone(&output_guard),
+                ))
+                .is_err(),
+            "a same-context Proposal cannot cross a foreign body-store owner"
+        );
+        let foreign_guard = ConsensusOutputGuard::isolated();
+        assert!(
+            service
+                .capture_recovered_lifecycle_proposal_exact_output(authority(
+                    body_store_identity.clone(),
+                    foreign_guard,
+                ))
+                .is_err(),
+            "a same-store Proposal cannot cross a foreign output guard"
+        );
+
+        service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let blocking_vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
+        assert_eq!(
+            service
+                .broadcast_consensus(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(blocking_vote),
+                ))
+                .expect("retain one exact blocking owner"),
+            ConsensusBroadcastDisposition::ExactServiceAccepted
+        );
+        let before = {
+            let pending = service
+                .lock_pending_exact_output()
+                .expect("inspect the exact blocking owner");
+            (
+                pending.fanouts.len(),
+                pending.source_fifo_owners.clone(),
+                pending.reservation_owner_counts.clone(),
+                pending.ownership_units,
+                pending.shared_ownership_units,
+                pending.next_fanout_fifo_id,
+            )
+        };
+        let expected_batch_first_fifo = before.5;
+        let retry_authority = match service
+            .capture_recovered_lifecycle_proposal_exact_output(authority(
+                body_store_identity.clone(),
+                Arc::clone(&output_guard),
+            ))
+            .expect("capacity pressure is a typed Proposal retry")
+        {
+            RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority) => authority,
+            RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(_) => {
+                panic!("aggregate Proposal demand must not fit behind the blocking owner")
+            }
+        };
+        let after = {
+            let pending = service
+                .lock_pending_exact_output()
+                .expect("inspect unchanged pressured corridor");
+            (
+                pending.fanouts.len(),
+                pending.source_fifo_owners.clone(),
+                pending.reservation_owner_counts.clone(),
+                pending.ownership_units,
+                pending.shared_ownership_units,
+                pending.next_fanout_fifo_id,
+            )
+        };
+        assert_eq!(
+            after, before,
+            "capacity failure cannot install either fanout"
+        );
+        assert!(service.fast_path_proposals.is_empty());
+        assert!(!service.output_guard.restart_required());
+
+        service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        assert!(
+            !service
+                .retry_pending_exact_output()
+                .expect("drain the exact blocking owner")
+        );
+        let retry_authority = match service
+            .capture_recovered_lifecycle_proposal_exact_output(retry_authority)
+            .expect("the unchanged Proposal authority reserves after capacity recovers")
+        {
+            RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(reservation) => {
+                reservation.abort_before_publication()
+            }
+            RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(_) => {
+                panic!("empty corridor must reserve the aggregate Proposal output")
+            }
+        };
+        {
+            let pending = service
+                .lock_pending_exact_output()
+                .expect("typed abort leaves the corridor empty");
+            assert!(pending.fanouts.is_empty());
+            assert!(pending.source_fifo_owners.is_empty());
+            assert!(pending.reservation_owner_counts.is_empty());
+        }
+        match service
+            .capture_recovered_lifecycle_proposal_exact_output(retry_authority)
+            .expect("retry the exact authority after typed abort")
+        {
+            RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(reservation) => {
+                reservation.commit_after_publication();
+            }
+            RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(_) => {
+                panic!("empty corridor must retain the complete Proposal batch")
+            }
+        }
+        {
+            let pending = service
+                .lock_pending_exact_output()
+                .expect("inspect committed atomic Proposal batch");
+            let expected_peers = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
+            assert_eq!(pending.fanouts.len(), 2);
+            assert!(matches!(
+                &pending.fanouts[0].rollover_claim,
+                ExactOutputRolloverClaim::GlobalV2(_)
+            ));
+            assert!(matches!(
+                &pending.fanouts[1].rollover_claim,
+                ExactOutputRolloverClaim::PayloadChunks { .. }
+            ));
+            assert_eq!(
+                pending
+                    .fanouts
+                    .iter()
+                    .map(|fanout| fanout.fifo_id)
+                    .collect::<Vec<_>>(),
+                vec![
+                    Some(expected_batch_first_fifo),
+                    expected_batch_first_fifo.checked_add(1),
+                ],
+                "the inseparable control/chunk pair owns adjacent FIFO identities"
+            );
+            for fanout in &pending.fanouts {
+                assert_eq!(
+                    fanout.peers.iter().cloned().collect::<BTreeSet<_>>(),
+                    expected_peers,
+                    "restart Proposal dissemination targets every remote voter"
+                );
+            }
+            let control = &pending.fanouts[0];
+            let chunks = &pending.fanouts[1];
+            let [NetworkMessage::SumeragiBlock(control)] = control.messages.as_slice() else {
+                panic!("the first fanout must retain one Proposal control")
+            };
+            assert!(matches!(
+                control.as_message(),
+                BlockMessage::V2(message)
+                    if message.payload
+                        == wire::ConsensusMessageV2Payload::Proposal(proposal.clone())
+            ));
+            let manifest = payload.manifest();
+            let signer = &service.context.roster[proposer].validator;
+            let mut observed_chunk_indices = BTreeSet::new();
+            for encoded in &chunks.messages {
+                let NetworkMessage::SumeragiBlock(envelope) = encoded else {
+                    panic!("the second fanout must retain only payload chunks")
+                };
+                let BlockMessage::V2(message) = envelope.as_message() else {
+                    panic!("the recovered Proposal chunk changed protocol lane")
+                };
+                let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
+                    panic!("the recovered Proposal chunk fanout mixed message classes")
+                };
+                chunk
+                    .validate(&service.context, manifest)
+                    .expect("the retained chunk matches its canonical manifest");
+                let signature = Signature::try_from_bytes(&chunk.signature)
+                    .expect("the retained chunk signature is canonical");
+                signature
+                    .verify(
+                        signer.public_key(),
+                        &chunk
+                            .signature_preimage(&service.context, manifest)
+                            .expect("the retained chunk has a canonical signature preimage"),
+                    )
+                    .expect("the retained chunk is signed by the recovered proposer");
+                assert!(observed_chunk_indices.insert(chunk.index));
+            }
+            assert_eq!(
+                observed_chunk_indices.len(),
+                manifest.chunk_hashes.len(),
+                "the exact batch retains every canonical chunk once"
+            );
+            assert_eq!(
+                pending.ownership_units,
+                pending.reservation_owner_counts.values().sum::<usize>()
+            );
+            assert!(!pending.source_fifo_owners.is_empty());
+        }
+        assert!(
+            service.fast_path_proposals.is_empty(),
+            "recovered restart dissemination deliberately targets all voters without mutating live fast-path state"
+        );
+        service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        assert!(
+            !service
+                .retry_pending_exact_output()
+                .expect("drain both committed Proposal fanouts")
+        );
+        let retirement_authority = match service
+            .capture_recovered_lifecycle_proposal_exact_output(authority(
+                body_store_identity,
+                Arc::clone(&output_guard),
+            ))
+            .expect("reserve one final exact Proposal before Decision")
+        {
+            RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(reservation) => {
+                reservation.abort_before_publication()
+            }
+            RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(_) => {
+                panic!("empty corridor must reserve the pre-Decision Proposal")
+            }
+        };
+        service
+            .retire_candidate_work_after_decision(proposal.round, proposal.subject)
+            .expect("retire Proposal work at the durable Decision boundary");
+        assert!(
+            service
+                .capture_recovered_lifecycle_proposal_exact_output(retirement_authority)
+                .is_err(),
+            "a pre-Decision Proposal authority cannot cross candidate retirement"
+        );
+        assert!(!service.output_guard.restart_required());
+        service_io.detach(&mut service);
+    }
+
+    #[test]
     fn prepare_and_commit_votes_reach_every_remote_voter_across_views() {
         let (mut service, _) = fixture();
         let observations = install_consensus_route_observer(&mut service);
@@ -27221,6 +28510,24 @@ pub(super) mod tests {
             ConsensusBroadcastDisposition::SourceRetained,
             "a full same-class corridor must not masquerade as Proposal acceptance"
         );
+        {
+            let pending = service
+                .lock_pending_exact_output()
+                .expect("inspect atomic Proposal rejection");
+            assert_eq!(
+                pending.fanouts.len(),
+                1,
+                "capacity pressure must retain only the pre-existing owner"
+            );
+            assert!(pending.fanouts.iter().all(|fanout| !matches!(
+                &fanout.rollover_claim,
+                ExactOutputRolloverClaim::PayloadChunks { .. }
+            )));
+        }
+        assert!(
+            !service.fast_path_proposals.contains(&proposal.round),
+            "failed aggregate admission cannot consume the first-send marker"
+        );
         assert!(!service.output_guard.restart_required());
 
         service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
@@ -27240,6 +28547,7 @@ pub(super) mod tests {
                 .has_pending_exact_output()
                 .expect("accepted retransmission drains immediately")
         );
+        assert!(service.fast_path_proposals.contains(&proposal.round));
         assert!(!service.output_guard.restart_required());
     }
 

@@ -123,21 +123,25 @@ fn open_ingress_for_active_height(
     block_ingress: &FairV2Ingress,
     activation: Option<(PendingSuccessorActivation, wire::SumeragiV2Status)>,
 ) -> Result<(), V2RunnerError> {
-    if let Some((activation, _successor)) = activation.as_ref() {
-        activation.preflight_ingress_open()?;
-    }
-    let Some(ingress_permit) = output_guard.acquire() else {
+    let Some(ingress_activation) = output_guard.begin_fail_stop_operation() else {
         return Err(V2RunnerError::RestartRequired);
     };
+    if let Some((activation, successor)) = activation.as_ref() {
+        activation.preflight_ingress_open(successor)?;
+    }
     block_ingress.open().map_err(ingress_capacity_error)?;
-    ingress_ready.store(true, Ordering::Release);
     if let Some((activation, successor)) = activation
         && let Err(error) = activation.publish(successor)
     {
         close_ingress_for_rollover(ingress_ready, block_ingress);
         return Err(error);
     }
-    drop(ingress_permit);
+    // `FairV2Ingress::open` prepares the private queue, but callers cannot
+    // enqueue until this release store. Keep readiness false across the
+    // fallible, one-shot successor publication so no carrier can be accepted
+    // and then discarded if the final authority reauthentication fails.
+    ingress_ready.store(true, Ordering::Release);
+    ingress_activation.complete();
     Ok(())
 }
 

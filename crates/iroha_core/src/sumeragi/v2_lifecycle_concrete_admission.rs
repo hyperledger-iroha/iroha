@@ -1142,7 +1142,7 @@ mod tests {
         let outcome = coordinator.admit_concrete_adapter_effect(
             &mut registry,
             &fixture.verified,
-            effect,
+            effect.clone(),
             pending,
         );
         let AdapterEffectAdmissionTransaction::Failed {

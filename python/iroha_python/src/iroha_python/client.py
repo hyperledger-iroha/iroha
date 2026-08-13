@@ -14465,6 +14465,7 @@ class ToriiClient(
         signed_transaction: Any,
         *,
         headers: Optional[Mapping[str, str]] = None,
+        expected_receipt_signer: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Submit a caller-signed native transaction containing one order ISI."""
@@ -14472,7 +14473,12 @@ class ToriiClient(
         return self._submit_sorafs_orderbook_transaction(
             "/v1/sorafs/orderbook/orders",
             signed_transaction,
+            route="order",
             headers=headers,
+            expected_network_id=self._require_local_signing_context(
+                "submit_sorafs_orderbook_order"
+            ).network_id,
+            expected_receipt_signer=expected_receipt_signer,
             timeout=timeout,
             context="submit_sorafs_orderbook_order",
         )
@@ -14482,6 +14488,7 @@ class ToriiClient(
         signed_transaction: Any,
         *,
         headers: Optional[Mapping[str, str]] = None,
+        expected_receipt_signer: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Submit a caller-signed native transaction containing one cancel ISI."""
@@ -14489,7 +14496,12 @@ class ToriiClient(
         return self._submit_sorafs_orderbook_transaction(
             "/v1/sorafs/orderbook/cancel",
             signed_transaction,
+            route="cancel",
             headers=headers,
+            expected_network_id=self._require_local_signing_context(
+                "submit_sorafs_orderbook_cancel"
+            ).network_id,
+            expected_receipt_signer=expected_receipt_signer,
             timeout=timeout,
             context="submit_sorafs_orderbook_cancel",
         )
@@ -14499,6 +14511,7 @@ class ToriiClient(
         signed_transaction: Any,
         *,
         headers: Optional[Mapping[str, str]] = None,
+        expected_receipt_signer: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Submit a caller-signed native transaction containing one receipt ISI."""
@@ -14506,7 +14519,12 @@ class ToriiClient(
         return self._submit_sorafs_orderbook_transaction(
             "/v1/sorafs/orderbook/receipts",
             signed_transaction,
+            route="receipt",
             headers=headers,
+            expected_network_id=self._require_local_signing_context(
+                "submit_sorafs_orderbook_receipt"
+            ).network_id,
+            expected_receipt_signer=expected_receipt_signer,
             timeout=timeout,
             context="submit_sorafs_orderbook_receipt",
         )
@@ -14516,33 +14534,26 @@ class ToriiClient(
         path: str,
         signed_transaction: Any,
         *,
+        route: str,
         headers: Optional[Mapping[str, str]],
+        expected_network_id: Any,
+        expected_receipt_signer: Optional[str],
         timeout: Optional[float],
         context: str,
     ) -> Dict[str, Any]:
-        body = type(self)._sorafs_orderbook_transaction_bytes(
-            signed_transaction,
-            f"{context}.signed_transaction",
-        )
-        response = self._request(
-            "POST",
+        return super()._submit_sorafs_orderbook_transaction(
             path,
-            headers=type(self)._sorafs_orderbook_submit_headers(
-                headers=headers,
-                context=context,
-            ),
-            data=body,
+            signed_transaction,
+            route=route,
+            headers=headers,
+            expected_network_id=expected_network_id,
+            expected_receipt_signer=expected_receipt_signer,
+            context=context,
             timeout=timeout,
-            allow_retry=False,
         )
-        self._expect_status(response, (202,))
-        response_payload = type(self)._maybe_json(response)
-        if response_payload is None:
-            raise RuntimeError(f"{context} endpoint returned no payload")
-        return type(self)._parse_sorafs_orderbook_submission_receipt(
-            response_payload,
-            context=f"{context} response",
-        )
+
+    def _sorafs_orderbook_native_verifier(self) -> ModuleType:
+        return _require_crypto()
 
     def list_sorafs_orderbook_events(
         self,

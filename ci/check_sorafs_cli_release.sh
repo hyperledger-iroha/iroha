@@ -29,6 +29,8 @@ python3 -m pytest -q \
   scripts/tests/check_workflow_action_pins_test.py \
   scripts/tests/check_sorafs_release_automation_test.py \
   scripts/tests/check_sorafs_release_version_map_test.py \
+  scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py \
+  scripts/tests/sorafs_reference_sdk_supply_chain_test.py \
   scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/build_sorafs_reference_sdk_release_canary_test.py \
   scripts/tests/build_sorafs_foundational_prerequisite_test.py \
@@ -50,6 +52,7 @@ python3 -m pytest -q \
   scripts/tests/build_release_bundle_test.py \
   scripts/tests/build_release_image_test.py \
   scripts/tests/package_sorafs_validate_release_test.py \
+  scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pdp_provider_protocol_and_chain_repair_boundary_are_documented \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_validate_release_packager_rejects_symlink_stage_entries \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_cli_release_gate_runs_helper_adversarial_tests

@@ -298,7 +298,7 @@ pub(crate) fn check(
         let _authorized_effective_lock = checked_effective_lock.into_projection();
     }
     if accepts_facts(transition_facts(projection)) {
-        Some(CheckedProductionTransition { projection })
+        Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None
     }

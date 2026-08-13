@@ -24,8 +24,13 @@ use iroha_data_model::block::{
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
 
+use super::v2_chunks::encode_payload;
 use super::{
-    v2::{RecoveredValidationAuthority, RecoveredWalVoteSign},
+    v2::{
+        PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1,
+        RecoveredLifecycleNextVoteBodyAuthorityV1, RecoveredValidationAuthority,
+        RecoveredWalVoteSign,
+    },
     v2_apply::{V2ApplyError, V2ApplyService, VerifiedRecoveredFinalitySubject},
     v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId},
     v2_lifecycle_coordinator::{
@@ -1269,6 +1274,24 @@ impl RevalidatedV2BodyStore {
         self.0.instance_identity()
     }
 
+    /// Return whether this revalidated store owns the exact successful marker
+    /// needed to replace a recovered Decision Fetch with Apply.
+    pub(in crate::sumeragi) fn has_exact_recovered_decision_fetch_parent(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.0.has_exact_recovered_decision_fetch_parent(projection)
+    }
+
+    /// Return whether deterministic replay rejected the body named by a
+    /// recovered Decision.
+    pub(in crate::sumeragi) fn has_rejected_recovered_decision_body(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.0.has_rejected_recovered_decision_body(projection)
+    }
+
     /// Detach the exact successful body frame named by a recovered Decision.
     ///
     /// Every fallible context, marker, index, manifest, checksum, canonical
@@ -1288,7 +1311,7 @@ impl RevalidatedV2BodyStore {
                 ));
                 RecoveredDecisionApplyBodyCutError::UnrevalidatedMarkers
             })?;
-        let lifecycle_context = super::v2_lifecycle_projection::lifecycle_context(&self.0.context);
+        let lifecycle_context = super::v2_lifecycle_coordinator::lifecycle_context(&self.0.context);
         if !projection.belongs_to_context(lifecycle_context) {
             return Err(RecoveredDecisionApplyBodyCutError::ForeignContext);
         }
@@ -1411,6 +1434,73 @@ impl V2BodyStoreInstanceIdentity {
     }
 }
 
+/// Body-store-private one-shot permit for binding a cold adapter body lookup.
+///
+/// Construction stays in this module so another recovery path cannot bind a
+/// preview to a caller-selected process identity.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyColdPreviewBindPermitLinearityV1,
+}
+
+struct RecoveredLifecycleNextVoteBodyColdPreviewBindPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyColdPreviewBindPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyColdPreviewBindPermitLinearityV1,
+        }
+    }
+}
+
+/// Body-store-private one-shot permit for promoting an exact cold body join.
+///
+/// The adapter accepts this permit only beside the lookup and receipt selected
+/// from one already-revalidated store's private catalogs.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitLinearityV1,
+}
+
+struct RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitLinearityV1,
+        }
+    }
+}
+
+/// Body-store-private permit for retaining canonical cold Proposal output.
+///
+/// The same revalidated store that authenticates the next Vote constructs this
+/// permit, preventing another sibling from attaching caller-selected chunks or
+/// a foreign process identity to the durable Broadcast carrier.
+pub(in crate::sumeragi) struct RecoveredLifecycleColdProposalOutputMintPermitV1 {
+    _linearity: RecoveredLifecycleColdProposalOutputMintPermitLinearityV1,
+}
+
+struct RecoveredLifecycleColdProposalOutputMintPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleColdProposalOutputMintPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleColdProposalOutputMintPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleColdProposalOutputMintPermitLinearityV1,
+        }
+    }
+}
+
 /// Immutable post-finality deletion authority for one exact body directory.
 ///
 /// Construction consumes the height-local store only after a matching Kura
@@ -1464,6 +1554,81 @@ impl V2BodyStore {
     /// Project a comparison-only identity before moving this store to its worker.
     pub(crate) fn instance_identity(&self) -> V2BodyStoreInstanceIdentity {
         V2BodyStoreInstanceIdentity(Arc::clone(&self.identity))
+    }
+
+    /// Authenticate one cold reducer-produced next Vote against this store.
+    ///
+    /// The preview receives this store's process identity only through a
+    /// private affine permit. Exactly one semantically revalidated success
+    /// marker must match, and the validated, durable, and manifest catalogs
+    /// must all retain the same key and values. No receipt, lookup coordinate,
+    /// or raw catalog leaves this boundary.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn authenticate_recovered_lifecycle_next_vote_body(
+        &self,
+        preview: &mut PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1,
+    ) -> Result<RecoveredLifecycleNextVoteBodyAuthorityV1, V2BodyStoreError> {
+        self.ensure_recovered_markers_revalidated()?;
+        let body_store_identity = self.instance_identity();
+        let lookup = preview
+            .project_next_vote_body_lookup(
+                RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1::new(),
+                body_store_identity.clone(),
+            )
+            .map_err(|_| V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch)?;
+        if !lookup.matches_height_context(&self.context) {
+            return Err(V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch);
+        }
+        let mut exact = self
+            .validated
+            .values()
+            .filter(|validated| lookup.matches_validated_body(validated));
+        let validated = exact
+            .next()
+            .cloned()
+            .ok_or(V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch)?;
+        if exact.next().is_some() {
+            return Err(V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch);
+        }
+        let durable = validated.durable();
+        let key = (durable.round(), durable.subject());
+        let manifest = self
+            .manifests
+            .get(&key)
+            .ok_or(V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch)?;
+        if self.validated.get(&key) != Some(&validated)
+            || self.entries.get(&key) != Some(durable)
+            || self.rejected.contains_key(&key)
+            || HashOf::new(manifest) != durable.manifest_hash()
+            || !lookup.matches_recovered_body(manifest, durable)
+        {
+            return Err(V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch);
+        }
+        let canonical_wire = self.load_canonical_wire(durable)?;
+        let payload = encode_payload(
+            &self.context,
+            durable.round(),
+            durable.subject(),
+            &canonical_wire,
+        )
+        .map_err(|_| V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch)?;
+        if payload.manifest() != manifest {
+            return Err(V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch);
+        }
+        preview
+            .bind_cold_proposal_output(
+                RecoveredLifecycleColdProposalOutputMintPermitV1::new(),
+                payload,
+                body_store_identity.clone(),
+            )
+            .map_err(|_| V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch)?;
+        RecoveredLifecycleNextVoteBodyAuthorityV1::from_exact_revalidated_body_store(
+            RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1::new(),
+            lookup,
+            validated,
+            body_store_identity,
+        )
+        .ok_or(V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch)
     }
 
     /// Return whether this already-open store belongs to the exact context.
@@ -3110,6 +3275,9 @@ pub(crate) enum V2BodyStoreError {
     /// Runtime construction attempted to restore unvalidated local markers.
     #[error("recovered Sumeragi v2 validation markers require semantic replay")]
     UnrevalidatedValidationMarkers,
+    /// A cold next-Vote lookup did not name one exact revalidated body owner.
+    #[error("recovered Sumeragi v2 next-Vote body marker is not exact")]
+    RecoveredLifecycleNextVoteBodyMismatch,
     /// Context directory contains an unrecognized final entry.
     #[error("unexpected Sumeragi v2 body-store entry: {}", .0.display())]
     UnexpectedEntry(PathBuf),

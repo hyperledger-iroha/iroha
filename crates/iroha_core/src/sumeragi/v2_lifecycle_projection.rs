@@ -267,7 +267,7 @@ impl CertifiedServeTerminalSettlementErrorV1 {
         }
     }
 
-    fn restart_required(restart: CertifiedServeTerminalSettlementRestartV1) -> Self {
+    fn requiring_restart(restart: CertifiedServeTerminalSettlementRestartV1) -> Self {
         Self {
             kind: CertifiedServeTerminalSettlementErrorKindV1::RestartRequired(restart),
         }
@@ -410,7 +410,7 @@ impl CertifiedServeConcreteAdmissionV1 {
         }
     }
 
-    fn restart_required(
+    fn requiring_restart(
         failure: CertifiedServeConcreteAdmissionFailureV1,
         target: super::LifecycleIngressIoTargetSeal,
         publication: Option<DurableCertifiedServeAdmissionPublication>,
@@ -604,7 +604,7 @@ impl super::ProductionLifecycleOwnerV1 {
         authenticated: &AuthenticatedCertifiedBodyRequest,
     ) -> CertifiedServeConcreteAdmissionV1 {
         if self.coordinator.fault().is_some() || self.coordinator.ledger_store.is_none() {
-            return CertifiedServeConcreteAdmissionV1::restart_required(
+            return CertifiedServeConcreteAdmissionV1::requiring_restart(
                 CertifiedServeConcreteAdmissionFailureV1::Coordinator,
                 target,
                 None,
@@ -651,7 +651,7 @@ impl super::ProductionLifecycleOwnerV1 {
             }
             Err(CertifiedServePayloadRetentionError::PublicationAmbiguous(_error)) => {
                 self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
-                return CertifiedServeConcreteAdmissionV1::restart_required(
+                return CertifiedServeConcreteAdmissionV1::requiring_restart(
                     CertifiedServeConcreteAdmissionFailureV1::PayloadStore,
                     target,
                     None,
@@ -772,7 +772,7 @@ impl super::ProductionLifecycleOwnerV1 {
                 ),
             Err(CertifiedServeRegistryBatchPublicationError::Publication(_, batch)) => {
                 self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
-                CertifiedServeConcreteAdmissionV1::restart_required(
+                CertifiedServeConcreteAdmissionV1::requiring_restart(
                     CertifiedServeConcreteAdmissionFailureV1::Ledger,
                     target,
                     Some(publication),
@@ -801,7 +801,7 @@ impl super::ProductionLifecycleOwnerV1 {
             return CertifiedServeConcreteAdmissionV1::retryable(failure, decision, target);
         }
         self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
-        CertifiedServeConcreteAdmissionV1::restart_required(
+        CertifiedServeConcreteAdmissionV1::requiring_restart(
             if publication.can_abort_fresh_pending() {
                 CertifiedServeConcreteAdmissionFailureV1::PendingAbort
             } else {
@@ -1157,7 +1157,7 @@ impl super::ProductionLifecycleOwnerV1 {
         if self.coordinator.fault.is_none() {
             self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
         }
-        CertifiedServeTerminalSettlementErrorV1::restart_required(
+        CertifiedServeTerminalSettlementErrorV1::requiring_restart(
             CertifiedServeTerminalSettlementRestartV1 {
                 failure,
                 _lease: lease,
@@ -2148,7 +2148,7 @@ fn validate_round(
     Ok(())
 }
 
-pub(super) fn lifecycle_context(context: &wire::HeightContext) -> LifecycleContext {
+pub(in crate::sumeragi) fn lifecycle_context(context: &wire::HeightContext) -> LifecycleContext {
     LifecycleContext::new(digest_from_bytes(context.id().0.as_ref()), context.height)
 }
 

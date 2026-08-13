@@ -3425,7 +3425,7 @@ enum ExactApplyTaskRef<'task> {
     Recovered(&'task RecoveredDecisionApplyTaskV1),
 }
 
-impl ExactApplyTaskRef<'_> {
+impl<'task> ExactApplyTaskRef<'task> {
     const fn subject(self) -> wire::BlockSubject {
         match self {
             Self::Ordinary(task) => task.subject(),
@@ -3433,14 +3433,14 @@ impl ExactApplyTaskRef<'_> {
         }
     }
 
-    const fn certificate(self) -> &wire::QuorumCertificate {
+    const fn certificate(self) -> &'task wire::QuorumCertificate {
         match self {
             Self::Ordinary(task) => task.certificate(),
             Self::Recovered(task) => task.certificate(),
         }
     }
 
-    const fn validated_receipt(self) -> &ValidatedBodyReceipt {
+    const fn validated_receipt(self) -> &'task ValidatedBodyReceipt {
         match self {
             Self::Ordinary(task) => task.validated_receipt(),
             Self::Recovered(task) => task.validated_receipt(),

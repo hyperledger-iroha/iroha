@@ -211,7 +211,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     let foreign = open_recovered_startup_at_test_path(
         foreign_storage_root
             .join("wal")
-            .join(format!("{:020}.wal", context().height)),
+            .join(format!("{:020}.wal", context.height)),
     )
     .expect("open foreign-owner startup")
     .authenticate_final_wal_startup_authority()
@@ -258,7 +258,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     let wrong_policy = open_recovered_startup_at_test_path(
         wrong_storage_root
             .join("wal")
-            .join(format!("{:020}.wal", context().height)),
+            .join(format!("{:020}.wal", context.height)),
     )
     .expect("open wrong-policy startup")
     .authenticate_final_wal_startup_authority()
@@ -327,10 +327,8 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
             account.clone(),
         )
     };
-    let exact_state = lifecycle_factory_state_for_test(
-        Arc::clone(&kura),
-        recovered_context.network_id,
-    );
+    let exact_state =
+        lifecycle_factory_state_for_test(Arc::clone(&kura), recovered_context.network_id);
     assert!(
         try_lifecycle_factory_inputs_for_test(
             &authenticated,
@@ -344,10 +342,8 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
     );
 
     let foreign_kura = Kura::blank_kura_for_testing();
-    let foreign_state = lifecycle_factory_state_for_test(
-        Arc::clone(&foreign_kura),
-        recovered_context.network_id,
-    );
+    let foreign_state =
+        lifecycle_factory_state_for_test(Arc::clone(&foreign_kura), recovered_context.network_id);
     let foreign_kura_error = match try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage(),
@@ -376,10 +372,8 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         foreign_state_error.to_string(),
         "recovered lifecycle execution dependencies changed identity"
     );
-    let wrong_network_state = lifecycle_factory_state_for_test(
-        Arc::clone(&kura),
-        test_network_id(0xFE),
-    );
+    let wrong_network_state =
+        lifecycle_factory_state_for_test(Arc::clone(&kura), test_network_id(0xFE));
     let wrong_network_error = match try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage(),
@@ -463,10 +457,8 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         let kura = Kura::blank_kura_for_testing();
         let storage_root = kura.sumeragi_v2_storage_root();
         let (mut recovered_context, keys, proofs) = authenticated_context();
-        let state = lifecycle_factory_state_for_test(
-            Arc::clone(&kura),
-            recovered_context.network_id,
-        );
+        let state =
+            lifecycle_factory_state_for_test(Arc::clone(&kura), recovered_context.network_id);
         recovered_context.nexus_amx_context_hash =
             super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
         recovered_context.execution_policy_hash =
@@ -535,8 +527,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         let semantic_commitment = semantic_probe
             .revalidate_recovered_candidate(&recovered_context, &block)
             .expect("derive exact production marker-replay outcome");
-        let signature_policy =
-            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader;
+        let signature_policy = super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader;
         let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
             storage_root.join("bodies"),
             recovered_context.clone(),
@@ -548,23 +539,17 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             .expect("persist production marker-replay body");
         if persist_matching_outcome {
             body_store
-                .execute_durable_validation(
-                    durable.clone(),
-                    durable.manifest_hash(),
-                    |_| Ok::<_, String>(semantic_commitment),
-                )
+                .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                    Ok::<_, String>(semantic_commitment)
+                })
                 .expect("persist matching semantic marker");
         } else {
             body_store
-                .execute_durable_validation(
-                    durable.clone(),
-                    durable.manifest_hash(),
-                    |_| {
-                        Err::<wire::ExecutionCommitment, _>(
-                            "deliberately mismatched recovered rejection".to_owned(),
-                        )
-                    },
-                )
+                .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                    Err::<wire::ExecutionCommitment, _>(
+                        "deliberately mismatched recovered rejection".to_owned(),
+                    )
+                })
                 .expect("persist mismatched semantic marker");
         }
         let prepromoted_error = match body_store.into_quarantined_recovered_startup() {
@@ -963,9 +948,9 @@ fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
         .authenticate(&verified, &signer, &body_store)
         .expect("authenticate empty owner-seal payload recovery");
     let (_ledger_store, opened_ledger) =
-        super::super::v2_lifecycle_ledger::LifecycleLedgerStoreV1::open(
+        super::super::v2_lifecycle_coordinator::LifecycleLedgerStoreV1::open(
             ledger.path(),
-            super::super::v2_lifecycle_projection::lifecycle_context(verified.context()),
+            super::super::v2_lifecycle_coordinator::lifecycle_context(verified.context()),
         )
         .expect("open exact repaired owner-seal ledger");
     let mut recovery = AuthenticatedLifecycleRecoveryCut::empty_for_recovered_wal_test(

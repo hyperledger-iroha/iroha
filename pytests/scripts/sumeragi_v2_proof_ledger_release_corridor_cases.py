@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "d581ede7aed449c27f24b27be9ef88cc7ef640e3d5149ba9070fcc99d5cf6fed"
+        "d65eae4e039a59c9e48735b87d11c8e2c2646fc46947938066897825c2550978"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -574,10 +574,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             check=False,
         )
         assert direct.returncode != 0
-        assert (
+        expected_diagnostic = (
             "production release requires matching bootstrap path aliases"
-            in direct.stderr
+            if sealed_value == "0"
+            else "production release sealed child requires its authenticated Python"
         )
+        assert expected_diagnostic in direct.stderr
 
     assert "export IROHA_TEST_REQUIRE_NETWORK=1" in seed_source
     assert "export IROHA_TEST_NETWORK_START_ATTEMPTS=1" in seed_source
@@ -1832,9 +1834,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         in normalized_liveness_doc
     )
 
-    bootstrap_validation = release_source.index(
-        "validate_sumeragi_v2_release_bootstrap.py"
-    )
+    bootstrap_validation = release_source.index("for bootstrap_suffix in")
     required_network = release_source.index("export IROHA_TEST_REQUIRE_NETWORK=1")
     production_units = release_source.index("required_production_liveness_tests")
     taira_rust_contracts = release_source.index(
@@ -1862,14 +1862,33 @@ kura.claim_autonomous_lifecycle_process_generation(
     pr_fast_formal = release_source.index(
         "run_sumeragi_v2_harness.sh --unit", pr_branch
     )
+    formal_definition = release_source.index("run_release_formal_gate() {")
     formal_gate = release_source.index("run_sumeragi_v2_formal_release.sh")
+    formal_call = release_source.index("\n  run_release_formal_gate\n", formal_gate)
+    scaling_definition = release_source.index("run_release_scaling_gate() {")
+    scaling_gate = release_source.index(
+        "validate_multilane_scaling_evidence.py", scaling_definition
+    )
+    g12_soak = release_source.index(
+        'verify_release_identity "after G-12P two-hour rotating-validator fault soak"'
+    )
+    scaling_call = release_source.index("\n  run_release_scaling_gate\n", g12_soak)
     chaos_gate = release_source.index("run_sumeragi_v2_100k_chaos.sh")
     pre_soak_manifest = release_source.index("pre_soak_source_manifest_sha256")
     taira_run = release_source.index("run_taira_v2_24h_soak.sh")
     final_manifest = release_source.index("final_release_source_manifest_sha256")
     final_proof_check = release_source.index("final_proof_evidence_args=(")
+    sealed_child_call = release_source.index(
+        '"$release_child_bin/bash" '
+        '"$sealed_repo_root/scripts/run_sumeragi_v2_release_gates.sh" --release'
+    )
+    outer_child_status = release_source.index("  sealed_status=$?", sealed_child_call)
     aggregate_receipt = release_source.index(
-        "write_sumeragi_v2_release_receipt.py"
+        "write_sumeragi_v2_release_receipt.py", outer_child_status
+    )
+    protected_receipt_validation = release_source.index(
+        '"$release_bootstrap_evidence_dir/validate-receipt.py"',
+        aggregate_receipt,
     )
     assert (
         bootstrap_validation
@@ -1883,15 +1902,26 @@ kura.claim_autonomous_lifecycle_process_generation(
         < proof_fidelity_preflight
         < formal_launcher_preflight
         < taira_soak_preflight
+        < formal_definition
         < formal_gate
+        < formal_call
         < seed_matrix
         < chaos_gate
         < pre_soak_manifest
         < taira_run
         < final_manifest
         < final_proof_check
-        < aggregate_receipt
     )
+    assert (
+        sealed_child_call
+        < outer_child_status
+        < aggregate_receipt
+        < protected_receipt_validation
+    )
+    assert scaling_definition < scaling_gate < g12_soak < scaling_call < pr_branch
+    assert "run_release_scaling_and_formal_gates" not in release_source
+    assert release_source.count("\n  run_release_formal_gate\n") == 1
+    assert release_source.count("\n  run_release_scaling_gate\n") == 1
     assert seed_matrix < pr_branch < pr_fast_formal
     final_proof_region = release_source[final_proof_check:aggregate_receipt]
     assert "--release" in final_proof_region
@@ -2334,7 +2364,12 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "source_manifest_contract_tests=(" in release_source
     assert "pytests/scripts/workspace_source_manifest_test.py" in release_source
     assert "pytests/scripts/seal_workspace_source_test.py" in release_source
-    assert "did not run exactly 30 passing tests" in release_source
+    assert "did not run exactly 78 passing tests" in release_source
+    assert "preflight-source-seal pytest 78" in release_source
+    assert (
+        '"preflight-source-seal",\n                "pytest",\n                78,'
+        in receipt_source
+    )
     assert "seed_launcher_contract_tests=(" in release_source
     assert "did not run exactly 14 passing tests" in release_source
     for seed_contract in (
@@ -2349,14 +2384,14 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     assert "did not run exactly five passing tests" in release_source
     assert "preflight-chaos-launcher pytest 5" in release_source
-    assert "did not run exactly 68 passing tests" in release_source
-    assert "preflight-release-identity pytest 68" in release_source
-    assert "did not run exactly 257 passing tests" in release_source
-    assert "preflight-release-bootstrap pytest 257" in release_source
-    assert "did not run exactly 37 passing tests" in release_source
-    assert "preflight-release-bootstrap-validator pytest 37" in release_source
-    assert "did not run exactly 363 passing tests" in release_source
-    assert "preflight-release-receipt pytest 363" in release_source
+    assert "did not run exactly 75 passing tests" in release_source
+    assert "preflight-release-identity pytest 75" in release_source
+    assert "did not run exactly 258 passing tests" in release_source
+    assert "preflight-release-bootstrap pytest 258" in release_source
+    assert "did not run exactly 44 passing tests" in release_source
+    assert "preflight-release-bootstrap-validator pytest 44" in release_source
+    assert "did not run exactly 367 passing tests" in release_source
+    assert "preflight-release-receipt pytest 367" in release_source
     assert (
         "pytests/scripts/sumeragi_v2_release_receipt_components_test.py"
         in release_source
@@ -2375,19 +2410,19 @@ kura.claim_autonomous_lifecycle_process_generation(
         in receipt_source
     )
     assert (
-        '"preflight-release-identity",\n                "pytest",\n                68,'
+        '"preflight-release-identity",\n                "pytest",\n                75,'
         in receipt_source
     )
     assert (
-        '"preflight-release-bootstrap",\n                "pytest",\n                257,'
+        '"preflight-release-bootstrap",\n                "pytest",\n                258,'
         in receipt_source
     )
     assert (
-        '"preflight-release-bootstrap-validator",\n                "pytest",\n                37,'
+        '"preflight-release-bootstrap-validator",\n                "pytest",\n                44,'
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                363,'
+        '"preflight-release-receipt",\n                "pytest",\n                367,'
         in receipt_source
     )
     assert "did not run exactly 5291 passing tests" in release_source
@@ -2478,15 +2513,15 @@ kura.claim_autonomous_lifecycle_process_generation(
         '"preflight-proof-fidelity",\n                "pytest",\n                5291,'
         in receipt_source
     )
-    assert "did not run exactly 26 passing tests" in release_source
-    assert "preflight-formal-launcher pytest 26" in release_source
+    assert "did not run exactly 27 passing tests" in release_source
+    assert "preflight-formal-launcher pytest 27" in release_source
     assert (
-        "^26 passed in [0-9]+([.][0-9]+)?s( "
+        "^27 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
     assert (
-        '"preflight-formal-launcher",\n                "pytest",\n                26,'
+        '"preflight-formal-launcher",\n                "pytest",\n                27,'
         in receipt_source
     )
     assert "taira_release_ignored_contract_list=" in release_source
@@ -3441,7 +3476,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
             ),
             (
-                '    "df90ef7d94284bc805ff55ead6c6d938"',
+                '    "07da36398f20bccca0d535ebad55cf21"',
                 '    "00000000000000000000000000000000"',
                 "canonical production TSV SHA-256 must equal",
             ),

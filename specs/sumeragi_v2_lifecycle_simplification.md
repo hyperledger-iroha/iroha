@@ -1274,10 +1274,63 @@ can project only an adapter-private authority which verifies the exact local
 signature and previews `Signed` on cloned reducer/registry state. The preview
 classifies the closed result as the mandatory Broadcast alone, Broadcast plus
 one already-authorized Sign, or Broadcast plus Proposal's Prepare-intent WAL
-request. It cannot mutate the live adapter, append WAL, publish output,
-acknowledge the worker row, or disarm restart closure. The durable
-Sign-to-Broadcast transaction and Proposal's subsequent WAL-ahead repair cut
-remain TODOs at the runner boundary.
+request. For the Broadcast-only Vote/Timeout shape, the lifecycle owner retains
+the preview beside a staged registry/coordinator successor, fsyncs the Advanced
+Sign and live Broadcast as one LedgerV1 frame, then commits only assertion-only
+adapter and worker ownership moves. A separate typed refanout claims and
+reauthenticates that still-live Broadcast, reserves exact output, changes only
+volatile coordinator state to a recovery wait, and then enqueues. LedgerV1
+remains Ready so restart reconstructs the output debt, while the volatile wait
+prevents duplicate topology fanouts during the current process.
+Cold open rejoins that exact row pair to the recovered WAL request, verifies the
+signed consensus message against the recovered roster, replays `Signed` on the
+cold reducer, and installs only the authenticated Broadcast carrier. Proposal's
+body/chunk plus Prepare-intent-WAL cut remains a TODO at the runner boundary and
+may not enter the single-Broadcast transaction. The narrower
+Broadcast-plus-next-Sign path is sealed and durably publishable for the
+already-WAL-ahead Proposal shape.
+The reducer-derived next-Vote lookup is consumable only by the launched service
+and its exact executor/body-store instance; that join requires the same
+validated receipt, durable receipt, recovered manifest, execution commitment,
+and Proposal manifest hash. The adapter then consumes the move-only body owner
+while authenticating the latest matching WAL Vote. One opaque combined
+projection retains the inherited Broadcast candidate and a distinct executable
+WAL-derived Sign candidate. Staging allocates adjacent ordinals, preserves
+the Broadcast parent owner, assigns the next Sign a fresh causal owner, and
+checks exact Effect/Consensus capacity generations. The registry cannot split
+the pair before the staged rows match. One transaction reserves Proposal
+control plus chunks, fsyncs the exact two-child LedgerV1 successor, installs
+both registry carriers and the reducer state, parks only the Broadcast behind
+that process-local output owner, acknowledges the worker, and atomically
+enqueues the batch. The WAL-backed next Sign remains Ready; the persisted
+Broadcast remains the restart output-debt source. Proposal control and
+canonical chunks enter one aggregate exact-output reservation under one
+corridor mutex. An exact recovered Prepare vote uses the same adjacent two-child
+fsync without Proposal output authority: both its Prepare Broadcast and Commit
+Sign remain Ready, and the typed refanout driver must own the Broadcast first.
+The
+preflight charges frozen capacity once, plans both FIFO owners without mutation,
+and either commits both or returns the recovered move-only authority unchanged;
+ordinary live Proposal broadcast uses the same all-or-nothing planner before
+publishing its first-send marker. Recovered reservations additionally bind the
+exact body-store instance and output guard, and the recovered authority is
+available only for the already-WAL-ahead `BroadcastAndSign` shape. The initial
+`ProposalPrepareWal` shape remains inside the future WAL transaction. Restart
+retransmission targets the full remote voter set without mutating live fast-path
+state. Cold recovery now has a frame-bound classifier for exactly the
+Proposal-to-Prepare and Prepare-to-Commit two-child shapes, independent of
+unrelated later high-water, plus an affine WAL authority which replays the lost
+historical signature only when the reducer reproduces both durable children.
+The control-Proposal cold branch now reconstructs the canonical payload/chunks
+from the same revalidated body store, admits the linked Broadcast/Prepare-Sign
+pair into the complete census, and advances the adapter. The phase
+Prepare-to-Commit branch rejoins its retained Validate/body authority, admits
+the linked Broadcast/Commit-Sign pair, and advances the adapter to the exact
+Commit-signature fence. Refanout authenticates the full Ready census and
+recognizes either pair only through the Broadcast carrier's retained next
+address and digest; unrelated Ready work and an unrelated adjacent Sign stay
+independent. The initial Prepare-intent WAL crash cut remains a separate
+prerequisite.
 
 The phase-vote path carries the exact LedgerV1 store/frame through repair fsync
 and Sign installation. The control and Decision-Fetch paths each project one

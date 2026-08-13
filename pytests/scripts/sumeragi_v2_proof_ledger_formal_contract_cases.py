@@ -2838,6 +2838,43 @@ def _synthetic_trace_artifact_paths(module, path: Path):
 def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
     module = load_checker()
     snapshot = module._production_trace_extraction_source_snapshot()
+    operational = snapshot["operational_correspondence"]
+    assert operational["id"] == "first_release_transition_witness_v1"
+    assert operational["schema_version"] == 1
+    assert operational["authenticated"] is True
+    assert operational["model_source_sha256"] == hashlib.sha256(
+        (ROOT_DIR / "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla").read_bytes()
+    ).hexdigest()
+    assert len(operational["action_mappings"]) == 27
+    assert tuple(
+        mapping["model_action"] for mapping in operational["action_mappings"]
+    ) == module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS
+    assert {mapping["discriminant"] for mapping in operational["action_mappings"]} == set(
+        range(1, 28)
+    )
+    assert all(
+        mapping["shared_kernel_occurrences"] == 1
+        for mapping in operational["action_mappings"]
+    )
+    for field in (
+        "canonical_state_encoder",
+        "state_digest_builder",
+        "witness_builder",
+        "witness_authenticator",
+        "trace_replay_reducer",
+        "production_transition_checker",
+        "replay_classification",
+        "witness_schema_version",
+        "model_source_identity",
+        "shared_transition_kernel",
+        "shared_witness_binding_kernel",
+        "verus_witness_binding_kernel",
+        "verus_witness_theorem",
+    ):
+        assert operational[field] is not None, field
+    assert operational["digest_proof_boundary"] == (
+        "canonical-recomputation-plus-trusted-cryptography-contract"
+    )
     bindings = {
         binding["id"]: binding for binding in snapshot["source_bindings"]
     }
@@ -2871,6 +2908,10 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "recover_reservation_snapshot_parametric_noninterference",
     }
     assert all(binding["authenticated"] is True for binding in bindings.values())
+    assert all(
+        binding["operational_correspondence_id"] == operational["id"]
+        for binding in bindings.values()
+    )
     shared_identities = {
         (
             binding["carrier_identity_projection"]["path"],
@@ -2894,6 +2935,13 @@ def test_production_trace_certificate_extracts_every_required_action() -> None:
         for action in binding["model_actions"]
     }
     assert bound == set(module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS)
+    mappings = module.PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS
+    assert tuple(mapping[0] for mapping in mappings) == (
+        module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS
+    )
+    assert len({mapping[0] for mapping in mappings}) == 27
+    assert len({mapping[1] for mapping in mappings}) == 27
+    assert {mapping[2] for mapping in mappings} == set(range(1, 28))
 
 
 @pytest.mark.parametrize(
@@ -3278,19 +3326,78 @@ def test_production_trace_certificate_rejects_model_action_inventory_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = load_checker()
-    monkeypatch.setattr(
-        module,
-        "PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS",
-        module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS[:-1],
-    )
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            module,
+            "PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS",
+            module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS[:-1],
+        )
 
-    with pytest.raises(ValueError) as failure:
-        module._production_trace_extraction_source_snapshot()
+        with pytest.raises(ValueError) as failure:
+            module._production_trace_extraction_source_snapshot()
 
-    assert (
-        "required model actions differ from the multilane source-binding ledger"
-        in str(failure.value)
-    )
+        assert (
+            "required model actions differ from the multilane source-binding ledger"
+            in str(failure.value)
+        )
+
+    with monkeypatch.context() as scoped:
+        mappings = module.PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS
+        scoped.setattr(
+            module,
+            "PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS",
+            (*mappings[:-1], mappings[-2]),
+        )
+        with pytest.raises(ValueError) as failure:
+            module._production_trace_extraction_source_snapshot()
+        assert "duplicate model action" in str(failure.value)
+
+    original_reader = module._bounded_regular_file_bytes
+    operational_path = (
+        ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_core.rs"
+    ).resolve()
+
+    def mutated_operational_reader(path, *args, **kwargs):
+        payload = original_reader(path, *args, **kwargs)
+        if Path(path).resolve() != operational_path:
+            return payload
+        source = payload.decode("utf-8")
+        source = source.replace(
+            "fn production_in_flight_first_release_transition_witness_v1(",
+            "#[cfg(test)]\nfn production_in_flight_first_release_transition_witness_v1(",
+            1,
+        )
+        return source.encode("utf-8")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            module,
+            "_bounded_regular_file_bytes",
+            mutated_operational_reader,
+        )
+        with pytest.raises(ValueError) as failure:
+            module._production_trace_extraction_source_snapshot()
+        assert "transition_witness_v1 is test-only" in str(failure.value)
+
+    def unchecked_operational_reader(path, *args, **kwargs):
+        payload = original_reader(path, *args, **kwargs)
+        if Path(path).resolve() != operational_path:
+            return payload
+        return payload.replace(
+            b"checked.with_first_release_witness(witness)",
+            b"checked",
+            1,
+        )
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            module,
+            "_bounded_regular_file_bytes",
+            unchecked_operational_reader,
+        )
+        with pytest.raises(ValueError) as failure:
+            module._production_trace_extraction_source_snapshot()
+        assert "checked.with_first_release_witness(witness)" in str(failure.value)
 
 
 @pytest.mark.parametrize(

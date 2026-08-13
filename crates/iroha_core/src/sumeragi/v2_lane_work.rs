@@ -17951,7 +17951,7 @@ pub(super) mod tests {
     fn historical_merge_sidecar_requires_verified_finality_and_exact_context() {
         for finality_kind in [
             HistoricalSidecarFinality::Missing,
-            HistoricalSidecarFinality::WrongChain,
+            HistoricalSidecarFinality::WrongNetwork,
             HistoricalSidecarFinality::WrongRoster,
         ] {
             let mut fixture = historical_sidecar_server_fixture(finality_kind, None, false);

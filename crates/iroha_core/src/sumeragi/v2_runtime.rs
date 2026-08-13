@@ -72,7 +72,8 @@ use super::{
         RecoveredDecisionApplyAdapterCompletionAuthorityV1, RecoveredWalControlSign,
         RecoveredWalDecisionFetch, RecoveredWalFrameIdentity, RecoveredWalVoteSign,
         RegisteredPrepareInvalidBodyReportCapability, RegisteredPrepareValidateSignCapability,
-        SignRequest, SumeragiV2Adapter, classify_decided_local_proposal, proposal_is_safe_for_lock,
+        SignRequest, SumeragiV2Adapter, VerifiedHeightContext, classify_decided_local_proposal,
+        proposal_is_safe_for_lock,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
     v2_lifecycle_coordinator::{
@@ -81,6 +82,7 @@ use super::{
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
         LocalBodyPreIntentReplaySealV1, LocalValidateReplayEvidenceV1,
+        RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
         RecoveredWalVoteReplayEvidenceV1, RemoteProposalFetchReplayEvidenceV1,
     },
 };
@@ -2760,6 +2762,16 @@ pub(in crate::sumeragi) struct RecoveredWalCandidateProjectionPermit {
     _linearity: RecoveredWalCandidateProjectionLinearity,
 }
 
+/// Runtime-private one-shot permit for consuming one sealed follow-on WAL Vote.
+///
+/// The recovered seal owns the exact WAL identity, unsigned Sign effect, replay
+/// evidence, and validated body receipt. Only this runtime module can mint the
+/// permit which rejoins those constituents to their reconstructed pending
+/// binding and canonical standalone lifecycle admission.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1 {
+    _linearity: RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1,
+}
+
 /// Runtime-private one-shot permit for a recovered-frame pending owner.
 ///
 /// The constructor stays in this module. The recovered control token consumes
@@ -2818,6 +2830,38 @@ impl RecoveredWalCandidateProjectionPermit {
             _linearity: RecoveredWalCandidateProjectionLinearity,
         }
     }
+}
+
+struct RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1;
+
+impl Drop for RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1,
+        }
+    }
+}
+
+/// Consume one adapter-authenticated follow-on WAL Vote into its complete
+/// replay-authorized standalone Sign projection.
+///
+/// Failure returns the intact affine seal. No effect, pending owner, WAL
+/// identity, body receipt, or candidate constituent crosses this boundary.
+#[allow(clippy::result_large_err)]
+pub(in crate::sumeragi) fn project_recovered_lifecycle_next_wal_vote_candidate(
+    verified: &VerifiedHeightContext,
+    seal: RecoveredLifecycleNextWalVoteSealV1,
+) -> Result<RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1>
+{
+    seal.into_candidate_projection(
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1::new(),
+        RecoveredWalCandidateProjectionPermit::new(),
+        verified,
+    )
 }
 
 /// Consume one adapter-authenticated recovered control token into its exact
@@ -3271,6 +3315,30 @@ impl PendingRuntimeEffectBinding {
                 effect,
                 AdapterEffect::Sign {
                     request: SignRequest::Proposal(_) | SignRequest::TimeoutVote(_),
+                    ..
+                }
+            )
+        {
+            return None;
+        }
+        Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
+    }
+
+    /// Mint the unique pending owner of one adapter-sealed recovered phase Vote.
+    ///
+    /// The permit is minted only by the consuming runtime projection. A raw
+    /// locator or decoded replay envelope therefore cannot use this seam to
+    /// manufacture an independently executable Sign owner.
+    pub(in crate::sumeragi) fn from_exact_recovered_next_wal_vote(
+        _permit: &RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        wal_identity: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        if !wal_identity.is_exact()
+            || !matches!(
+                effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Vote(_),
                     ..
                 }
             )
@@ -21015,6 +21083,206 @@ mod tests {
             .clone()
     }
 
+    fn recovered_next_wal_vote_seal_fixture(
+        marker: u8,
+    ) -> (
+        VerifiedHeightContext,
+        RecoveredLifecycleNextWalVoteSealV1,
+        ValidatedBodyReceipt,
+        AdapterEffect,
+    ) {
+        let (context, keys) = authenticated_runtime_context();
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("next-WAL Vote fixture proof of possession")
+            })
+            .collect();
+        let verified =
+            VerifiedHeightContext::genesis(context.clone(), proofs).expect("verified fixture");
+        let manifest = runtime_manifest(&context, marker);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable);
+        let vote = wire::Vote {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: manifest.subject,
+            execution_commitment: validated.execution_commitment(),
+            signer: 0,
+            signature: Vec::new(),
+        };
+        let tag = EventTag::new(
+            context.height,
+            manifest.round.view,
+            Generation::new(u64::from(marker).saturating_add(1)),
+        );
+        let wal_identity = RecoveredWalFrameIdentity::for_test(
+            u64::from(marker).saturating_add(8),
+            u64::from(marker).saturating_add(9),
+            [marker; 32],
+        );
+        let effect = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote.clone()),
+        };
+        let seal = RecoveredLifecycleNextWalVoteSealV1::for_test(
+            wal_identity,
+            tag,
+            vote,
+            validated.clone(),
+        )
+        .expect("exact next-WAL Vote seal fixture");
+        (verified, seal, validated, effect)
+    }
+
+    #[test]
+    fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
+        let (verified, seal, _, _) = recovered_next_wal_vote_seal_fixture(0x31);
+        let projection = project_recovered_lifecycle_next_wal_vote_candidate(&verified, seal)
+            .expect("exact seal projects one canonical standalone Sign");
+        assert!(projection.is_exact(&verified));
+
+        let (verified, foreign_context_seal, _, _) = recovered_next_wal_vote_seal_fixture(0x32);
+        let (mut foreign_context, foreign_keys) = authenticated_runtime_context();
+        foreign_context.nexus_amx_context_hash = Hash::new(b"foreign next-WAL context");
+        let foreign_proofs = foreign_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("foreign context proof of possession")
+            })
+            .collect();
+        let foreign_verified = VerifiedHeightContext::genesis(foreign_context, foreign_proofs)
+            .expect("verified foreign context");
+        assert!(
+            project_recovered_lifecycle_next_wal_vote_candidate(
+                &foreign_verified,
+                foreign_context_seal,
+            )
+            .is_err(),
+            "a foreign verified height cannot authorize the retained Vote"
+        );
+
+        let (_, mut foreign_body_seal, validated, _) = recovered_next_wal_vote_seal_fixture(0x33);
+        let manifest = runtime_manifest(verified.context(), 0x34);
+        let foreign_durable = DurableBodyReceipt::for_test(
+            verified.context().id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        foreign_body_seal
+            .substitute_validated_for_test(ValidatedBodyReceipt::for_test(foreign_durable));
+        assert!(
+            project_recovered_lifecycle_next_wal_vote_candidate(&verified, foreign_body_seal)
+                .is_err(),
+            "a substituted body receipt cannot authorize the retained Vote"
+        );
+        drop(validated);
+
+        let (verified, mut foreign_wal_seal, _, _) = recovered_next_wal_vote_seal_fixture(0x35);
+        foreign_wal_seal.substitute_wal_identity_for_test(RecoveredWalFrameIdentity::for_test(
+            91, 92, [0xE1; 32],
+        ));
+        assert!(
+            project_recovered_lifecycle_next_wal_vote_candidate(&verified, foreign_wal_seal)
+                .is_err(),
+            "a substituted WAL identity cannot authorize canonical replay evidence"
+        );
+
+        let (verified, mut foreign_effect_seal, _, mut foreign_effect) =
+            recovered_next_wal_vote_seal_fixture(0x36);
+        let AdapterEffect::Sign {
+            request: SignRequest::Vote(vote),
+            ..
+        } = &mut foreign_effect
+        else {
+            unreachable!("fixture effect is a Vote Sign")
+        };
+        vote.subject = runtime_manifest(verified.context(), 0x37).subject;
+        foreign_effect_seal.substitute_effect_for_test(foreign_effect);
+        assert!(
+            project_recovered_lifecycle_next_wal_vote_candidate(&verified, foreign_effect_seal)
+                .is_err(),
+            "a substituted Sign effect cannot reuse the retained replay evidence"
+        );
+    }
+
+    #[test]
+    fn recovered_next_wal_vote_projection_surface_is_affine_and_closed() {
+        let replay = include_str!("v2_lifecycle_replay_authority.rs");
+        let projection = replay
+            .split_once(
+                "/// Complete replay-authorized projection of one recovered follow-on Vote Sign.",
+            )
+            .expect("locate next-WAL Vote projection")
+            .1
+            .split_once("/// Canonical structural evidence for a recovered ProposalIntent")
+            .expect("locate end of projection storage shape")
+            .0;
+        for retained in [
+            "seal: RecoveredLifecycleNextWalVoteSealV1",
+            "pending: PendingRuntimeEffectBinding",
+            "candidate: CandidateAdmission",
+        ] {
+            assert!(
+                projection.contains(retained),
+                "projection discarded executable authority: {retained}"
+            );
+        }
+        assert!(!projection.contains("derive(Clone"));
+
+        let implementation = replay
+            .split_once("impl RecoveredLifecycleNextWalVoteCandidateProjectionV1")
+            .expect("locate next-WAL Vote projection implementation")
+            .1
+            .split_once("fn recovered_next_wal_vote_candidate_shape_is_exact")
+            .expect("locate end of next-WAL Vote projection implementation")
+            .0;
+        for forbidden in [
+            "fn effect(",
+            "fn pending(",
+            "fn candidate(",
+            "fn key(",
+            "fn wal_identity(",
+            "fn validated(",
+            "fn into_parts(",
+            "fn into_candidate(",
+        ] {
+            assert!(
+                !implementation.contains(forbidden),
+                "projection exposed forbidden constituent API: {forbidden}"
+            );
+        }
+
+        let runtime = include_str!("v2_runtime.rs");
+        let permit = runtime
+            .split_once("struct RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1")
+            .expect("locate runtime-private projection permit")
+            .1
+            .split_once("/// Runtime-private one-shot permit for a recovered-frame pending owner")
+            .expect("locate end of runtime-private projection permit")
+            .0;
+        assert!(permit.contains("_linearity:"));
+        let seam = runtime
+            .split_once("fn project_recovered_lifecycle_next_wal_vote_candidate(")
+            .expect("locate consuming runtime projection seam")
+            .1
+            .split_once("/// Consume one adapter-authenticated recovered control token")
+            .expect("locate end of runtime projection seam")
+            .0;
+        assert!(seam.contains("seal: RecoveredLifecycleNextWalVoteSealV1"));
+        assert!(seam.contains("RecoveredLifecycleNextWalVoteSealV1"));
+        assert!(seam.contains("seal.into_candidate_projection("));
+    }
+
     #[test]
     fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
         let (context, keys) = authenticated_runtime_context();
@@ -24066,7 +24334,15 @@ mod tests {
         let ownership = runtime
             .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
             .expect("local Store aliases the active producer");
-        assert_eq!(ownership.owner(), reserved.owner());
+        let store_effect = AdapterEffect::StoreBody {
+            tag: initial,
+            round: proposal.manifest.round,
+            subject: proposal.manifest.subject,
+        };
+        let store_ownership = ownership
+            .exact_store_task_ownership(&store_effect, &proposal.manifest)
+            .expect("local proposal composite retains its exact Store owner");
+        assert_eq!(store_ownership.owner(), reserved.owner());
         assert!(runtime.active_view_producer.is_some());
 
         let deadline = start + Duration::from_secs(10);
@@ -24081,7 +24357,7 @@ mod tests {
         );
 
         runtime
-            .complete_active_view_producer_after_proposal_fanout(proposal.round, &ownership)
+            .complete_active_view_producer_after_proposal_fanout(proposal.round, &store_ownership)
             .expect("guarded fanout retires the inherited producer");
         assert!(runtime.active_view_producer.is_none());
         assert!(

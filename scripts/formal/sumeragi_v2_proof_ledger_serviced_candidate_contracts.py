@@ -286,6 +286,10 @@ def _serviced_candidate_production_source_fidelity_errors(
             "lifecycle_capacity: usize, ) -> Result<(Self, RestoredServicedCandidates)",
         ),
         ("store_open_with_capacities", "open_with_capacities"),
+        (
+            "store_open_with_storage_and_capacities",
+            "open_with_storage_and_capacities",
+        ),
         ("store_load", "load"),
         (
             "store_reserve_producer_continuation",
@@ -527,7 +531,7 @@ def _serviced_candidate_production_source_fidelity_errors(
         "open_wal_leaf": select_item(
             "safety_wal",
             "open_wal_leaf",
-            "existing_identity",
+            "let (created, flags, existing_identity) = match rustix::fs::statat(",
             "WAL-leaf open",
         ),
         "verify_leaf": select_item(
@@ -545,7 +549,7 @@ def _serviced_candidate_production_source_fidelity_errors(
         "adjacent_read": select_item(
             "safety_wal",
             "read_bounded",
-            "rustix::fs::statat(&self.directory.directory",
+            "let linked_before = match rustix::fs::statat(",
             "bounded adjacent read",
         ),
         "adjacent_publish": select_item(
@@ -743,12 +747,12 @@ if !opened.is_file()
     for key, suffix, description in (
         (
             "mint_serviced",
-            'BoundSafetyWalAdjacentEntry::from_wal(Arc::clone(&self.directory), &self.path, ".serviced-candidates")',
+            'BoundSafetyWalAdjacentEntry::from_wal(Arc::clone(&self.directory), &self.path, ".serviced-candidates",)',
             "serviced-candidate mint must select only its fixed sibling entry",
         ),
         (
             "mint_leader",
-            'BoundSafetyWalAdjacentEntry::from_wal(Arc::clone(&self.directory), &self.path, ".leader-wire-lifecycles")',
+            'BoundSafetyWalAdjacentEntry::from_wal(Arc::clone(&self.directory), &self.path, ".leader-wire-lifecycles",)',
             "leader-wire mint must select only its fixed sibling entry",
         ),
     ):
@@ -778,9 +782,10 @@ if !opened.is_file()
             errors,
         )
     for key in ("adjacent_read", "adjacent_publish", "adjacent_retire"):
+        item = safety_items.get(key)
         _require_rust_token_sequence(
             paths["safety_wal"],
-            safety_items[key],
+            item,
             """
 #[cfg(not(all(unix, not(target_os = "espidf"))))]
 {
@@ -788,9 +793,11 @@ if !opened.is_file()
             "non-Unix adjacent storage operation must remain an explicit fail-closed branch",
             errors,
         )
-        if "snapshot storage is unsupported on this platform" not in safety_items[key].source:
+        if item is None:
+            continue
+        if "snapshot storage is unsupported on this platform" not in item.source:
             errors.append(
-                f"{paths['safety_wal']}:{safety_items[key].line}: non-Unix adjacent "
+                f"{paths['safety_wal']}:{item.line}: non-Unix adjacent "
                 "storage operation cannot fall back to path I/O"
             )
     safety_open = safety_items["safety_open"]
@@ -905,12 +912,12 @@ if !opened.is_file()
     for item, sequence, description in (
         (
             production_store_open,
-            "Self::open_with_storage_and_capacities(storage, context_id, height, owner, record_capacity, record_capacity)",
+            "Self::open_with_storage_and_capacities(storage, context_id, height, owner, record_capacity, record_capacity,)",
             "production serviced-candidate open must consume the typed storage authority",
         ),
         (
             production_gate_open,
-            "Self::open_with_storage(storage, context_id, height, owner, roster, capacity, max_chunk_count, recovery_authority, producer_terminals, durable_bodies)",
+            "Self::open_with_storage(storage, context_id, height, owner, roster, capacity, max_chunk_count, recovery_authority, producer_terminals, durable_bodies,)",
             "production leader-wire gate open must consume the typed storage authority",
         ),
     ):
@@ -1084,7 +1091,7 @@ let record_capacity = lifecycle_capacity
     require_item_sequence(
         "store",
         store_items,
-        "store_open_with_capacities",
+        "store_open_with_storage_and_capacities",
         """
 if producer_continuation_capacity % SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE != 0 {
     return Err(
@@ -1098,7 +1105,7 @@ if producer_continuation_capacity % SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE != 0
     require_item_sequence(
         "store",
         store_items,
-        "store_open_with_capacities",
+        "store_open_with_storage_and_capacities",
         """
 let max_frame_bytes = FIXED_FRAME_HEADROOM_BYTES
     .checked_add(serviced_frame_bytes)

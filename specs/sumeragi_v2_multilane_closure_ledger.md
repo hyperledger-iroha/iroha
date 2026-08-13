@@ -57,19 +57,23 @@ not immutable-candidate execution or release receipts.
   corridor contains 88 legs. These are source counts, not claims that any suite
   was executed for this reconciliation.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
-  former lifecycle-cursor marker is gone: signed lifecycle bootstrap,
+  former lifecycle-cursor and SafetyWal filesystem-identity markers are gone:
+  the production runner now consumes a move-only authority minted from Kura's
+  retained opened store-root handle, with descriptor-relative no-follow
+  traversal and exact live-Kura identity rechecks. Signed lifecycle bootstrap,
   generation takeover, Queue snapshot recovery, local Kura rehydration, drain
   queue installation, and one-shot activation revalidation are present in the
-  production startup path. Generic consensus TODOs remain explicitly out of
-  scope below.
+  production startup path. Generic lifecycle-coordinator replacement TODOs
+  remain explicitly out of scope below.
 - The schema-5 formal registry names all 27 production actions, and the
   structural production-trace extraction reports no open action name. This is
   a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
   mutation, or cross-tool certificate is claimed.
-- Mutable source-budget checks report within their configured bounds. The
-  reviewed Rust include topology contains 37 parents and 226 direct entries;
+- Mutable source-budget checks do not currently report within their configured
+  bounds, so source-budget closure remains a release blocker. The
+  reviewed Rust include topology contains 37 parents and 229 direct entries;
   its canonical payload SHA-256 is
-  `6689c2ef7d6004b99a93afa73933bc2e01f5c9c7759e9c51786911363359ccdb`.
+  `82cbfd14b681b83e6d10ec5dfa8267e501812ce05415eb3401c935136f7d4647`.
   The SDK closure resolver and complete transitive manifests are mutable
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
@@ -1692,17 +1696,20 @@ The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
+`1d58304900412b6dc81e69d2d14b959a4cb0a9ec8f5f289849c3cf292764e2e4`
 and
-`79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`.
+`7a05657040a785023d22d91c0197eec20feb1b04e55030e2e0dea238f7af912c`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The live resolver fails closed on untracked reviewed inputs.
-Rust-owned fixture regeneration, both OpenAPI regenerations, JavaScript
-distribution regeneration, parity hashes, and one complete immutable-candidate
-harness replay are all still pending. Neither the checked-in bytes nor any
-mutable-development digest is a release receipt.
+The source-bound corridor now requires two disjoint Rust fixture generations,
+and both JavaScript SDK harnesses require two byte-identical complete
+distribution builds. The OpenAPI gate already regenerates and compares the
+exact five generated artifacts in two independent mirrors. Approved generator
+execution, parity hashes, and one complete immutable-candidate harness replay
+are still pending. Neither the checked-in bytes nor any mutable-development
+digest is a release receipt.
 
 **Closure condition.** Generate one canonical grouped fixture and negative
 corpus from Rust and consume the exact files in OpenAPI, Python, JavaScript,
@@ -1973,9 +1980,9 @@ records. The current grouped JSON and wire TSV SHA-256 values are
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
+`1d58304900412b6dc81e69d2d14b959a4cb0a9ec8f5f289849c3cf292764e2e4`
 and
-`79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`.
+`7a05657040a785023d22d91c0197eec20feb1b04e55030e2e0dea238f7af912c`.
 
 Those are development-source inventories, not SDK results. The JavaScript
 source and distribution trees match in this mutable checkout. The five OpenAPI
@@ -2050,8 +2057,12 @@ diagnostics must be added here or mapped to a ledger row before release.
 
 The current reviewed closure contains no explicit TODO in lane routing,
 autoscale, merge, reservation ownership, Native AMX, drain, retirement, or
-multilane diagnostics. Any newly introduced marker must be classified here
-before release. Generic consensus TODOs remain out of scope as recorded below.
+multilane diagnostics. The former SafetyWal filesystem-identity marker is now
+implemented and source-bound: production runner cutover mints the opened WAL
+directory authority from Kura's retained opened root, and the adapter consumes
+that move-only authority only for the exact Kura instance. Any newly introduced
+marker must be classified here before release. Generic lifecycle-coordinator
+TODOs remain out of scope as recorded below.
 
 ### Unresolved in scope without a TODO marker
 

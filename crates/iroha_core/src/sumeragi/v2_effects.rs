@@ -117,11 +117,12 @@ use super::{
     v2::{
         AdapterEffect, AdapterError, PreparedRecoveredDecisionApplyAdapterCompletionV1,
         RecoveredDecisionApplyAdapterCompletionAuthorityV1,
-        RecoveredDecisionApplyAdapterFinalityV1, SignRequest,
+        RecoveredDecisionApplyAdapterFinalityV1, RecoveredLifecycleNextVoteBodyAuthorityV1,
+        RecoveredLifecycleNextVoteBodyLookupV1, SignRequest,
     },
     v2_body_store::{
         BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt, V2BodyStore,
-        ValidatedBodyReceipt,
+        V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
     },
     v2_chunks::{V2ChunkError, encode_payload},
     v2_lifecycle_coordinator::{
@@ -2139,6 +2140,7 @@ impl CertifiedResponsePriorityCandidate {
 #[derive(Debug, PartialEq, Eq)]
 #[must_use = "this classification does not itself authorize selector debt"]
 #[cfg_attr(not(test), allow(dead_code))]
+#[allow(variant_size_differences)] // The move-only preflight branches retain their closed types.
 pub(crate) enum CertifiedResponsePriorityProbe {
     /// The response is provably outside claimed-response priority.
     DefinitelyNonPriority(CertifiedResponsePriorityNonPriority),
@@ -3791,9 +3793,15 @@ impl EffectRuntime for SerializedV2Runtime {
 }
 
 /// One-owner executor which binds runtime effects to production adapters.
+///
+/// The body-store instance marker is captured before the exact store moves to
+/// the production worker. It is comparison-only and lets lifecycle services
+/// prove that a body lookup is resolved by the same launched store instance,
+/// rather than another open of the same path or context.
 pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     runtime: R,
     output_guard: Arc<ConsensusOutputGuard>,
+    lifecycle_body_store_identity: Option<V2BodyStoreInstanceIdentity>,
     recovered_bodies: BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
         (wire::PayloadManifest, DurableBodyReceipt),
@@ -3855,6 +3863,99 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Ordinary dispatch debt parked behind one bounded typed control turn.
     parked_effect_batch: Option<RetainedEffectBatch>,
     fatal_reason: Option<String>,
+}
+
+/// Executor-private one-shot permit for minting an exact next-Vote body owner.
+///
+/// The opaque adapter authority accepts this permit only after the executor
+/// has rejoined its exact launched body-store marker and all three retained
+/// body catalogs. Sibling modules can name but cannot construct the permit.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyAuthorityMintPermitLinearityV1,
+}
+
+struct RecoveredLifecycleNextVoteBodyAuthorityMintPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyAuthorityMintPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyAuthorityMintPermitLinearityV1,
+        }
+    }
+}
+
+/// Executor-private one-shot permit for binding one preview to its store owner.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyPreviewBindPermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyPreviewBindPermitLinearityV1,
+}
+
+struct RecoveredLifecycleNextVoteBodyPreviewBindPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyPreviewBindPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyPreviewBindPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyPreviewBindPermitLinearityV1,
+        }
+    }
+}
+
+fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
+    lookup: RecoveredLifecycleNextVoteBodyLookupV1,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+    recovered_bodies: &BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        (wire::PayloadManifest, DurableBodyReceipt),
+    >,
+    durable_bodies: &BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
+    validated_bodies: &BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+) -> Result<RecoveredLifecycleNextVoteBodyAuthorityV1, EffectExecutorError> {
+    let mut exact = validated_bodies
+        .values()
+        .filter(|validated| lookup.matches_validated_body(validated));
+    let validated = exact.next().cloned().ok_or_else(|| {
+        EffectExecutorError::BodyStore(
+            "recovered next-Vote body lookup has no exact validated receipt".to_owned(),
+        )
+    })?;
+    if exact.next().is_some() {
+        return Err(EffectExecutorError::BodyStore(
+            "recovered next-Vote body lookup matched multiple validated receipts".to_owned(),
+        ));
+    }
+    let durable = validated.durable();
+    let key = (durable.round(), durable.subject());
+    let recovered = recovered_bodies.get(&key);
+    if validated_bodies.get(&key) != Some(&validated)
+        || durable_bodies.get(&key) != Some(durable)
+        || recovered.is_none_or(|(manifest, recovered_durable)| {
+            recovered_durable != durable
+                || HashOf::new(manifest) != durable.manifest_hash()
+                || !lookup.matches_recovered_body(manifest, recovered_durable)
+        })
+    {
+        return Err(EffectExecutorError::BodyStore(
+            "recovered next-Vote body lookup changed its exact body catalogs".to_owned(),
+        ));
+    }
+    RecoveredLifecycleNextVoteBodyAuthorityV1::from_exact_executor(
+        RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new(),
+        lookup,
+        validated,
+        body_store_identity,
+    )
+    .ok_or_else(|| {
+        EffectExecutorError::Contract(
+            "recovered next-Vote body authority failed its final exact join".to_owned(),
+        )
+    })
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
@@ -3936,6 +4037,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         config: EffectQueueConfig,
     ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
         let executor_output_guard = Arc::clone(&output_guard);
+        let lifecycle_body_store_identity = body_store.instance_identity();
         let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
             EffectExecutorError::FailClosed(
                 "process restart is required after a fatal consensus failure".to_owned(),
@@ -3977,9 +4079,99 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             executor_output_guard,
             config,
         )?;
+        executor.lifecycle_body_store_identity = Some(lifecycle_body_store_identity);
         executor.install_recovered_validation_catalog(recovered_validations)?;
         construction.complete();
         Ok((executor, body_store))
+    }
+
+    /// Preview one recovered signature and authenticate its next body in one borrow.
+    ///
+    /// The runtime borrow retained by the adapter preview is disjoint from the
+    /// body catalogs below. This single executor method therefore avoids a
+    /// second preview and never requires a caller to reborrow the whole
+    /// executor while the first preview is live.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body(
+        &mut self,
+        service: super::v2_worker::RecoveredLifecycleNextVoteBodyExecutorPermitV1,
+        completion: super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1,
+    ) -> Result<
+        (
+            super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'_>,
+            RecoveredLifecycleNextVoteBodyAuthorityV1,
+        ),
+        EffectExecutorError,
+    > {
+        let Self {
+            runtime,
+            output_guard,
+            lifecycle_body_store_identity,
+            recovered_bodies,
+            context,
+            requester,
+            durable_bodies,
+            validated_bodies,
+            fatal_reason,
+            ..
+        } = self;
+        if output_guard.restart_required() || fatal_reason.is_some() {
+            return Err(EffectExecutorError::Contract(
+                "recovered next-Vote body lookup belongs to a closed executor".to_owned(),
+            ));
+        }
+        let executor_body_store_identity =
+            lifecycle_body_store_identity.as_ref().ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "recovered next-Vote body lookup has no launched body-store owner".to_owned(),
+                )
+            })?;
+        let body_store_identity = service
+            .consume_for_executor(
+                context,
+                requester,
+                output_guard,
+                executor_body_store_identity,
+            )
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "recovered next-Vote body service permit changed its executor owner".to_owned(),
+                )
+            })?;
+        let mut preview = runtime
+            .prepare_recovered_lifecycle_sign_completion(completion)
+            .map_err(|error| EffectExecutorError::Runtime(error.to_string()))?;
+        let lookup = match preview.shape() {
+            super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign => preview
+                .project_broadcast_and_sign_body_lookup(
+                    RecoveredLifecycleNextVoteBodyPreviewBindPermitV1::new(),
+                    body_store_identity.clone(),
+                    Arc::clone(output_guard),
+                ),
+            super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal => preview
+                .prepare_proposal_prepare_wal_body_lookup(
+                    RecoveredLifecycleNextVoteBodyPreviewBindPermitV1::new(),
+                    body_store_identity.clone(),
+                    Arc::clone(output_guard),
+                ),
+            super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast => {
+                Err(super::v2::AdapterError::RecoveredLifecycleSignCompletionMismatch)
+            }
+        }
+        .map_err(|error| EffectExecutorError::Runtime(error.to_string()))?;
+        if !lookup.matches_height_context(context) {
+            return Err(EffectExecutorError::Contract(
+                "recovered next-Vote body lookup changed its height context".to_owned(),
+            ));
+        }
+        let body = authenticate_recovered_lifecycle_next_vote_body_catalogs(
+            lookup,
+            body_store_identity,
+            recovered_bodies,
+            durable_bodies,
+            validated_bodies,
+        )?;
+        Ok((preview, body))
     }
 
     /// Publish executor-retained owners and compare the retained-response
@@ -4400,6 +4592,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &self.context
     }
 
+    /// Rejoin one launched service to this executor's exact body-store owner.
+    ///
+    /// Context/root equality is insufficient: a reopened store at the same
+    /// path receives a different instance marker. The service must also share
+    /// this executor's requester identity and canonical fail-stop output gate.
+    pub(in crate::sumeragi) fn matches_recovered_lifecycle_body_service(
+        &self,
+        context: &wire::HeightContext,
+        requester: &PeerId,
+        output_guard: &Arc<ConsensusOutputGuard>,
+        body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> bool {
+        self.context == *context
+            && self.requester == *requester
+            && Arc::ptr_eq(&self.output_guard, output_guard)
+            && self
+                .lifecycle_body_store_identity
+                .as_ref()
+                .is_some_and(|executor_identity| {
+                    executor_identity.same_instance(body_store_identity)
+                })
+    }
+
     /// Validate that this executor can mint one ordinary ingress selector cut.
     ///
     /// The caller still needs a complete queue census and per-occurrence
@@ -4748,6 +4963,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(Self {
             runtime,
             output_guard,
+            lifecycle_body_store_identity: None,
             recovered_bodies,
             context,
             requester,
@@ -24435,7 +24651,7 @@ mod tests {
                 &winning_prepared,
                 owner_effect,
                 owner_pending,
-                &keys[0],
+                &fixture.validator_keys[0],
                 owner_directory.path(),
             );
         let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
@@ -24955,7 +25171,7 @@ mod tests {
             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(exact_response.clone()),
         );
         assert!(
-            executor.can_admit_network_message(&later_duplicate),
+            executor.retained_dispatch_allows_network_ingress(&later_duplicate.payload),
             "a later physical duplicate remains ordinarily drainable after owner retirement",
         );
         assert!(matches!(
@@ -26666,6 +26882,74 @@ mod tests {
         assert_eq!(services.apply_tasks[0].validated_receipt(), &validated);
         assert!(services.closed.is_empty());
         assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn recovered_next_vote_body_catalog_join_is_exact_and_store_bound() {
+        let fixture = Fixture::new();
+        let directory = TempDir::new().expect("body-store directory");
+        let mut store = V2BodyStore::open_with_policy(
+            directory.path(),
+            fixture.context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+        )
+        .expect("open body store");
+        let durable = store
+            .store(fixture.manifest.clone(), fixture.body.clone())
+            .expect("persist exact body");
+        let validated = store
+            .validate(&durable, |_| {
+                Ok::<_, &'static str>(fixture_execution_commitment())
+            })
+            .expect("persist exact validation marker");
+        let body_store_identity = store.instance_identity();
+        let recovered_bodies = store.recovery_catalog().expect("recovery catalog");
+        let durable_bodies = BTreeMap::from([(
+            (fixture.manifest.round, fixture.manifest.subject),
+            durable.clone(),
+        )]);
+        let validated_bodies = BTreeMap::from([(
+            (fixture.manifest.round, fixture.manifest.subject),
+            validated.clone(),
+        )]);
+        let vote = wire::Vote {
+            round: fixture.manifest.round,
+            proposal_round: fixture.manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: fixture.manifest.subject,
+            execution_commitment: validated.execution_commitment(),
+            signer: 0,
+            signature: Vec::new(),
+        };
+        let lookup = || {
+            RecoveredLifecycleNextVoteBodyLookupV1::for_test(
+                &vote,
+                Some(HashOf::new(&fixture.manifest)),
+            )
+            .expect("project exact next-Vote body lookup")
+        };
+
+        let authority = authenticate_recovered_lifecycle_next_vote_body_catalogs(
+            lookup(),
+            body_store_identity.clone(),
+            &recovered_bodies,
+            &durable_bodies,
+            &validated_bodies,
+        )
+        .expect("exact catalogs mint the opaque body authority");
+        assert!(authority.exactly_matches_for_test(&validated, &body_store_identity));
+
+        assert!(
+            authenticate_recovered_lifecycle_next_vote_body_catalogs(
+                lookup(),
+                body_store_identity,
+                &recovered_bodies,
+                &BTreeMap::new(),
+                &validated_bodies,
+            )
+            .is_err(),
+            "a missing durable owner must reject the otherwise exact body lookup"
+        );
     }
 
     include!("tests/v2_effects_kura_tip_replay.rs");

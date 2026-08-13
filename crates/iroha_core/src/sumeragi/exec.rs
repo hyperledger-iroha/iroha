@@ -1147,7 +1147,6 @@ mod tests {
             &entrypoints,
             &source_ids,
         );
-        let network_id = *network_id;
         let coordinator_route = RoutingDecision::new(
             coordinator.proposal.descriptor.lane_id,
             coordinator.proposal.descriptor.dataspace_id,

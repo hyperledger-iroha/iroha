@@ -64,7 +64,7 @@ impl RecoveredRecord {
     }
 
     /// Match an append acknowledgement to this exact retained frame.
-    pub(crate) const fn exactly_matches_receipt(&self, receipt: SafetyWalAppendReceipt) -> bool {
+    pub(crate) fn exactly_matches_receipt(&self, receipt: SafetyWalAppendReceipt) -> bool {
         self.sequence == receipt.sequence && self.frame_hash == receipt.frame_hash
     }
 }
@@ -173,9 +173,6 @@ pub(crate) enum SafetyWalError {
 /// The raw directory handle and canonical path never cross this module. Fixed
 /// sibling capabilities below expose only bounded read, publication, and
 /// retirement operations for their statically derived entry names.
-// TODO: Mint this capability from an opened Kura-root directory handle at the
-// production runner cutover so pre-open ancestor substitution is authenticated
-// physically rather than accepted as part of the initial lexical path.
 #[derive(Debug)]
 struct BoundSafetyWalDirectory {
     expected_path: PathBuf,
@@ -273,6 +270,43 @@ impl SafetyWalLeaderWireStoreAuthority {
 }
 
 impl BoundSafetyWalDirectory {
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn from_kura_authority(
+        kura: &crate::kura::Kura,
+        authority: crate::kura::KuraSafetyWalDirectoryAuthority,
+    ) -> io::Result<Self> {
+        if !authority.matches_kura(kura) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "safety-WAL authority belongs to a different Kura instance",
+            ));
+        }
+        let (expected_path, directory) = authority.into_opened_directory_for(kura).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "consumed safety-WAL authority changed its Kura identity",
+            )
+        })?;
+        let canonical_path = fs::canonicalize(&expected_path)?;
+        let lexical_metadata = direct_lexical_directory_metadata(&expected_path)?;
+        let metadata = directory.metadata()?;
+        let identity = unix_file_identity(&metadata);
+        if !metadata.is_dir() || unix_file_identity(&lexical_metadata) != identity
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Kura-bound safety-WAL directory changed before WAL open",
+            ));
+        }
+        Ok(Self {
+            expected_path,
+            canonical_path,
+            directory,
+            identity,
+        })
+    }
+
+    #[cfg(test)]
     fn bind(expected_path: &Path) -> io::Result<Self> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
@@ -953,6 +987,7 @@ impl BoundSafetyWalAdjacentEntry {
     }
 }
 
+#[cfg(test)]
 fn safety_wal_parent(path: &Path) -> io::Result<PathBuf> {
     if path.file_name().is_none() {
         return Err(io::Error::new(
@@ -1116,10 +1151,63 @@ pub(crate) struct SafetyWal {
 }
 
 impl SafetyWal {
+    /// Open the production WAL through one descriptor-relative Kura authority.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn open_with_kura_authority(
+        kura: &crate::kura::Kura,
+        authority: crate::kura::KuraSafetyWalDirectoryAuthority,
+        wal_name: impl Into<OsString>,
+        protocol_version: u16,
+        network_id: [u8; HASH_LEN],
+        key_hash: [u8; HASH_LEN],
+    ) -> Result<Self, SafetyWalError> {
+        let wal_name = wal_name.into();
+        let mut components = Path::new(&wal_name).components();
+        if !matches!(components.next(), Some(Component::Normal(_)))
+            || components.next().is_some()
+        {
+            return Err(SafetyWalError::Io {
+                path: PathBuf::from(wal_name),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Kura-bound safety WAL name must be one nonempty path component",
+                ),
+            });
+        }
+        let directory = Arc::new(
+            BoundSafetyWalDirectory::from_kura_authority(kura, authority).map_err(|source| {
+                SafetyWalError::Io {
+                    path: kura.sumeragi_v2_storage_root().join("wal"),
+                    source,
+                }
+            })?,
+        );
+        let path = directory.expected_path.join(&wal_name);
+        Self::open_bound(path, directory, wal_name, protocol_version, network_id, key_hash)
+    }
+
+    /// Reject production opening where descriptor-relative ancestry is unavailable.
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    pub(crate) fn open_with_kura_authority(
+        kura: &crate::kura::Kura,
+        _authority: crate::kura::KuraSafetyWalDirectoryAuthority,
+        wal_name: impl Into<OsString>,
+        _protocol_version: u16,
+        _network_id: [u8; HASH_LEN],
+        _key_hash: [u8; HASH_LEN],
+    ) -> Result<Self, SafetyWalError> {
+        let path = kura.sumeragi_v2_storage_root().join("wal").join(wal_name.into());
+        Err(SafetyWalError::UnsupportedStorageBinding {
+            path,
+            reason: "descriptor-relative Kura-root storage is unavailable",
+        })
+    }
+
     /// Open or create a WAL bound to the supplied network, protocol, and consensus-key hashes.
     ///
     /// An incomplete final frame is treated as an unacknowledged crash tail and truncated. Any
     /// earlier structural or hash-chain failure is returned as an error.
+    #[cfg(test)]
     pub(crate) fn open(
         path: impl Into<PathBuf>,
         protocol_version: u16,
@@ -1152,6 +1240,19 @@ impl SafetyWal {
             .file_name()
             .expect("safety_wal_parent rejected a missing file name")
             .to_os_string();
+
+        Self::open_bound(path, directory, wal_name, protocol_version, network_id, key_hash)
+    }
+
+    fn open_bound(
+        path: PathBuf,
+        directory: Arc<BoundSafetyWalDirectory>,
+        wal_name: OsString,
+        protocol_version: u16,
+        network_id: [u8; HASH_LEN],
+        key_hash: [u8; HASH_LEN],
+    ) -> Result<Self, SafetyWalError> {
+        let parent = directory.expected_path.clone();
 
         let identity = WalFileIdentity::new(protocol_version, network_id, key_hash);
         let (mut file, created) =
@@ -1643,6 +1744,38 @@ mod tests {
 
         assert!(wal.matches_path(&path));
         assert!(!wal.matches_path(&dir.path().join("foreign.wal")));
+
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let kura = crate::kura::Kura::blank_kura_for_testing();
+            let foreign_kura = crate::kura::Kura::blank_kura_for_testing();
+            let rejected = SafetyWal::open_with_kura_authority(
+                foreign_kura.as_ref(),
+                kura.mint_safety_wal_directory_authority()
+                    .expect("mint foreign-bound authority"),
+                "00000000000000000001.wal",
+                PROTOCOL,
+                NETWORK_ID,
+                KEY,
+            );
+            assert!(matches!(rejected, Err(SafetyWalError::Io { .. })));
+
+            let expected = kura
+                .sumeragi_v2_storage_root()
+                .join("wal")
+                .join("00000000000000000001.wal");
+            let bound = SafetyWal::open_with_kura_authority(
+                kura.as_ref(),
+                kura.mint_safety_wal_directory_authority()
+                    .expect("mint exact Kura authority"),
+                "00000000000000000001.wal",
+                PROTOCOL,
+                NETWORK_ID,
+                KEY,
+            )
+            .expect("open Kura-bound WAL");
+            assert!(bound.matches_path(&expected));
+        }
     }
 
     #[cfg(all(unix, not(target_os = "espidf")))]

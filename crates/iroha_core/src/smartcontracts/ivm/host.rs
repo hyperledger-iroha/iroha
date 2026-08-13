@@ -24635,6 +24635,7 @@ seiyaku Callee {
             .asset(asset_id)
             .expect(expected)
             .value()
+            .as_ref()
             .clone()
     }
 
@@ -24673,7 +24674,7 @@ seiyaku Callee {
             &merchant_asset_id,
             "merchant asset exists after first payout",
         );
-        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance, Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -24718,9 +24719,9 @@ seiyaku Callee {
             &replacement_asset_id,
             "replacement asset exists",
         );
-        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
-        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
-        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
+        assert_eq!(authority_balance, Quantity::from(2_u32));
+        assert_eq!(merchant_balance, Quantity::from(2_u32));
+        assert_eq!(replacement_balance, Quantity::from(1_u32));
     }
 
     fn assert_alias_single_payment(
@@ -24752,8 +24753,8 @@ seiyaku Callee {
             );
             let merchant_balance =
                 alias_asset_balance(&view, &merchant_asset_id, &case.messages[1]);
-            assert_eq!(authority_balance.as_ref(), &Quantity::from(3_u32));
-            assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+            assert_eq!(authority_balance, Quantity::from(3_u32));
+            assert_eq!(merchant_balance, Quantity::from(2_u32));
             return;
         }
 
@@ -24777,7 +24778,7 @@ seiyaku Callee {
         let view = fixture.state.view();
         let authority_balance =
             alias_asset_balance(&view, &fixture.source_asset_id, "authority asset remains");
-        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
+        assert_eq!(authority_balance, Quantity::from(5_u32));
         if let Some(merchant_message) = case.messages.get(1) {
             let merchant_asset_id = AssetId::of(
                 fixture.asset_definition_id.clone(),

@@ -52,6 +52,7 @@ on:
       - "java/norito_java/**"
       - "csharp/**"
       - "fixtures/sorafs_manifest/appeal_finance/**"
+      - "fixtures/sorafs_manifest/**"
       - "fixtures/sorafs_manifest/reference_sdk/**"
       - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
       - "fixtures/sorafs_orchestrator/multi_peer_parity_v1/**"
