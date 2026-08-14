@@ -16,7 +16,9 @@ fixtures, and governance templates.
 
 | Term | Description | References |
 |------|-------------|------------|
-| Dataspace | Execution context/Lane that runs a governance-approved contract set. | `nexus.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
+| Dataspace | Physical security, execution, validator/server, and storage boundary. A dataspace owns one or more lanes; a workload or namespace name does not create a dataspace. | `nexus.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
+| Lane | Logical execution and routing stream inside exactly one dataspace. Multiple lanes may share the same physical dataspace. | `nexus_lanes.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
+| Namespace | Independently governed logical naming scope with an explicit home-dataspace binding. Its identity remains separate from both `DataSpaceId` and `LaneId`, even when aliases match. | `nexus.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
 | UAID | `UniversalAccountId` (blake2b-32 hash) used to anchor cross-dataspace permissions. | `crates/iroha_data_model/src/nexus/manifest.rs` |
 | Capability Manifest | `AssetPermissionManifest` describing deterministic allow/deny rules for a UAID/dataspace pair (deny wins). | Fixture `fixtures/space_directory/capability/*.manifest.json` |
 | Dataspace Profile | Governance + DA metadata published alongside manifests so operators can reconstruct validator sets, composability whitelists, and audit hooks. | Fixture `fixtures/space_directory/profile/cbdc_lane_profile.json` |

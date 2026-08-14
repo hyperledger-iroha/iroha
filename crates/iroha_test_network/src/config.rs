@@ -1196,9 +1196,11 @@ fn install_preexec_lane_manifests(
             &nexus.governance,
             &nexus.registry,
         );
-        registry.validate_active_coverage().map_err(|error| {
-            eyre!("validate lane manifest registry for genesis pre-execution: {error}")
-        })?;
+        registry
+            .validate_active_coverage_for_catalog(&nexus.lane_catalog)
+            .map_err(|error| {
+                eyre!("validate lane manifest registry for genesis pre-execution: {error}")
+            })?;
         registry
     } else {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)

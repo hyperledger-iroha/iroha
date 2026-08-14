@@ -1097,6 +1097,42 @@ mod tests {
         );
     }
     #[test]
+    fn timeout_certificate_rejects_conflicting_prepare_execution_at_one_view() {
+        let context = context(&[1, 1, 1, 1]);
+        let left = qc(&context, 1, GlobalPhase::Prepare, vec![0, 1, 2]);
+        let mut right = left.clone();
+        right.execution_commitment = execution_commitment(0x7E);
+        right.aggregate_signature = vec![0x7E; 48];
+        let mut groups = vec![
+            TimeoutVoteGroup {
+                highest_prepare_qc: Some(left),
+                signers: vec![0],
+                aggregate_signature: vec![1],
+            },
+            TimeoutVoteGroup {
+                highest_prepare_qc: Some(right),
+                signers: vec![1, 2],
+                aggregate_signature: vec![2],
+            },
+        ];
+        groups.sort_by_key(|group| {
+            group
+                .highest_prepare_qc
+                .as_ref()
+                .map(QuorumCertificate::as_ref)
+        });
+        let certificate = TimeoutCertificate {
+            round: round(&context, 2),
+            groups,
+        };
+
+        assert_eq!(
+            certificate.validate(&context),
+            Err(ValidationError::ConflictingHighestPrepare)
+        );
+    }
+
+    #[test]
     fn qc_reference_and_timeout_preimage_ignore_equivalent_quorum_subsets() {
         let context = context(&[1, 1, 1, 1]);
         let left = qc(&context, 1, GlobalPhase::Prepare, vec![0, 1, 2]);

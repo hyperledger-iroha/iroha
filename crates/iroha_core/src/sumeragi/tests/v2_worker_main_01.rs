@@ -1951,8 +1951,8 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
     let service_io = install_lifecycle_planner_io_for_validator_for_test(
         &mut service,
         service_context.clone(),
-        tag,
         proposal.proposer,
+        tag,
         Arc::clone(&output_guard),
         body_store,
         body_store_identity.clone(),

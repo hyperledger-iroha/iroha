@@ -232,6 +232,15 @@ def _reply_writer_deadline_production_source_fidelity_errors(
         else:
             sources[path] = path.read_text(encoding="utf-8")
 
+    _loaded_worker_path, reviewed_worker_source = _read_reviewed_rust_source(
+        repo_root,
+        worker_path.relative_to(repo_root).as_posix(),
+        errors,
+        "exact reply adaptive-attempt worker source",
+    )
+    if reviewed_worker_source:
+        sources[worker_path] = reviewed_worker_source
+
     token_cache = {
         path: rust_code_tokens(source) for path, source in sources.items()
     }

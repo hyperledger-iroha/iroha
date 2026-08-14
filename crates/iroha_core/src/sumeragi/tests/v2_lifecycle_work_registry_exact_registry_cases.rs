@@ -330,7 +330,7 @@ fn mismatched_pending_binding_never_becomes_registry_work() {
         .pending_adapter_effect_binding(&first)
         .expect("mint first-effect pending binding");
     let (error, returned_effect, returned_pending) =
-        ConcreteLifecycleWork::from_exact(second, pending)
+        ConcreteLifecycleWork::from_inert_fixture_for_test(second, pending)
             .expect_err("a foreign effect must return the complete move-only pair");
     assert_eq!(error, RegistryError::UnboundEffect);
     assert!(returned_pending.exactly_binds_adapter_effect(&first));
@@ -1358,7 +1358,7 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
     for required in [
         "work: ConcreteLifecycleWork",
         "_permit: LiveValidateSignWorkProjectionPermit",
-        "ConcreteLifecycleWork::from_exact(effect, pending)",
+        "ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)",
         "self.work.validate_exact()",
         "self.work.digest() == digest",
         "self.work.causal_root() == owner.causal_root()",

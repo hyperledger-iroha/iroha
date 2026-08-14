@@ -219,10 +219,13 @@ def copy_kura_retention_fixture(tmp_path: Path, module) -> dict:
     relatives.update(
         Path(check["path"]) for check in contract["ordered_source_checks"]
     )
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    relatives.update(
+        Path(relative)
+        for relative, _kind, _symbol, _tokens in (
+            module.KURA_RETENTION_REQUIRED_BINDINGS
+        )
+    )
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return contract
 
 

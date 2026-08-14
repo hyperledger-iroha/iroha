@@ -182,7 +182,10 @@ def _successor_production_recovery_source_fidelity_errors(
             runner_path,
             "runner retains recovered lifecycle storage authority",
             runner_source,
-            ("_lifecycle_storage_authority", "_authenticated_genesis"),
+            (
+                "lifecycle_storage_authority",
+                "first_height_authenticated_genesis",
+            ),
         )
         recover_active_height = _require_rust_item(
             recovery_path,
@@ -468,6 +471,9 @@ def _successor_production_recovery_source_fidelity_errors(
         adapter_path, adapter_source = load(
             "crates/iroha_core/src/sumeragi/v2.rs"
         )
+        lifecycle_startup_test_path, lifecycle_startup_test_source = load(
+            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"
+        )
         apply_path, apply_source = load(
             "crates/iroha_core/src/sumeragi/v2_apply.rs"
         )
@@ -724,14 +730,14 @@ def _successor_production_recovery_source_fidelity_errors(
                 ("state.sumeragi_block_cadence()",),
             )
             activation_behavior = _require_rust_item(
-                adapter_path,
-                adapter_source,
+                lifecycle_startup_test_path,
+                lifecycle_startup_test_source,
                 "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout",
                 errors,
             )
             if activation_behavior is not None:
                 require_order(
-                    adapter_path,
+                    lifecycle_startup_test_path,
                     "production lifecycle activation behavior",
                     activation_behavior.source,
                     (
@@ -744,7 +750,7 @@ def _successor_production_recovery_source_fidelity_errors(
                         "launched.retain_recovered_local_proposal_attempt_for_test(recovered_attempt)",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "assert!(local_proposal_state.already_attempted(directive))",
-                        "let activated = launched.activate( Instant::now(), activation, local_proposal_state )",
+                        "let mut activated = launched.activate( Instant::now(), activation, local_proposal_state )",
                         "assert!(ingress_ready.load(Ordering::Acquire))",
                         "assert!(leader_wire_ingress.state.lock().open)",
                         ".retire_lifecycle_stores_for_test(finality_receipt)",
@@ -754,14 +760,14 @@ def _successor_production_recovery_source_fidelity_errors(
                     ),
                 )
             finalization_behavior = _require_rust_item(
-                adapter_path,
-                adapter_source,
+                lifecycle_startup_test_path,
+                lifecycle_startup_test_source,
                 "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
                 errors,
             )
             if finalization_behavior is not None:
                 require_order(
-                    adapter_path,
+                    lifecycle_startup_test_path,
                     "production lifecycle finalization behavior",
                     finalization_behavior.source,
                     (
@@ -783,12 +789,14 @@ def _successor_production_recovery_source_fidelity_errors(
                         "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched.activate( Instant::now(), activation, local_proposal_state )",
-                        ".into_finalized_rollover(&mut runner)",
-                        "let (receipt, artifact) = finalized.finality()",
+                        "let mut runner = super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test()",
+                        "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(",
+                        "assert_eq!(receipt.context_id(), recovered_context.id())",
+                        "assert_eq!(artifact.subject, subject)",
                         ".retain_merge_sidecars_for_global_view(",
-                        ".rollover_outputs(&mut runner, lane_work, &successor, 64)",
-                        ".retire_lifecycle_stores()",
-                        "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
+                        "successor.parent_commit_qc = Some(artifact.commit_qc.clone())",
+                        "drop(retained_sidecars)",
+                        "outcome.cleanup().warnings().is_empty()",
                     ),
                 )
             for literal in (
@@ -1008,11 +1016,11 @@ def _successor_production_recovery_source_fidelity_errors(
         runner_dependency_path, runner_dependency_source = load(
             "crates/iroha_core/src/sumeragi/v2_runner.rs"
         )
+        runner_authority_path, runner_authority_source = load(
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs"
+        )
         finalized_output_path, finalized_output_source = load(
             "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs"
-        )
-        lifecycle_startup_test_path, lifecycle_startup_test_source = load(
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"
         )
         state_path, state_source = load("crates/iroha_core/src/state.rs")
         apply_path, apply_source = load(
@@ -1035,6 +1043,7 @@ def _successor_production_recovery_source_fidelity_errors(
             and transport_source
             and lifecycle_open_source
             and runner_dependency_source
+            and runner_authority_source
             and finalized_output_source
             and lifecycle_startup_test_source
             and state_source
@@ -1084,14 +1093,14 @@ def _successor_production_recovery_source_fidelity_errors(
                 ),
             )
             runner_dependency_permit = region(
-                runner_dependency_path,
-                runner_dependency_source,
+                runner_authority_path,
+                runner_authority_source,
                 "runner-sealed recovered lifecycle factory dependency permit",
                 "pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1",
-                "/// Cadence-derived process-local deadline",
+                "/// Runner-private one-shot authority for activating a launched lifecycle height.",
             )
             require_tokens(
-                runner_dependency_path,
+                runner_authority_path,
                 "runner-sealed recovered lifecycle factory dependencies",
                 runner_dependency_permit,
                 (
@@ -1099,7 +1108,7 @@ def _successor_production_recovery_source_fidelity_errors(
                     "_seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1",
                     "local_signer: KeyPair",
                     "block_cadence: Duration",
-                    "fn mint_for_recovered_runner(local_signer: KeyPair, block_cadence: Duration) -> Self",
+                    "fn mint_for_recovered_runner( local_signer: KeyPair, block_cadence: Duration, ) -> Self",
                     "#[cfg(test)] pub(in crate::sumeragi) fn for_test(local_signer: KeyPair, block_cadence: Duration) -> Self",
                     "fn into_factory_dependencies(self) -> (KeyPair, Duration)",
                     "(self.local_signer, self.block_cadence)",
@@ -1107,7 +1116,7 @@ def _successor_production_recovery_source_fidelity_errors(
                 ),
             )
             reject_tokens(
-                runner_dependency_path,
+                runner_authority_path,
                 "runner-sealed recovered lifecycle factory dependencies",
                 runner_dependency_permit,
                 (
@@ -1130,11 +1139,14 @@ def _successor_production_recovery_source_fidelity_errors(
                 "one-shot lifecycle activation transaction",
                 lifecycle_activation,
                 (
+                    "lifecycle_activation_recovery_blocker(",
+                    "close_admission_for_restart()",
                     "begin_fail_stop_operation()",
                     "self.executor.local_proposal_directive()",
                     "local_proposal.exactly_matches( self.executor.context().id(), current_directive )",
                     "ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch",
-                    "self.executor.arm_live_clocks(now)",
+                    "ProductionLifecycleLiveClockActivationPermitV1",
+                    "self.executor.arm_live_clocks(clock_activation, now)",
                     "self.executor.successor_activation_status_snapshot()",
                     "self.completion_observer_activation.take()",
                     "self.services.activate_effect_completion_observer(observer)",
@@ -1233,14 +1245,14 @@ def _successor_production_recovery_source_fidelity_errors(
                 ),
             )
             ordinary_runner_activation = region(
-                runner_dependency_path,
-                runner_dependency_source,
+                runner_authority_path,
+                runner_authority_source,
                 "runner-owned lifecycle activation authority",
                 "struct ProductionLifecycleRunnerActivationV1",
                 "struct ProductionLifecycleCompleteTipRunnerActivationV1",
             )
             require_order(
-                runner_dependency_path,
+                runner_authority_path,
                 "runner-owned lifecycle activation authority",
                 ordinary_runner_activation,
                 (
@@ -1254,7 +1266,7 @@ def _successor_production_recovery_source_fidelity_errors(
                 ),
             )
             require_tokens(
-                runner_dependency_path,
+                runner_authority_path,
                 "runner-owned lifecycle activation status classes",
                 ordinary_runner_activation,
                 (
@@ -1268,14 +1280,14 @@ def _successor_production_recovery_source_fidelity_errors(
                     "CurrentHeight",
                     "Applied",
                     "SnapshotBootstrap",
-                    "status::set_v2_status(successor)",
-                    "status::activate_v2_successor_height(",
-                    "status::activate_snapshot_bootstrap_v2_height(",
+                    "super::super::status::set_v2_status(successor)",
+                    "super::super::status::activate_v2_successor_height(",
+                    "super::super::status::activate_snapshot_bootstrap_v2_height(",
                     "ProductionLifecycleActivatedRunnerAuthorityV1 { _seal: ProductionLifecycleActivatedRunnerAuthoritySealV1, ingress_ready: self.ingress_ready, block_ingress: self.block_ingress, }",
                 ),
             )
             reject_tokens(
-                runner_dependency_path,
+                runner_authority_path,
                 "runner-owned lifecycle activation status classes",
                 ordinary_runner_activation,
                 (
@@ -1290,14 +1302,14 @@ def _successor_production_recovery_source_fidelity_errors(
                 ),
             )
             complete_tip_runner_activation = region(
-                runner_dependency_path,
-                runner_dependency_source,
+                runner_authority_path,
+                runner_authority_source,
                 "runner-owned CompleteTip lifecycle activation authority",
                 "struct ProductionLifecycleCompleteTipRunnerActivationV1",
-                "struct ProductionLifecycleActivatedRunnerAuthorityV1",
+                "struct ProductionLifecyclePendingKuraRunnerActivationV1",
             )
             require_order(
-                runner_dependency_path,
+                runner_authority_path,
                 "runner-owned CompleteTip lifecycle activation authority",
                 complete_tip_runner_activation,
                 (
@@ -1307,13 +1319,13 @@ def _successor_production_recovery_source_fidelity_errors(
                     "retirement.authorizes_successor_status(&successor)",
                     "self.block_ingress.close()",
                     "self.block_ingress.open()",
-                    "status::activate_recovered_complete_tip_v2_height(retirement, successor)",
+                    "super::super::status::activate_recovered_complete_tip_v2_height(retirement, successor)",
                     "self.block_ingress.close()",
                     "self.ingress_ready.store(true, Ordering::Release)",
                 ),
             )
             require_tokens(
-                runner_dependency_path,
+                runner_authority_path,
                 "runner-owned CompleteTip lifecycle activation seal",
                 complete_tip_runner_activation,
                 (
@@ -1325,7 +1337,7 @@ def _successor_production_recovery_source_fidelity_errors(
                 ),
             )
             reject_tokens(
-                runner_dependency_path,
+                runner_authority_path,
                 "runner-owned CompleteTip lifecycle activation seal",
                 complete_tip_runner_activation,
                 (
@@ -1354,9 +1366,13 @@ def _successor_production_recovery_source_fidelity_errors(
                     "block_ingress: Arc<FairV2Ingress>",
                     "impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1",
                     "fn retire(",
+                    "retire_lifecycle_runner_ingress( &self.ingress_ready, &self.block_ingress, launched_ingress )",
+                    "fn retire_lifecycle_runner_ingress(",
+                    "ingress_ready.store(false, Ordering::Release)",
+                    "block_ingress.close()",
+                    "Arc::ptr_eq(block_ingress, launched_ingress)",
                     "self.ingress_ready.store(false, Ordering::Release)",
                     "self.block_ingress.close()",
-                    "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
                     "impl Drop for ProductionLifecycleActivatedRunnerAuthorityV1",
                 ),
             )
@@ -1376,14 +1392,14 @@ def _successor_production_recovery_source_fidelity_errors(
                 runner_dependency_path,
                 "activated runner readiness retirement",
                 activated_runner_authority,
-                "self.ingress_ready.store(false, Ordering::Release)",
+                "ingress_ready.store(false, Ordering::Release)",
                 2,
             )
             require_token_count(
                 runner_dependency_path,
                 "activated runner ingress retirement",
                 activated_runner_authority,
-                "self.block_ingress.close()",
+                "block_ingress.close()",
                 2,
             )
             active_runner_borrow = region(
@@ -1391,7 +1407,7 @@ def _successor_production_recovery_source_fidelity_errors(
                 runner_dependency_source,
                 "runner-owned active lifecycle borrow key",
                 "struct ProductionLifecycleActiveRunnerBorrowV1",
-                "/// Cadence-derived process-local deadline",
+                "/// Process-local borrow key for preparing a launched lifecycle before activation.",
             )
             require_tokens(
                 runner_dependency_path,
@@ -4473,10 +4489,12 @@ def _successor_production_recovery_source_fidelity_errors(
                     "placeholder_cadence.checked_add(Duration::from_millis(1))",
                     "assert_eq!(cadence_inputs.block_cadence, authenticated_cadence)",
                     "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-                    ".into_finalized_rollover(&mut runner)",
-                    "let (receipt, artifact) = finalized.finality()",
-                    ".rollover_outputs(&mut runner, lane_work, &successor, 64)",
-                    ".retire_lifecycle_stores()",
+                    "lifecycle_run_inner::finalize_lifecycle_height(",
+                    "assert_eq!(receipt.context_id(), recovered_context.id())",
+                    "assert_eq!(artifact.subject, subject)",
+                    ".retain_merge_sidecars_for_global_view(",
+                    "successor.parent_commit_qc = Some(artifact.commit_qc.clone())",
+                    "drop(retained_sidecars)",
                     "outcome.cleanup().warnings().is_empty()",
                 ),
             )

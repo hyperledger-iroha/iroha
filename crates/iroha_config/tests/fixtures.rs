@@ -605,19 +605,80 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .join("defaults/nexus/config.toml");
     let source = fs::read_to_string(&config_path).expect("read Nexus signing profile");
     let mut table: toml::Table = toml::from_str(&source).expect("parse Nexus signing profile");
-    let expected_hash = table
+
+    let validator_private_key_file = table
+        .remove("private_key_file")
+        .expect("Nexus signing profile validator private-key file");
+    assert_eq!(
+        validator_private_key_file.as_str(),
+        Some("/run/secrets/iroha/nexus-validator-private-key")
+    );
+    table.insert(
+        "private_key".to_owned(),
+        TomlValue::String(
+            "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F".to_owned(),
+        ),
+    );
+
+    let transport_private_key_file = table
+        .remove("soranet_transport_private_key_file")
+        .expect("Nexus signing profile SoraNet transport private-key file");
+    assert_eq!(
+        transport_private_key_file.as_str(),
+        Some("/run/secrets/iroha/nexus-soranet-transport-private-key")
+    );
+    let transport_key_pair = fixture_soranet_transport_key_pair();
+    table.insert(
+        "soranet_transport_public_key".to_owned(),
+        TomlValue::String(transport_key_pair.public_key().to_string()),
+    );
+    table.insert(
+        "soranet_transport_private_key".to_owned(),
+        TomlValue::String(ExposedPrivateKey(transport_key_pair.private_key().clone()).to_string()),
+    );
+
+    let streaming = table
+        .get_mut("streaming")
+        .and_then(TomlValue::as_table_mut)
+        .expect("Nexus signing profile streaming table");
+    let streaming_private_key_file = streaming
+        .remove("identity_private_key_file")
+        .expect("Nexus signing profile streaming private-key file");
+    assert_eq!(
+        streaming_private_key_file.as_str(),
+        Some("/run/secrets/iroha/nexus-streaming-identity-private-key")
+    );
+    let streaming_key_pair = fixture_streaming_key_pair();
+    streaming.insert(
+        "identity_public_key".to_owned(),
+        TomlValue::String(streaming_key_pair.public_key().to_string()),
+    );
+    streaming.insert(
+        "identity_private_key".to_owned(),
+        TomlValue::String(ExposedPrivateKey(streaming_key_pair.private_key().clone()).to_string()),
+    );
+
+    let genesis = table
         .get_mut("genesis")
         .and_then(TomlValue::as_table_mut)
-        .and_then(|genesis| genesis.get_mut("expected_hash"))
-        .expect("Nexus signing profile expected-hash placeholder");
+        .expect("Nexus signing profile genesis table");
+    let expected_hash_file = genesis
+        .remove("expected_hash_file")
+        .expect("Nexus signing profile expected-hash file");
     assert_eq!(
-        expected_hash.as_str(),
-        Some("REPLACE_WITH_GENESIS_EXPECTED_HASH")
+        expected_hash_file.as_str(),
+        Some("/run/iroha/genesis.expected_hash")
     );
-    // Substitute only inside this inspection test; the checked-in profile must fail runtime
-    // normalization until an operator provisions the signed genesis hash.
-    *expected_hash = TomlValue::String(
-        Hash::new(b"iroha-config non-runtime Nexus profile inspection").to_string(),
+    // Substitute only inside this inspection test; the checked-in profile resolves the hash
+    // from an operator-provisioned runtime file.
+    genesis.insert(
+        "expected_hash".to_owned(),
+        TomlValue::String(norito::literal::format(
+            "hash",
+            &Hash::new(b"iroha-config non-runtime Nexus profile inspection")
+                .to_string()
+                .to_ascii_uppercase(),
+        )),
     );
     let config = ConfigReader::new()
         .with_toml_source(iroha_config_base::toml::TomlSource::inline(table))
@@ -1706,7 +1767,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         block
             .get("max_payload_bytes")
             .and_then(TomlValue::as_integer),
-        Some(21 * 1024 * 1024),
+        Some(16 * 1024 * 1024),
         "Taira profile should cap proposal payload bytes"
     );
     assert_eq!(
@@ -1731,14 +1792,14 @@ fn taira_config_enables_untrusted_cid_hosting() {
     );
     assert_eq!(
         queues.get("body_bytes").and_then(TomlValue::as_integer),
-        Some(301 * 1024 * 1024),
+        Some(231 * 1024 * 1024),
         "Taira aggregate canonical wire-byte budget should isolate its seven ingress source lanes"
     );
     assert_eq!(
         queues
             .get("body_source_bytes")
             .and_then(TomlValue::as_integer),
-        Some(43 * 1024 * 1024),
+        Some(33 * 1024 * 1024),
         "Taira should retain one canonical outer-ingress wire-byte quota per source"
     );
     let untrusted = doc

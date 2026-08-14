@@ -1965,29 +1965,57 @@ fn canonical_wsv_cell_value<'a>(
         .find(|member| member.key == "blocks")
         .map_or(input, |member| member.value))
 }
-fn update_snapshot_wsv_hash(
+
+fn canonical_json_fragment(input: &str) -> Result<String, TryReadError> {
+    let value: json::Value = json::from_str(input).map_err(TryReadError::Serialization)?;
+    json::to_json(&value).map_err(TryReadError::Serialization)
+}
+
+fn update_snapshot_wsv_hash<'a>(
     hasher: &mut Blake2b<U32>,
-    input: &str,
+    input: &'a str,
     path: CanonicalWsvPath,
-    overrides: CanonicalWsvOverrides<'_>,
+    overrides: CanonicalWsvOverrides<'a>,
 ) -> Result<(), TryReadError> {
     match input.as_bytes().first().copied() {
         Some(b'{') => update_snapshot_wsv_object_hash(hasher, input, path, overrides),
         Some(b'[') => update_snapshot_wsv_array_hash(hasher, input, overrides),
         Some(_) => {
-            Digest::update(hasher, input.as_bytes());
+            // The staged and committed State serializers can spell an
+            // otherwise identical scalar with different JSON escapes. Hash
+            // the canonical semantic spelling so the pre-WSV checkpoint and
+            // its post-commit confirmation cannot diverge on lexical trivia.
+            let canonical = canonical_json_fragment(input)?;
+            Digest::update(hasher, canonical.as_bytes());
             Ok(())
         }
         None => Err(TryReadError::NonCanonicalSnapshotPayload),
     }
 }
-fn update_snapshot_wsv_object_hash(
+
+fn update_snapshot_wsv_object_hash<'a>(
     hasher: &mut Blake2b<U32>,
-    input: &str,
+    input: &'a str,
     path: CanonicalWsvPath,
-    overrides: CanonicalWsvOverrides<'_>,
+    overrides: CanonicalWsvOverrides<'a>,
 ) -> Result<(), TryReadError> {
     let mut members = borrowed_json_object_members(input)?;
+    if path == CanonicalWsvPath::World
+        && !members
+            .iter()
+            .any(|member| member.key == "external_event_buf")
+        && let Some(value) = overrides.committed_external_event_buf
+    {
+        // `WorldBlock` deliberately skips the process-owned event-buffer cell,
+        // while committing the overlay leaves the live cell intact. Inject the
+        // exact committed value into the staged hash before canonical sorting,
+        // matching the tree reference and the post-commit State serializer.
+        members.push(BorrowedJsonMember {
+            key: "external_event_buf".to_owned(),
+            encoded_key: r#""external_event_buf""#,
+            value,
+        });
+    }
     members.sort_unstable_by(|left, right| left.key.cmp(&right.key));
     if members.windows(2).any(|pair| pair[0].key == pair[1].key) {
         return Err(TryReadError::NonCanonicalSnapshotPayload);
@@ -2002,7 +2030,8 @@ fn update_snapshot_wsv_object_hash(
             Digest::update(hasher, b",");
         }
         first = false;
-        Digest::update(hasher, member.encoded_key.as_bytes());
+        let canonical_key = canonical_json_fragment(member.encoded_key)?;
+        Digest::update(hasher, canonical_key.as_bytes());
         Digest::update(hasher, b":");
         let serialized_value =
             if path == CanonicalWsvPath::World && member.key == "external_event_buf" {
@@ -2032,10 +2061,11 @@ fn update_snapshot_wsv_object_hash(
     Digest::update(hasher, b"}");
     Ok(())
 }
-fn update_snapshot_wsv_array_hash(
+
+fn update_snapshot_wsv_array_hash<'a>(
     hasher: &mut Blake2b<U32>,
-    input: &str,
-    overrides: CanonicalWsvOverrides<'_>,
+    input: &'a str,
+    overrides: CanonicalWsvOverrides<'a>,
 ) -> Result<(), TryReadError> {
     let items = borrowed_json_array_items(input)?;
     Digest::update(hasher, b"[");
@@ -2052,7 +2082,14 @@ fn update_sorted_string_set_hash(
     hasher: &mut Blake2b<U32>,
     input: &str,
 ) -> Result<(), TryReadError> {
-    let mut items = borrowed_json_array_items(input)?;
+    let items = borrowed_json_array_items(input)?;
+    if items.iter().any(|item| !item.starts_with('"')) {
+        return Err(TryReadError::NonCanonicalSnapshotPayload);
+    }
+    let mut items = items
+        .into_iter()
+        .map(canonical_json_fragment)
+        .collect::<Result<Vec<_>, _>>()?;
     if items.iter().any(|item| !item.starts_with('"')) {
         return Err(TryReadError::NonCanonicalSnapshotPayload);
     }
@@ -2071,9 +2108,10 @@ fn update_sorted_string_set_hash(
 fn canonical_snapshot_wsv_hash(bytes: &[u8]) -> Result<Hash, TryReadError> {
     canonical_snapshot_wsv_hash_with_overrides(bytes, CanonicalWsvOverrides::default())
 }
-fn canonical_snapshot_wsv_hash_with_overrides(
-    bytes: &[u8],
-    overrides: CanonicalWsvOverrides<'_>,
+
+fn canonical_snapshot_wsv_hash_with_overrides<'a>(
+    bytes: &'a [u8],
+    overrides: CanonicalWsvOverrides<'a>,
 ) -> Result<Hash, TryReadError> {
     let input = std::str::from_utf8(bytes)
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;

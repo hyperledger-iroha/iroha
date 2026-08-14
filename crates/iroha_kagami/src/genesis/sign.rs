@@ -790,7 +790,7 @@ fn staged_lane_manifest_registry(
     let registry =
         LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
     registry
-        .validate_active_coverage()
+        .validate_active_coverage_for_catalog(&nexus.lane_catalog)
         .map_err(|error| eyre!("invalid lane manifest registry for staged genesis: {error}"))?;
     Ok(registry)
 }
@@ -1494,6 +1494,72 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     ) -> ConsensusHandshakeMetaTest {
         sign_checked_in_profile_with_optional_config(root, genesis_path, Some(config_path))
     }
+    fn locally_loadable_profile_config(path: &Path) -> (Option<tempfile::TempDir>, PathBuf) {
+        if load_peer_config(path).is_ok() {
+            return (None, path.to_path_buf());
+        }
+
+        // Published profile configs intentionally resolve node identities from
+        // container secret files. Replacing only those identities with matching
+        // deterministic test pairs keeps every consensus-policy field intact
+        // while making the production signing path locally testable.
+        let source = fs::read_to_string(path).expect("read checked-in profile config");
+        let mut table = toml::Table::from_str(&source).expect("parse checked-in profile config");
+        table.insert(
+            "public_key".into(),
+            toml::Value::String(
+                "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                    .to_owned(),
+            ),
+        );
+        table.remove("private_key_file");
+        table.insert(
+            "private_key".into(),
+            toml::Value::String(
+                "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F".to_owned(),
+            ),
+        );
+        table.insert(
+            "soranet_transport_public_key".into(),
+            toml::Value::String(
+                "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B".to_owned(),
+            ),
+        );
+        table.remove("soranet_transport_private_key_file");
+        table.insert(
+            "soranet_transport_private_key".into(),
+            toml::Value::String(
+                "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89".to_owned(),
+            ),
+        );
+        let streaming = table
+            .get_mut("streaming")
+            .and_then(toml::Value::as_table_mut)
+            .expect("checked-in profile config has streaming identity");
+        streaming.insert(
+            "identity_public_key".into(),
+            toml::Value::String(
+                "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB".to_owned(),
+            ),
+        );
+        streaming.remove("identity_private_key_file");
+        streaming.insert(
+            "identity_private_key".into(),
+            toml::Value::String(
+                "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F".to_owned(),
+            ),
+        );
+
+        let directory = tempfile::tempdir().expect("create local profile signing config");
+        let rendered = directory.path().join("config.toml");
+        fs::write(
+            &rendered,
+            toml::to_string(&table).expect("serialize local profile signing config"),
+        )
+        .expect("write local profile signing config");
+        (Some(directory), rendered)
+    }
+
     fn sign_checked_in_profile_with_optional_config(
         root: &std::path::Path,
         genesis_path: &str,
@@ -1503,21 +1569,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "82B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD";
         const DEV_GENESIS_SEED: &str =
             "435e15ae8cca7d8ce54313e1ed60b98bd3be7832bbaa6e33b358068b61f6ea97";
+        const TAIRA_GENESIS_SEED: &str =
+            "d1ac3f81b562af48fab29c4195d8713d1f65f17159e1e87a7e61076f12303d8a";
         const NEXUS_GENESIS_SEED: &str =
             "ac74a176f589853d5a7488ae8c04caee8b99b408a98c1d2971b3d525e9f0e91c";
         let (private_key, seed) = match genesis_path {
             "defaults/kagami/iroha3-dev/genesis.json" => (None, Some(DEV_GENESIS_SEED.to_owned())),
+            "defaults/kagami/iroha3-taira/genesis.json" => {
+                (None, Some(TAIRA_GENESIS_SEED.to_owned()))
+            }
             "defaults/kagami/iroha3-nexus/genesis.json" => {
                 (None, Some(NEXUS_GENESIS_SEED.to_owned()))
             }
             "defaults/genesis.json"
-            | "defaults/kagami/iroha3-taira/genesis.json"
             | "defaults/nexus/genesis.json"
             | "configs/soranexus/nexus/genesis.json" => {
                 (Some(SAMPLE_GENESIS_PRIVATE_KEY.to_owned()), None)
             }
             _ => (Some(test_private_key_hex()), None),
         };
+        let rendered_config =
+            config_path.map(|path| locally_loadable_profile_config(&root.join(path)));
         let args = Args {
             genesis_file: root.join(genesis_path),
             out_file: None,
@@ -1531,7 +1603,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             seed,
             creation_time_ms: None,
             algorithm: Algorithm::Ed25519,
-            config: config_path.map(|path| root.join(path)),
+            config: rendered_config
+                .as_ref()
+                .map(|(_, rendered)| rendered.clone()),
             consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -1542,6 +1616,23 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .unwrap_or_else(|error| panic!("failed to decode signed {genesis_path}: {error}"));
         consensus_handshake_meta(&block)
     }
+    fn assert_checked_in_genesis_template_is_current(root: &Path, path: &str) {
+        let manifest = RawGenesisTransaction::from_path(root.join(path))
+            .unwrap_or_else(|error| panic!("checked-in {path} must parse: {error:#}"));
+        assert_eq!(manifest.wire_protocol_version(), 4, "{path}");
+        ensure_npos_parameters(&manifest)
+            .unwrap_or_else(|error| panic!("checked-in {path} has invalid NPoS policy: {error}"));
+        let context = manifest.sumeragi_v2_context_parameters();
+        assert_ne!(context.nexus_amx_context_hash, [0; 32], "{path}");
+        assert_ne!(context.execution_policy_hash, [0; 32], "{path}");
+        let refreshed = manifest.clone().with_consensus_meta();
+        assert_eq!(
+            manifest.consensus_fingerprint(),
+            refreshed.consensus_fingerprint(),
+            "{path} has a stale consensus fingerprint"
+        );
+    }
+
     #[test]
     fn checked_in_genesis_templates_are_current_and_parse() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1554,21 +1645,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "configs/soranexus/nexus/genesis.json",
             "configs/soranexus/taira/genesis.json",
         ] {
-            let manifest = RawGenesisTransaction::from_path(root.join(path))
-                .unwrap_or_else(|error| panic!("checked-in {path} must parse: {error:#}"));
-            assert_eq!(manifest.wire_protocol_version(), 4, "{path}");
-            ensure_npos_parameters(&manifest).unwrap_or_else(|error| {
-                panic!("checked-in {path} has invalid NPoS policy: {error}")
-            });
-            let context = manifest.sumeragi_v2_context_parameters();
-            assert_ne!(context.nexus_amx_context_hash, [0; 32], "{path}");
-            assert_ne!(context.execution_policy_hash, [0; 32], "{path}");
-            let refreshed = manifest.clone().with_consensus_meta();
-            assert_eq!(
-                manifest.consensus_fingerprint(),
-                refreshed.consensus_fingerprint(),
-                "{path} has a stale consensus fingerprint"
-            );
+            assert_checked_in_genesis_template_is_current(&root, path);
+        }
+    }
+
+    #[test]
+    fn checked_in_topology_profile_genesis_templates_are_current() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for path in [
+            "defaults/kagami/iroha3-nexus/genesis.json",
+            "defaults/kagami/iroha3-taira/genesis.json",
+            "defaults/nexus/genesis.json",
+            "configs/soranexus/nexus/genesis.json",
+            "configs/soranexus/taira/genesis.json",
+        ] {
+            assert_checked_in_genesis_template_is_current(&root, path);
         }
     }
     #[test]
@@ -1656,10 +1747,31 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         load_peer_config(&path)
             .expect("the genesis signer may project policy through the explicit placeholder");
     }
+    fn assert_checked_in_profile_commitment_matches_production_signing(
+        root: &Path,
+        genesis_path: &str,
+        config_path: &str,
+    ) {
+        let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
+            .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
+        let signed = sign_checked_in_profile(root, genesis_path, config_path);
+        assert_eq!(signed.wire_protocol_version, 4, "{genesis_path}");
+        assert_eq!(
+            signed.sumeragi_v2,
+            manifest.sumeragi_v2_context_parameters(),
+            "{genesis_path} must carry the exact context produced by the production signing path"
+        );
+        assert_eq!(
+            Some(signed.consensus_fingerprint),
+            manifest.consensus_fingerprint(),
+            "{genesis_path} fingerprint must cover the exact staged context"
+        );
+    }
+
     #[test]
     fn checked_in_profile_commitments_match_production_signing() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let fixtures = [
+        for (genesis_path, config_path) in [
             (
                 "defaults/kagami/iroha3-dev/genesis.json",
                 "defaults/kagami/iroha3-dev/config.toml",
@@ -1668,24 +1780,24 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "defaults/kagami/iroha3-taira/genesis.json",
                 "defaults/kagami/iroha3-taira/config.toml",
             ),
-        ];
-        for (genesis_path, config_path) in fixtures {
-            let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
-                .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
-            let signed = sign_checked_in_profile(&root, genesis_path, config_path);
-            assert_eq!(signed.wire_protocol_version, 4, "{genesis_path}");
-            assert_eq!(
-                signed.sumeragi_v2,
-                manifest.sumeragi_v2_context_parameters(),
-                "{genesis_path} must carry the exact context produced by the production signing path"
-            );
-            assert_eq!(
-                Some(signed.consensus_fingerprint),
-                manifest.consensus_fingerprint(),
-                "{genesis_path} fingerprint must cover the exact staged context"
+        ] {
+            assert_checked_in_profile_commitment_matches_production_signing(
+                &root,
+                genesis_path,
+                config_path,
             );
         }
     }
+    #[test]
+    fn checked_in_taira_profile_commitment_matches_production_signing() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_checked_in_profile_commitment_matches_production_signing(
+            &root,
+            "defaults/kagami/iroha3-taira/genesis.json",
+            "defaults/kagami/iroha3-taira/config.toml",
+        );
+    }
+
     #[test]
     #[ignore = "read-only maintainer utility for refreshing generated profile commitments"]
     fn print_checked_in_profile_commitments() {

@@ -344,6 +344,19 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         "fn",
         "run_inner",
         (
+            "public_key: genesis_public_key",
+            "block_cadence",
+            "sumeragi_v2_timing_ms(block_cadence_ms)",
+            "let round_timeout = Duration::from_millis(round_timeout_ms)",
+            "let retransmit_interval = Duration::from_millis(retransmit_interval_ms)",
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn",
+        "run_non_pending_lifecycle_loop",
+        (
             "if reservation_reconciliation_pending",
             "reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
             "let planning = plan_lane_reservation_ownership(",
@@ -351,24 +364,55 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
             "apply_lane_reservation_reconciliation_plan(",
             "reservation_reconciliation_pending = false;",
             "construct_after_pending_tip_application_recovery(",
-            "public_key: genesis_public_key",
-            "block_cadence",
-            "sumeragi_v2_timing_ms(block_cadence_ms)",
-            "let round_timeout = Duration::from_millis(round_timeout_ms)",
-            "let retransmit_interval = Duration::from_millis(retransmit_interval_ms)",
-            "lane_work_limits(",
-            "block_sync_frame_byte_capacity,\n"
-            "            retransmit_interval,\n"
-            "            round_timeout,\n"
-            "        )?;",
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
             "retransmit_interval",
             "round_timeout",
-            "service_historical_recovery_tick",
         ),
     ),
     (
         AUTONOMOUS_MODULE,
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn",
+        "run_pending_kura_lifecycle_height",
+        (
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
+            "retransmit_interval",
+            "round_timeout",
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn",
+        "run_lifecycle_active_height",
+        (
+            "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
+            "service_historical_recovery_tick(&mut lane_work)?",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
+            "lane_work.schedule_retransmission()?",
+            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+            "dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?",
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn",
+        "run_pending_active_height",
+        (
+            "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
+            "service_historical_recovery_tick(lane_work)?",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
+            "lane_work.schedule_retransmission()?",
+            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?",
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        "crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs",
         "fn",
         "service_historical_recovery_tick",
         (
@@ -419,9 +463,55 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
             "sumeragi_v2_timing_ms(block_cadence_ms)",
             "let round_timeout = Duration::from_millis(round_timeout_ms)",
             "let retransmit_interval = Duration::from_millis(retransmit_interval_ms)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn",
+        "run_non_pending_lifecycle_loop",
+        (
             "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
             "retransmit_interval",
             "round_timeout",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn",
+        "run_pending_kura_lifecycle_height",
+        (
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
+            "retransmit_interval",
+            "round_timeout",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn",
+        "run_lifecycle_active_height",
+        (
+            "let mut next_lane_retransmit =",
+            "deadline_after(height_started_at, retransmit_interval)",
+            "if now >= next_lane_retransmit",
+            "service_historical_recovery_tick(&mut lane_work)?",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
+            "lane_work.schedule_retransmission()?",
+            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn",
+        "run_pending_active_height",
+        (
+            "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);",
+            "if now >= next_lane_retransmit",
+            "service_historical_recovery_tick(lane_work)?",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
+            "lane_work.schedule_retransmission()?",
+            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
         ),
     ),
     (
@@ -559,7 +649,7 @@ PASSIVE_RECOVERY_RAW_TEST_CHECKS = (
         ),
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runner_upstream_recovery.rs",
         "quiet_retransmission_tick_services_one_retained_historical_session",
         (
             "quiet_historical_recovery_fixture",
@@ -696,17 +786,27 @@ def _validate_source_relations(
                     f"contains repair-capable token {token!r}"
                 )
 
-    run_inner = items.get(
-        ("crates/iroha_core/src/sumeragi/v2_runner.rs", "fn", "run_inner")
-    )
-    if run_inner is not None and run_inner.count(
-        "service_historical_recovery_tick(&mut lane_work)?"
-    ) != 2:
-        errors.append(
-            f"{root / 'crates/iroha_core/src/sumeragi/v2_runner.rs'}: both "
-            "ordinary and decided quiet retransmission branches must service "
-            "one retained historical owner"
+    for relative, symbol, token in (
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "run_lifecycle_active_height",
+            "service_historical_recovery_tick(&mut lane_work)?",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+            "run_pending_active_height",
+            "service_historical_recovery_tick(lane_work)?",
+        ),
+    ):
+        item = _item_for(
+            root, items, relative, "fn", symbol, errors, rust_binding_item
         )
+        if item is not None and item.count(token) != 1:
+            errors.append(
+                f"{root / relative}: passive/recovery item {symbol} must "
+                "service exactly one retained historical owner per quiet "
+                "retransmission turn"
+            )
 
 
 def _validate_includes(root: Path, errors: list[str]) -> None:

@@ -644,24 +644,24 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
     identity: V2BodyStoreInstanceIdentity,
     class_capacity: usize,
 ) -> LifecyclePlannerIoFixture {
-    let active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
+    let active_tag = services.active_tag;
     install_lifecycle_planner_io_for_validator_for_test(
         services,
         context,
-        active_tag,
         0,
+        active_tag,
         output_guard,
         body_store,
         identity,
         class_capacity,
     )
 }
-/// Install a moved exact store and reducer tag for a chosen local-validator fixture.
+/// Install a moved exact store for a chosen validator and reducer incarnation.
 pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
     services: &mut ProductionV2Services,
     context: wire::HeightContext,
-    active_tag: EventTag,
     local_validator: wire::ValidatorIndex,
+    active_tag: EventTag,
     output_guard: Arc<ConsensusOutputGuard>,
     body_store: V2BodyStore,
     identity: V2BodyStoreInstanceIdentity,
@@ -675,7 +675,7 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
     assert_eq!(
         active_tag.height(),
         context.height,
-        "the test service tag must belong to its installed height context"
+        "the test service tag must belong to its immutable height context"
     );
     let local_index = usize::try_from(local_validator).expect("test validator index fits usize");
     let local_peer = context

@@ -574,7 +574,7 @@
   ],
   "consensus_mode": "Npos",
   "wire_protocol_version": 4,
-  "consensus_fingerprint": "0x555cc63ca5c636617c355a887e5810d48f7561115ef7d2c0e5453ee0df31550c",
+  "consensus_fingerprint": "0x47bd3f036a3941a41216f7c7ab1ca23fce96373c2eaedd065063745ba3aab40d",
   "sumeragi_v2": {
     "da_layout": {
       "encoding": {
@@ -587,8 +587,8 @@
       "max_payload_size_bytes": 16777216,
       "max_chunk_count": 1024
     },
-    "nexus_amx_context_hash": "62C619A453791F6C1846EFE49D828AFC35E004B4178F8D42CEE377D1D040C87F",
-    "execution_policy_hash": "5241331C1DF53025D389F260E96230D5E584C797A52C153B802ADA5BDEAC5941"
+    "nexus_amx_context_hash": "64A3623718C3065A51AE7F276AC5D211DC79EDA7EDBD518BEBCA206578D0F049",
+    "execution_policy_hash": "52E9209214D9B09CA9AE55FDAAAEADB00EA152D406049C335A79BFC61AC30AEF"
   },
   "crypto": {
     "sm_openssl_preview": false,

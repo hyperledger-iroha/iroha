@@ -81,6 +81,14 @@ fn authenticated_ready_row(
         live_debts,
     )
 }
+fn authenticated_waiting_fetch_ready_row(
+    factory: &AuthenticatedSchedulerInputsFactory,
+    record: &super::LifecycleRecord,
+    fetch: super::selector::LifecycleIngressSchedulerFetchSeal,
+    live_debts: [u64; 6],
+) -> Option<SchedulerReadyInputs> {
+    SchedulerReadyInputs::from_authenticated_waiting_fetch(factory, record, fetch, live_debts)
+}
 #[allow(clippy::too_many_arguments)]
 fn authenticated_ready_row_with_physical_capacity(
     factory: &AuthenticatedSchedulerInputsFactory,
@@ -2372,7 +2380,7 @@ impl ProductionLifecycleOwnerV1 {
             .records
             .get(&ordinal)
             .ok_or(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
-        let row = authenticated_ready_row(&factory, record, None, None, None, None, live_debts)
+        let row = authenticated_waiting_fetch_ready_row(&factory, record, fetch, live_debts)
             .ok_or(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
         let (source, generation) = fetch.wake_generation();
         let inputs = authenticated_scheduler_inputs(
@@ -3155,8 +3163,9 @@ impl ProductionLifecycleOwnerV1 {
         root: &std::path::Path,
     ) -> (Self, u128, super::WaitSource) {
         use super::{
-            AdmissionDecision, CapacityClass, WaitToken,
-            concrete_admission::AdapterEffectAdmissionTransaction, schema::CapacityGeometry,
+            AdmissionDecision, AdmissionRequest, CapacityClass, WaitToken,
+            schema::CapacityGeometry,
+            work_registry::{ConcreteLifecycleWork, ConcreteWorkAddress},
         };
         let (context, _, _, _, expected_key, expected_root, source) = prepared
             .certified_fetch_ready_authority_for_test()
@@ -3172,15 +3181,35 @@ impl ProductionLifecycleOwnerV1 {
             CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 8))),
         );
         let mut registry = LifecycleWorkRegistryHolder::empty();
-        let transaction =
-            coordinator.admit_concrete_adapter_effect(&mut registry, &verified, effect, pending);
-        let AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted {
+        let candidate = super::replay_authority::exact_pending_certified_fetch_candidate_fixture(
+            &verified, &effect, &pending,
+        )
+        .expect("the verified selected Fetch must derive exact replay authority");
+        assert_eq!(candidate.key, expected_key);
+        assert_eq!(candidate.causal_root, expected_root);
+        assert_eq!(candidate.work_class, LifecycleWorkClass::Fetch);
+        let work =
+            ConcreteLifecycleWork::from_exact(effect, pending).unwrap_or_else(|(error, _, _)| {
+                panic!("the selected Fetch carrier is invalid: {error:?}")
+            });
+        let work_digest = work.digest();
+        let AdmissionDecision::Admitted {
+            owner,
             ordinal,
-            ..
-        }) = transaction
+            producer_turn_ordinal: None,
+        } = coordinator.admit(AdmissionRequest::Candidate(candidate))
         else {
-            panic!("the exact selected Fetch must enter the concrete registry")
+            panic!("the exact selected Fetch candidate must enter the coordinator")
         };
+        let slot = super::PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+            .expect("the admitted Fetch owns one exact concrete address");
+        registry
+            .registry_mut()
+            .install(address, work_digest, work)
+            .unwrap_or_else(|(error, _)| {
+                panic!("the exact selected Fetch must enter the concrete registry: {error:?}")
+            });
         let record = coordinator
             .records
             .get_mut(&ordinal)
@@ -3188,6 +3217,7 @@ impl ProductionLifecycleOwnerV1 {
         assert_eq!(record.key, expected_key);
         assert_eq!(record.owner.causal_root(), expected_root);
         assert_eq!(record.work_class, LifecycleWorkClass::Fetch);
+        assert_eq!(record.physical_slots.get(&slot), Some(&work_digest));
         assert!(coordinator.ready_index.remove(&ordinal));
         record.state = LifecycleState::Waiting(WaitToken::new(source, 0));
         assert!(coordinator.observed_generation.insert(source, 0).is_none());

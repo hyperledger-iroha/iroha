@@ -503,7 +503,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 855
+_PRODUCTION_TEST_COUNT = 856
 _G_UNIT_TEST_COUNT = 525
 _G_UNIT_GROUPS = (
     (
@@ -626,7 +626,7 @@ _PRODUCTION_MODULES = (
         5,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 133),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 134),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",

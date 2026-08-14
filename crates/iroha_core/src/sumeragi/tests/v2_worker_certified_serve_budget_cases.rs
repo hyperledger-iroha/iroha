@@ -1188,6 +1188,61 @@ fn certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement() {
         Some(V2IoServeState::Terminal)
     );
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
+    drop(state);
+
+    // A raw selected Serve is rolled back into a dormant waiter before
+    // shutdown. That waiter must keep blocking ordinary/control work without
+    // blocking the exact Shutdown command which lets the empty worker exit.
+    let raw = authenticated_serve_request(
+        &service.context,
+        &keys[1],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Prepare,
+    );
+    let via = service.context.roster[0].validator.clone();
+    let (shutdown_tx, shutdown_rx, _) = test_io_command_channel(2);
+    let (shutdown_ingress, shutdown_gate) = gated_fair_ingress(&service.context, &shutdown_tx);
+    assert!(matches!(
+        shutdown_ingress.try_push(certified_serve_inbound(raw.request(), via)),
+        Ok(FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert!(matches!(
+        shutdown_tx.try_send_as(V2IoAdmissionClass::Control, V2IoCommand::Shutdown),
+        Err(V2IoTrySendError::Full(V2IoCommand::Shutdown))
+    ));
+    shutdown_tx
+        .rollback_serve_barrier_for_shutdown()
+        .expect("rollback the raw selected Serve before shutdown");
+    {
+        let shutdown_state = shutdown_tx.queue.lock();
+        assert!(shutdown_state.serve_barrier.is_none());
+        assert!(shutdown_state.serve_ingress_reservation.is_none());
+        assert!(shutdown_state.serve_barrier_predecessors.is_empty());
+        assert!(shutdown_state.pending_serve_requests.is_empty());
+        assert_eq!(shutdown_state.serve_ingress_waiters.len(), 1);
+    }
+    assert!(matches!(
+        shutdown_tx.try_send_as(
+            V2IoAdmissionClass::Control,
+            V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(93),
+                subject: proposal.subject,
+            },
+        ),
+        Err(V2IoTrySendError::Full(V2IoCommand::LoadCandidate {
+            acquisition_id: LockedCandidateAcquisitionId(93),
+            ..
+        }))
+    ));
+    shutdown_tx
+        .try_send_as(V2IoAdmissionClass::Control, V2IoCommand::Shutdown)
+        .expect("rolled-back raw Serve waiter cannot deadlock exact shutdown");
+    assert!(matches!(shutdown_rx.try_recv(), Ok(V2IoCommand::Shutdown)));
+    shutdown_ingress.close();
+    shutdown_ingress
+        .unbind_certified_serve_gate(&shutdown_gate)
+        .expect("retire raw shutdown fixture gate");
 }
 #[test]
 fn certified_serve_delayed_lower_view_cross_relay_cannot_resurrect() {

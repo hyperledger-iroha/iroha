@@ -1446,7 +1446,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 855 tests across forty Rust
+The current pre-network release inventory names 856 tests across forty Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1555,14 +1555,14 @@ asymmetric partitions, current-owner QC redelivery, leader crashes, bounded
 corrupted-chunk recovery, WAL-intent replay, and divergent Taira views, yielding
 the 847-test, 40-module checkpoint. The source-bound terminal-sweep partition
 regression yields the 848-test checkpoint. The late-
-passive-Fetch predecessor witness and one-shot completed-Serve reopening
+passive-Fetch direct-predecessor observation and one-turn RAII reopening
 regressions yield the 850-test checkpoint. Seven Native AMX finality-bound
 merge-projection regressions yield the 857-test, 40-module checkpoint. Three
 Kura recovery regressions and the governance-unlock audit yield the 861-test,
 41-module checkpoint. The production-adapter activation guard and two deferred-
 canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
-yields the current 855-test, 40-module inventory. The complete source-sealed
+yields the current 856-test, 40-module inventory. The complete source-sealed
 pre-network corridor
 contains 88 legs. Six source-
 sealed command legs and the G-SCALE
@@ -1634,7 +1634,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`fa97c6705e7673a883e86b76a1fe5b38aabaa3e4aa5aa110f250265ee84dbbad`.
+`58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27`.
 The separate source-sealed G-UNIT inventory contains 525 focused tests,
 including 319 `iroha_core` tests. Its 526-line canonical TSV has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`;
@@ -1763,7 +1763,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 855-name tree still requires a clean committed, detached,
+names; the current 856-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

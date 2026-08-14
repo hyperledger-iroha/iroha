@@ -53,14 +53,14 @@ Completed history lives in [`status.md`](./status.md).
 ## Build-efficiency closeout
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline and the
-  4,560,536-line ten-percent ceiling. The current 5,014,603-line ratchet leaves
-  a 454,067-line gap; do not redefine the baseline, count moved test code as a
+  4,560,536-line ten-percent ceiling. The current 5,014,747-line count leaves
+  a 454,211-line gap; do not redefine the baseline, count moved test code as a
   physical reduction, or weaken required runtime, security, consensus, SDK, or
   release-evidence behavior to close it.
 - Add the new source and fixture files to the eventual signed commit, then rerun
   the strict SDK source-closure guard from the tracked candidate. Keep the
-  staged merge-resolution layer and unstaged optimization layer reviewable
-  until that signed commit is prepared.
+  staged merge-resolution and optimization changes reviewable until that
+  signed commit is prepared.
 - Obtain the reviewed workspace lockfile that matches the merged manifests
   without locally regenerating `Cargo.lock`. From that immutable candidate, run
   the full locked workspace build and tests, strict all-target/all-feature
@@ -111,15 +111,16 @@ checkout is not release provenance. The outstanding revision-4 work is limited
 to:
 
 - Execute the focused Rust coverage for the source-implemented Kura-root WAL
-  handoff. Kura now retains the exact opened locked root; runner cutover mints
+  handoff. Kura now retains the exact opened locked root; the lifecycle runner mints
   and consumes a move-only exact-instance `sumeragi_v2/wal` authority through
   descriptor-relative no-follow traversal, and legacy pathname opening is
   test-only. No build/test receipt is yet attached. Non-Unix production opening
   remains fail-closed pending an equivalent handle-relative implementation.
-- Wire the unified consuming V1 lifecycle-owner factory into the serialized
-  runner so the retained verified context, coordinator, concrete registry,
-  Certified-Serve payload store, and body store become the sole production
-  execution owner. Startup now privately selects exactly one of no WAL
+- Keep the unified consuming V1 lifecycle-owner factory as the sole serialized
+  runner owner for every non-PendingKura height. The retained verified context,
+  coordinator, concrete registry, Certified-Serve payload store, and body store
+  now move together through startup, live execution, and finalization. Startup
+  privately selects exactly one of no WAL
   authority, recovered phase-vote repair, recovered control-Sign repair, or
   recovered Decision-Fetch repair.
   Exact `ProposalIntent -> SignProposal` and
@@ -165,16 +166,18 @@ to:
   capacity/abort. The initial `ProposalPrepareWal` transaction now holds that
   reservation across exact PrepareIntent WAL fsync and the adjacent
   Broadcast/Prepare-Sign LedgerV1 fsync; post-WAL failures are restart-only.
-  Wire the unified lifecycle Completion-turn driver, including both recovered
-  Proposal shapes, into the production runner activation transaction;
-  do not route either shape through the bounded single-Broadcast cut. The
+  The unified lifecycle Completion-turn driver keeps both recovered Proposal
+  shapes inside the production runner activation transaction; neither shape
+  routes through the bounded single-Broadcast cut. The
   recovered Decision-Fetch ingress prerequisite now removes caller-selected
   physical ordinals: ordinary dequeue and lifecycle discovery share the same
   ready-source/lane, strict-before-dependency selector, and the lifecycle path
   returns a recovered selector only when that exact fair winner owns the
-  authenticated response family. A lifecycle-owned unified Completion/Ingress
-  turn driver prerequisite is now landed around the real borrow-bound runner
-  cursor, but the production runner loop deliberately does not call it yet.
+  authenticated response family. The non-Pending production runner now uses
+  the lifecycle height driver to compose the unified Completion and Ingress owners with the intervening
+  serialized Runtime turn around the real borrow-bound cursor. It derives the
+  output guard from the retained services and routes an ordinary winner through
+  the shared opaque post-dequeue consumer.
   It retains Apply deferral, guarded Sign/Fetch completions, and recovered
   ingress capacity waits internally; takes at most one physical Completion
   head; classifies the complete Ready census; and returns the unchanged cursor
@@ -189,20 +192,24 @@ to:
   preactivation runner key now permits one callback over only the launched
   executor and services while exact
   output ownership, closed ingress, the retained observer, and unarmed clocks
-  hold before and after the callback. Recovered ProposalIntent ownership is
+  hold before and after the callback. The CompleteTip H/H+1 wrapper now lends
+  that same transaction without releasing its retired predecessor. Recovered
+  ProposalIntent ownership is
   retained through cold adapter advancement and can clear its activation
   blocker only by binding the matching reducer directive into a move-only
   prepared runner state which ordinary and CompleteTip activation retain. The
-  production runner still needs to mint/use that state in place of its legacy
-  local-Proposal scheduler at the atomic cutover. An
+  activated runner-only borrow now supplies that same opaque scheduler owner
+  beside owner/executor/services, and the non-Pending production loop uses it
+  in place of the legacy local-Proposal scheduler. An
   armed non-permit fail-stop scope closes output on error or unwind without
   retaining a read permit across nested service fail-stop code.
   The ordinary token now enters the same private runner-owned post-dequeue
-  consumer used by the legacy loop, and the opaque `PendingKuraApply`
+  consumer used by the legacy loop, and one production-shaped activated fixture
+  exercises the complete lifecycle-owned ordinary batch. The opaque `PendingKuraApply`
   Decision-Fetch/WAL/runtime replay join is sealed through preactivation.
-  Before cutover, wire the preactivation key mint, add PendingKura's dedicated
-  no-clock lane-recovery/finalization state, and atomically replace the legacy
-  loop owner. The runner's
+  `PendingKuraApply` now uses one dedicated lifecycle-owned no-clock recovery
+  height; its verified successor crosses into the ordinary lifecycle loop and
+  no legacy owner extends to later heights. The runner's
   freshly opened body store must first enter a
   move-only quarantine that rejects any already promoted, rejected, or retired
   marker, then enter the sole production factory with an adapter-bound
@@ -211,9 +218,8 @@ to:
   sealing with the same `V2ApplyService` the owner retains for launch. It has
   no root-reopen or raw validation-callback alternative. A private runner-only
   permit now seals the prerequisite dependency/local-signer/authenticated-cadence handoff,
-  avoiding the uncommitted State placeholder at fresh height one, but its
-  production mint remains intentionally unwired until the atomic runner
-  cutover; launch will reject a different peer key or incorrect claimed
+  avoiding the uncommitted State placeholder at fresh height one; the
+  production lifecycle runner mints and consumes it. Launch rejects a different peer key or incorrect claimed
   validator position before gate/runtime creation. Authenticated height recovery now
   mints one move-only storage authority binding the verified context, exact
   Kura instance, context-addressed ledger/body roots, and authenticated
@@ -221,16 +227,17 @@ to:
   retains the universal genesis account derived from its authenticated genesis
   key; the factory moves that account into its single replay/live service only
   after exact State/Kura Arc, network, storage, and startup-instance checks.
-  Verified live successors now retain that State-owned Kura identity and can
+  Verified live successors now retain that State-owned Kura identity and
   consume themselves into context, activation, and a rotating-policy lifecycle
-  storage authority; the runner remains intentionally unwired from this new
-  projection until the atomic owner switch.
+  storage authority at both ordinary lifecycle finalization and the dedicated
+  PendingKura lifecycle handoff.
   The same seal now retains the Kura-derived safety-WAL and
   chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
   internally restores one ordinal source, folds producer and leader-wire
   high-watermarks, opens the gate from the owner-held body store, then joins it
   with the exact service-owned Certified-Serve gate on the same still-closed
-  ingress. One RAII owner retires both gates atomically. Raw paths,
+  ingress. The non-PendingKura production runner consumes this path, and one
+  RAII owner retires both gates atomically. Raw paths,
   ordinals, receipts, Queue/archives/cadence/events, and genesis authority are
   no longer launch inputs. Launch consumes the retained Apply service through
   a parent-sealed move-only worker permit. The authenticated adapter
@@ -253,9 +260,9 @@ to:
   authenticated Serve cut against a fresh bounded directory census, adapter
   context, and concrete registry. That bound-owner seal now consumes the sole
   generic owner launch and returns another opaque wrapper which retains the
-  running H+1 stack together with its retired-H authority. Wire that complete
-  wrapper into the later one-shot activation; do not unwrap it into the generic
-  successor publisher.
+  running H+1 stack together with its retired-H authority. The lifecycle runner
+  now consumes that wrapper through its one-shot activation without unwrapping
+  it into the generic successor publisher.
   No caller-supplied branch or recovery cut remains. The owner now has a
   sealed scheduler-input factory for the complete directly owned Ready subset:
   closed Validate completions reattest
@@ -264,26 +271,27 @@ to:
   live executor mode, ingress selector/lane/source, concrete registry carrier,
   and runner-reach observation, followed by the exact `n + 1` Blocked command
   fence and existing `n + 2` durable completion. It currently rejects
-  production use because the runner still follows its independent
-  adapter/body-store/service construction path. Replace that construction
-  with the landed consuming owner-to-I/O-worker launch, then call the planner
-  only from the runner's live current-Ingress cursor and delete the old launch
-  surface in the same cut.
+  production use only outside the lifecycle-owned current-Ingress cursor. The
+  non-PendingKura runner now uses the consuming owner-to-I/O-worker launch and
+  calls the planner through that cursor; the PendingKura runner uses its
+  narrower decided-lane ingress and exposes no ordinary scheduler turn.
   Certified-Serve startup now installs exact shared-family Serve and
-  ProducerTurn carriers, and an unwired selector-bound fresh transaction
+  ProducerTurn carriers, and a selector-bound fresh transaction
   fsyncs its payload before atomically staging LedgerV1 plus both carriers.
-  That fresh transaction deliberately accepts only the startup-derived exact
-  Fetch/Serve/Producer census, optionally beside one exclusive phase-vote,
-  control-Sign, or Decision-Fetch WAL carrier. During runner cutover, replace
-  this bounded census
-  with the exhaustive all-kind
-  coordinator/registry oracle and wire the sealed selector target into the
-  owner. The receipt-free terminal owner transaction now closes payload store,
+  That fresh transaction now uses the exhaustive all-kind
+  coordinator/registry oracle, including exact logical indexes, capacity,
+  Serve/Producer debt and shared replay-family checks, recovered
+  Broadcast/next-Vote pairing, and every concrete carrier variant, while
+  retaining the already-wired sealed selector target in the owner. The
+  receipt-free terminal owner transaction now closes payload store,
   coordinator, registry, and LedgerV1 ownership and performs the exact
-  Serve/Producer carrier replacement or removal; runner cutover must transfer
+  Serve/Producer carrier replacement or removal; the lifecycle runner transfers
   body-store completion authority to the worker without exposing a receipt or
-  raw parts API. ExecuteBody Validate remains typed unsupported. Then delete the
-  selected-Serve episode/witness/latch and runtime lifecycle-ordinal machinery.
+  raw parts API; the lifecycle runner now performs that transfer. ExecuteBody
+  Validate remains typed unsupported. Selected-Serve predecessor scheduling
+  now uses one direct runtime observation plus a move-only, one-turn worker
+  admission; the old persistent episode/witness state is gone while immutable
+  lifecycle ordinals and the single bounded retry latch remain.
   Run the phase-vote/control-Sign/Decision-Fetch end-to-end owner factory and
   the existing
   empty/two-Fetch/terminal-Validate-plus-Serve startup regressions, including
@@ -308,8 +316,8 @@ to:
   worker index before disarming the output guard. Cold open reconstructs the
   dedicated live Store carrier; a durable validation marker can advance that
   exact two-row crash prefix into the existing Apply lineage, while exact
-  collision and stutter tests close both restart cases. Production runner
-  cutover remains a separate activation task. Decision Apply now consumes
+  collision and stutter tests close both restart cases. The production lifecycle
+  runner now drives this activation path. Decision Apply consumes
   the sealed Decision-Fetch
   authority and exact semantically revalidated BodyFrame cut, drives the fixed
   reducer body sequence, publishes or exact-stutters the complete four-row
@@ -358,9 +366,20 @@ to:
   census then rejoins ledger rows plus capacity waits, payload retirement
   precedes one opaque all-row LedgerV1 publication, and its coordinator-owning
   publication token consumes the concrete registry. Only the cleanup-ready
-  state permits normal worker shutdown. Next, mint and consume the landed
-  activation/finalization states in the runner and remove its independent
-  startup path.
+  state permits normal finalized-height teardown. Explicit consuming shutdown
+  transitions now close runner readiness and the exact queue, release prepared
+  local-Proposal state, jointly detach both ingress gates, and permit normal
+  worker stop for unpublished or active heights without claiming finality;
+  CompleteTip keeps its retired predecessor joined through the same boundary.
+  The consumed activation authority also lends one borrow-scoped preactivation
+  ingress aperture for legacy-parity canonical-body recovery, with RAII closure
+  before clocks or status publication. The non-PendingKura runner now consumes
+  the landed activation/finalization/shutdown states and has no independent
+  adapter/body-store/service startup path. The isolated one-height PendingKura
+  path now has its dedicated lifecycle state and an executable Kura-first
+  shutdown/finalization fixture with source mutations. The former monolithic
+  height body is removed; the remaining gate is coordinated Rust execution of
+  that restricted no-clock corridor and the full source/formal suite.
 - Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
   and lifecycle-retention release gate from one final source seal. Run the
   focused Kura and Sumeragi regressions, build the optimized `irohad` and
@@ -376,14 +395,14 @@ to:
 - Finish source-seal, proof, and release validation for the selected-Serve
   Taira `missing_proposal` repair. Live evidence showed a responsive pacemaker
   rotating views while proposal scheduling stayed behind one selected Serve:
-  a passive Fetch could complete after its predecessor episode was sealed and
-  re-enter `BodyAvailable` under an older ordinal which the completed episode
-  could no longer service. The process-local repair now issues one exact
-  target/predecessor/episode witness on each real `no older -> older`
-  transition, coalesces repeated observations, rejects gaps or evidence drift,
-  and reopens `Complete` once for the next witnessed prefix. Passive Fetch
-  remains outside the runnable minimum, so an unresponsive source cannot block
-  the pacemaker. The earlier focused regression still drives local timeout,
+  a passive Fetch could complete after the prior predecessor turn and re-enter
+  `BodyAvailable` under an older ordinal. Runtime now directly observes the
+  current runnable prefix on each bounded turn. The first observation opens a
+  checked worker aperture; later observations open it only for a runnable
+  predecessor. A move-only guard binds admitted fanout to one older owner and
+  closes the aperture on success, error, or unwind. Passive Fetch remains
+  outside the runnable minimum, so an unresponsive source cannot block the
+  pacemaker. The earlier focused regression still drives local timeout,
   responsive remote TimeoutVotes, grouped TC, and `EnterView`; the final queue
   handoff still blocks fresh Serve replenishment until one ordinary producer
   turn runs. The remaining closure is the digest-refreshed mutation matrix,
@@ -1007,7 +1026,7 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 88-leg release inventory contract is
-sealed at 855 production tests across 40 modules, 525 G-UNIT rows, and four
+sealed at 856 production tests across 40 modules, 525 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -1040,12 +1059,13 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
-A fresh source-budget run over the clean merged `e1ad95b535` tree inspected
-7,479 paths with 208 exceptions and counted 5,087,144 Rust lines. It reports
-eight findings, including 72,541 lines above the 5,014,603 ratchet; another
-526,608 lines would be required to reach the 4,560,536 objective. The separate
-generic lifecycle-coordinator cutover receives no multilane credit toward
-either reduction. Source-budget closure therefore remains open.
+A fresh source-budget run over the merged development tree inspected 7,979
+paths with 198 exceptions and counted 5,014,747 Rust lines. It reports zero
+findings and remains below the 5,254,807 ratchet ceiling; another 454,211 lines
+would be required to reach the 4,560,536 objective. The separate generic
+lifecycle-coordinator cutover receives no multilane credit toward that
+reduction. The static source-budget guard passes; the reduction objective and
+immutable-candidate evidence remain open.
 
 Historical autonomous recovery now uses one bounded canonical namespace
 scanner across startup replay binding, disk accounting, and lane-geometry
@@ -1060,12 +1080,12 @@ tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
-The static release inventory now matches `855/855` production tests across 40
+The static release inventory now matches `856/856` production tests across 40
 modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
 SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The separate canonical production module/test TSV has SHA-256
-`fa97c6705e7673a883e86b76a1fe5b38aabaa3e4aa5aa110f250265ee84dbbad`;
+`58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
@@ -1096,9 +1116,9 @@ hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 its staged grouped and diagnostics suite-source manifests each contain 1,386
 records and hash respectively to
-`57606383e10953fdbfe3368edf821bad9df8a3a1f34244039dc88c6bc379b7d4`
+`1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
 and
-`aafc453caec4c704d48e0703bd8ed216ac8028f9e6f4c0c699768f7b074b1223`;
+`1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
@@ -1113,7 +1133,7 @@ source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required legacy-version-before-signing regression preserves the exact
-855-production-test and 525-G-UNIT-test counts. Rust's separated client test
+856-production-test and 525-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -1130,7 +1150,7 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checks,
-exact 855-test production inventory, 525-test G-UNIT source inventory, 12
+exact 856-test production inventory, 525-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
 contract controls require a fresh source-bound rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
@@ -1177,7 +1197,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 855-test,
+  mutations before promotion, then finish the remaining 856-test,
   40-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -1192,9 +1212,9 @@ The remaining work is evidence-driven and must stay in order:
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
   staged grouped/diagnostics suite-source manifests at exactly 1,386 records
   each with SHA-256 values
-  `57606383e10953fdbfe3368edf821bad9df8a3a1f34244039dc88c6bc379b7d4`
+  `1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
   and
-  `aafc453caec4c704d48e0703bd8ed216ac8028f9e6f4c0c699768f7b074b1223`,
+  `1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -27140,7 +27160,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and their exact
-855-test inventory plus the separate exact 525-test G-UNIT inventory, the
+856-test inventory plus the separate exact 525-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

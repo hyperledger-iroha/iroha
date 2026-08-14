@@ -126,7 +126,7 @@ impl V2ApplyService {
         if requested { Err(error) } else { Ok(()) }
     }
     #[cfg(test)]
-    fn fail_after_kura_store_for_test(&self) {
+    pub(in crate::sumeragi) fn fail_after_kura_store_for_test(&self) {
         self.test_failures
             .kura_store
             .store(true, std::sync::atomic::Ordering::Relaxed);

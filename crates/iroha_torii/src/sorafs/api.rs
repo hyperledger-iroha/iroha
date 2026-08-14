@@ -31393,7 +31393,6 @@ mod advert_tests {
     use tempfile::TempDir;
     use tokio::net::TcpListener;
     use tower::ServiceExt as _;
-
     trait JsonTestValueExt {
         fn json_at(&self, path: &[&str]) -> Option<&Value>;
 
@@ -39044,7 +39043,6 @@ mod advert_tests {
         let issuer = stream_token_issuer_for_tests();
         let verifying_key_hex = hex::encode(issuer.verifying_key_bytes());
         app.stream_token_issuer = Some(Arc::new(issuer));
-        app.api_tokens_set = Arc::new(HashSet::from([TEST_STREAM_TOKEN_API_TOKEN.to_owned()]));
 
         TokenTestContext {
             app: Arc::new(app),
@@ -39261,7 +39259,6 @@ mod advert_tests {
     }
     async fn issue_token_base64(context: &TokenTestContext, overrides: TokenOverrides) -> String {
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "issuer-nonce");
 
@@ -41379,7 +41376,6 @@ mod advert_tests {
     async fn storage_token_issues_signed_response() {
         let context = token_test_context();
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-token-1");
         insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
 
@@ -41475,7 +41471,6 @@ mod advert_tests {
                 mode,
             );
             let mut headers = HeaderMap::new();
-            insert_stream_token_api_credential(&mut headers);
             insert_static_api_test_header(
                 &mut headers,
                 HEADER_SORA_NONCE,
@@ -41562,7 +41557,6 @@ mod advert_tests {
             State(context.app.clone()),
             {
                 let mut headers = HeaderMap::new();
-                insert_stream_token_api_credential(&mut headers);
                 insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
                 headers
             },
@@ -41595,7 +41589,6 @@ mod advert_tests {
             (HEADER_SORA_NONCE, "nonce with spaces".to_string()),
         ] {
             let mut headers = HeaderMap::new();
-            insert_stream_token_api_credential(&mut headers);
             insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
             insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
             headers.insert(
@@ -41615,7 +41608,6 @@ mod advert_tests {
             );
         }
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
         let mut noncanonical_manifest = request();
@@ -41642,7 +41634,6 @@ mod advert_tests {
         let context = token_test_context();
         let headers = || {
             let mut headers = HeaderMap::new();
-            insert_stream_token_api_credential(&mut headers);
             insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
             insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
             headers
@@ -41805,44 +41796,9 @@ mod advert_tests {
             rate_limit_bytes: None,
             requests_per_minute: None,
         };
-        let headers = || {
-            let mut headers = HeaderMap::new();
-            insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "credential-auth-test");
-            insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "credential-auth-nonce");
-            headers
-        };
-
-        let missing = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            headers(),
-            JsonOnly(request()),
-        )
-        .await;
-        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
-        assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
-
-        let mut invalid_headers = headers();
-        invalid_headers.insert(
-            crate::HEADER_API_TOKEN,
-            HeaderValue::from_static("invalid-credential"),
-        );
-        let invalid = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            invalid_headers,
-            JsonOnly(request()),
-        )
-        .await;
-        assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
-
-        let mut duplicate_headers = headers();
-        duplicate_headers.append(
-            crate::HEADER_API_TOKEN,
-            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("operator-auth-nonce"),
-        );
+        let mut headers = HeaderMap::new();
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "operator-auth-test");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "operator-auth-nonce");
         let missing = handle_post_sorafs_storage_token_authenticated(
             None,
             State(context.app.clone()),
@@ -41882,7 +41838,6 @@ mod advert_tests {
         let expected = ["2", "1", "0"];
         for (idx, quota_remaining) in expected.into_iter().enumerate() {
             let mut headers = HeaderMap::new();
-            insert_stream_token_api_credential(&mut headers);
             insert_api_test_header(
                 &mut headers,
                 HEADER_SORA_NONCE,
@@ -41908,7 +41863,6 @@ mod advert_tests {
             assert_eq!(remaining, quota_remaining);
         }
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         insert_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-quota-3");
         insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "fresh-label-after-quota");
 
@@ -41972,7 +41926,6 @@ mod advert_tests {
     async fn storage_token_requires_client_header() {
         let (app, _dir, manifest_id) = token_enabled_state();
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-test");
         let request = StreamTokenRequestDto {
             manifest_id_hex: manifest_id,
@@ -41997,7 +41950,6 @@ mod advert_tests {
             hex::encode(issuer.verifying_key_bytes())
         };
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-123");
         insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-alpha");
 

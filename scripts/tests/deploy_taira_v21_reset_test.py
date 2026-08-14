@@ -170,9 +170,9 @@ address = "addr:127.0.0.1:{MODULE.TORII_PORTS[index]}#0000"
 local_budget_bytes = {MODULE.NODE_STORAGE_BUDGET_BYTES}
 
 [nexus.storage.disk_budget_weights]
-kura_blocks_bps = 7500
+kura_blocks_bps = 7499
 wsv_snapshots_bps = 2000
-sorafs_bps = 0
+sorafs_bps = 1
 soranet_spool_bps = 250
 soravpn_spool_bps = 250
 
@@ -248,9 +248,9 @@ address = "addr:127.0.0.1:8080#1234"
 local_budget_bytes = {MODULE.NODE_STORAGE_BUDGET_BYTES}
 
 [nexus.storage.disk_budget_weights]
-kura_blocks_bps = 7500
+kura_blocks_bps = 7499
 wsv_snapshots_bps = 2000
-sorafs_bps = 0
+sorafs_bps = 1
 soranet_spool_bps = 250
 soravpn_spool_bps = 250
 
@@ -798,17 +798,16 @@ def _health_getter(
             return {
                 "version": 1,
                 "nexus_enabled": True,
+                "lane_count": MODULE.TAIRA_LANE_COUNT,
                 "lanes": [
                     {
-                        "id": 3,
-                        "alias": MODULE.IS_ROUTE_ALIAS,
-                        "dataspace_id": MODULE.IS_DATASPACE_ID,
-                    },
-                    {
-                        "id": 4,
-                        "alias": MODULE.IS2_ROUTE_ALIAS,
-                        "dataspace_id": MODULE.IS2_DATASPACE_ID,
-                    },
+                        "id": lane_id,
+                        "alias": lane_alias,
+                        "dataspace_id": dataspace_id,
+                    }
+                    for lane_id, lane_alias, _dataspace_alias, dataspace_id in (
+                        MODULE.TAIRA_LANE_DATASPACE_BINDINGS
+                    )
                 ],
                 "catalog_hash": "hash:" + "c" * 64,
             }
@@ -975,6 +974,29 @@ def test_four_peer_health_requires_exact_common_status_and_dataspaces(
     assert sample.height == 7
     assert sample.block_hash == "ab" * 32
     assert len(sample.nodes) == MODULE.PEER_COUNT
+    topology = json.loads(sample.nexus_topology)
+    assert topology == {
+        "observed_catalog_hash": "hash:" + "c" * 64,
+        "observed_lane_count": MODULE.TAIRA_LANE_COUNT,
+        "canonical_lane_bindings": [
+            {
+                "lane_id": lane_id,
+                "lane_alias": lane_alias,
+                "dataspace_id": dataspace_id,
+                "dataspace_alias": dataspace_alias,
+            }
+            for lane_id, lane_alias, dataspace_alias, dataspace_id in (
+                MODULE.TAIRA_LANE_DATASPACE_BINDINGS
+            )
+        ],
+        "canonical_physical_dataspaces": [
+            {
+                "dataspace_id": dataspace_id,
+                "dataspace_alias": dataspace_alias,
+            }
+            for dataspace_alias, dataspace_id in MODULE.TAIRA_PHYSICAL_DATASPACES
+        ],
+    }
     assert health_urls == [
         url
         for port in MODULE.TORII_PORTS
@@ -1034,7 +1056,7 @@ def test_four_peer_health_rejects_dpn_only_runtime_mismatch(tmp_path: Path) -> N
         )
 
 
-def test_four_peer_health_requires_exact_is_and_is2_dataspace_identities(
+def test_four_peer_health_requires_exact_seven_lane_five_dataspace_topology(
     tmp_path: Path,
 ) -> None:
     source_commit = "4" * 40
@@ -1045,15 +1067,101 @@ def test_four_peer_health_requires_exact_is_and_is2_dataspace_identities(
     def wrong_dataspace(url: str, timeout: float) -> dict:
         payload = copy.deepcopy(healthy(url, timeout))
         if url.endswith("/v1/nexus/lifecycle"):
-            payload["lanes"][1]["dataspace_id"] = 9
+            payload["lanes"][4]["dataspace_id"] = 9
         return payload
 
-    with pytest.raises(MODULE.DeploymentError, match="is/is2 dataspace identities"):
+    with pytest.raises(
+        MODULE.DeploymentError,
+        match="exact canonical seven-lane/five-dataspace topology",
+    ):
         MODULE.capture_fleet(
             plan,
             source_commit,
             DPN_VALIDATOR_RELEASE_COMMIT,
             getter=wrong_dataspace,
+            health_getter=lambda _url, _timeout: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"].pop(),
+            "exactly seven lanes",
+            id="missing-lane",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"].append(
+                {"id": 7, "alias": "extra", "dataspace_id": 0}
+            ),
+            "exactly seven lanes",
+            id="extra-lane",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"][1].update({"id": 0}),
+            "duplicates a lane id or alias",
+            id="duplicate-id",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"][1].update({"alias": "core"}),
+            "duplicates a lane id or alias",
+            id="duplicate-alias",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"][1].update({"alias": "council"}),
+            "exact canonical seven-lane/five-dataspace topology",
+            id="wrong-alias",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"][1].pop("alias"),
+            "invalid alias",
+            id="missing-alias",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"][3].update({"dataspace_id": 0}),
+            "exact canonical seven-lane/five-dataspace topology",
+            id="wrong-dataspace-id",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"][3].pop("dataspace_id"),
+            "invalid dataspace id",
+            id="missing-dataspace-id",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle["lanes"][6].update({"id": 8}),
+            "exact canonical seven-lane/five-dataspace topology",
+            id="wrong-lane-id",
+        ),
+        pytest.param(
+            lambda lifecycle: lifecycle.update({"lane_count": 8}),
+            "lane_count is not exactly 7",
+            id="wrong-lane-count",
+        ),
+    ],
+)
+def test_four_peer_health_rejects_noncanonical_lane_bindings(
+    tmp_path: Path,
+    mutation,
+    message: str,
+) -> None:
+    source_commit = "4" * 40
+    bundle = _build_bundle(tmp_path, "5" * 64, source_commit)
+    plan = _validate(bundle, "5" * 64, source_commit)
+    healthy = _health_getter(plan, source_commit)
+
+    def malformed_topology(url: str, timeout: float) -> dict:
+        payload = copy.deepcopy(healthy(url, timeout))
+        if url.endswith("/v1/nexus/lifecycle"):
+            mutation(payload)
+        return payload
+
+    with pytest.raises(MODULE.DeploymentError, match=message):
+        MODULE.capture_fleet(
+            plan,
+            source_commit,
+            DPN_VALIDATOR_RELEASE_COMMIT,
+            getter=malformed_topology,
             health_getter=lambda _url, _timeout: None,
         )
 

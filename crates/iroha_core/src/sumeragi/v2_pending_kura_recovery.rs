@@ -57,9 +57,36 @@ pub(in crate::sumeragi) struct PreparedRecoveredPendingKuraApplyReplayV1 {
     effect: AdapterEffect,
 }
 
-// TODO: Route the recovery plan's PendingKura branch through this sealed
-// startup and a dedicated no-clock lane-recovery/finalization state before the
-// ordinary runner is switched wholesale to lifecycle-owned height startup.
+/// Installed interrupted-tip identity retained through no-clock lane recovery.
+///
+/// The expected canonical tip remains opaque. Lifecycle activation uses it to
+/// reauthenticate State and Kura after the local Apply completes, while the
+/// optional pre-Apply height-one Nexus/AMX capability is consumed before lane
+/// startup can cross the applied-height boundary.
+#[must_use = "installed pending Kura identity must remain with its lifecycle height"]
+pub(in crate::sumeragi) struct InstalledPendingKuraApplyV1 {
+    expected: crate::sumeragi::v2_recovery::PendingKuraApply,
+    genesis: Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext>,
+}
+
+impl InstalledPendingKuraApplyV1 {
+    /// Consume the replayed height-one projection into lane-work startup.
+    pub(in crate::sumeragi) fn take_genesis(
+        &mut self,
+    ) -> Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext> {
+        self.genesis.take()
+    }
+
+    /// Borrow the opaque expected tip only inside lifecycle authentication.
+    pub(in crate::sumeragi) const fn expected(
+        &self,
+    ) -> crate::sumeragi::v2_recovery::PendingKuraApply {
+        self.expected
+    }
+}
+
+// The production PendingKura branch consumes this sealed startup through the
+// dedicated no-clock lane-recovery/finalization lifecycle.
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredAdapterStartup {
@@ -310,10 +337,7 @@ impl PreparedRecoveredPendingKuraApplyReplayV1 {
             crate::sumeragi::v2_runtime::SerializedV2Runtime,
         >,
         services: &mut crate::sumeragi::v2_worker::ProductionV2Services,
-    ) -> Result<
-        Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext>,
-        crate::sumeragi::v2_effects::EffectExecutorError,
-    > {
+    ) -> Result<InstalledPendingKuraApplyV1, crate::sumeragi::v2_effects::EffectExecutorError> {
         let Self {
             expected,
             verified,
@@ -337,7 +361,7 @@ impl PreparedRecoveredPendingKuraApplyReplayV1 {
         let effects = vec![effect];
         let genesis = executor.verify_pending_kura_apply_replay(expected, &effects)?;
         executor.consume_pending_tip_recovery_effects(effects, services)?;
-        Ok(genesis)
+        Ok(InstalledPendingKuraApplyV1 { expected, genesis })
     }
 
     #[cfg(test)]

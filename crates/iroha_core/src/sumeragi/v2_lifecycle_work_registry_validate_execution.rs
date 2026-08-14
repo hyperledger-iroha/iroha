@@ -490,6 +490,7 @@ impl<'a> PreparedCertifiedFetchCompletion<'a> {
         let ConcreteLifecycleWorkKind::PendingAdapter {
             effect: incumbent_effect,
             pending: incumbent_pending,
+            ..
         } = &incumbent.kind
         else {
             retain_receipt!(CertifiedFetchCompletionError::WrongIncumbentShape);
@@ -637,6 +638,7 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
         let ConcreteLifecycleWorkKind::PendingAdapter {
             effect: incumbent_effect,
             pending: incumbent_pending,
+            ..
         } = kind
         else {
             panic!("validated certified-Fetch incumbent remains a pending adapter")

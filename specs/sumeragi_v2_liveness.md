@@ -342,23 +342,21 @@ re-enters scheduling at the exact old ordinal, ahead of unrelated later work.
 That passive-to-runnable transition is also a reviewed exact-Serve boundary.
 A selected Serve ticket may legitimately finish an older-owner turn while the
 Fetch is still passive; a later authenticated reconstruction must not be
-stranded behind the completed turn. The runtime therefore retains, for the
-current process-local Serve target only, whether a strictly older runnable
-prefix is physically present and a monotone predecessor-episode ordinal. An
-observed `no older -> older` transition issues one non-serialized witness over
-the Serve ordinal, the minimum predecessor ordinal, and the next exact episode.
-Repeated observation of the same continuous prefix returns the same witness;
-retry-unadmitted pressure keeps the physical-presence latch set and cannot mint
-another episode. The worker accepts episode one or the checked exact successor
-of its retained witness, rejects regressions, gaps, target drift, and changed
-same-episode evidence, and changes `Complete` back to `Ready` exactly once for
-that new witness. The runner publishes and observes this evidence before the
-claim and after each bounded predecessor recheck. It can therefore drain the
-late Fetch descendant under its original ordinal and still preserve the
-selected Serve position and the final producer handoff. Passive Fetch itself
-remains intentionally absent from the runnable minimum, so an unresponsive
-body source cannot veto timeout or view progress. Witness replenishment is
-finite local bookkeeping, not consensus progress or a new fairness premise.
+stranded behind an earlier bounded turn. For the immutable current Serve
+ordinal, the runtime directly reports whether this is the first checked target
+observation and whether a strictly older runnable predecessor currently
+exists. Either fact may open one move-only, barrier-bound worker admission for
+that turn. While the guard is live, every worker admission path permits only
+the selected older owner (including its same-owner fanout); normal completion,
+error, and unwind close the aperture. The runner drains one bounded completion,
+re-observes, optionally advances one capacity-backed predecessor, performs the
+reviewed certificate escape, re-observes once more, and retires the guard before
+timeout recovery. It can therefore drain a late Fetch descendant under its
+original ordinal while preserving the selected Serve position and final
+producer handoff. Passive Fetch itself remains intentionally absent from the
+runnable minimum, so an unresponsive body source cannot veto timeout or view
+progress. The direct observations and transient aperture are finite local
+bookkeeping, not consensus progress or a new fairness premise.
 
 Authenticated consensus-message ownership likewise spans the runtime queue and
 the adapter's Busy-deferred lanes through one generic production path. The
@@ -1302,7 +1300,7 @@ terminal-outcome and startup-recovery coverage plus final source reconciliation
 bring the 837-test, 39-module checkpoint. Ten deterministic network simulations
 bring the 847-test, 40-module checkpoint. The source-bound terminal-sweep
 partition regression brings the source-bound inventory to the 848-test
-checkpoint. The late passive-Fetch completion and one-shot completed-Serve
+checkpoint. The late passive-Fetch completion and one-turn direct-predecessor
 reopening regressions bring the 850-test checkpoint. Seven Native AMX finality-
 bound merge-projection regressions bring the 857-test, 40-module checkpoint.
 Three Kura recovery regressions and the governance-unlock audit bring the 861-
@@ -1310,7 +1308,7 @@ test, 41-module checkpoint. The production-adapter activation guard and two
 deferred-canonical-carrier completion regressions produced the historical
 864-test, 41-module checkpoint. Retiring the duplicate inline network-simulation
 rows brings the current
-source-bound inventory to 855 exact tests across 40 modules and 88 pre-network
+source-bound inventory to 856 exact tests across 40 modules and 88 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1319,7 +1317,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`fa97c6705e7673a883e86b76a1fe5b38aabaa3e4aa5aa110f250265ee84dbbad`.
+`58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27`.
 Nine of those legs execute the separate 525-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 526 TSV lines and has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
@@ -1579,7 +1577,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 855-test inventory is a mechanically checked
+The current 856-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1769,7 +1767,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 855 exact production
+Before those longer scenarios, the PR gate inventories 856 exact production
 liveness tests and executes all 40 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 525-test
 focus inventory. The
@@ -1936,7 +1934,7 @@ legs. Three Kura recovery regressions and the governance-unlock audit bring the
 activation guard and two deferred-canonical-carrier completion regressions
 produced the historical 864-test, 41-module, 89-leg checkpoint. After retirement
 of the duplicate inline network-simulation rows, the current inventory contains
-855 tests across 40 modules and 88 legs.
+856 tests across 40 modules and 88 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1968,7 +1966,7 @@ unbounded broadcast admission. The integration filter remains a five-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 88-leg, 855-production-test corridor plus 525 G-UNIT tests; execution
+audited 88-leg, 856-production-test corridor plus 525 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2295,7 +2293,7 @@ without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
 receipt binds the 88 pre-network corridor legs and
-their exact 855-test production inventory, the separate 525-test G-UNIT
+their exact 856-test production inventory, the separate 525-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

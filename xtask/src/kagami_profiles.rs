@@ -113,6 +113,280 @@ fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: 
         .expect("known account literal must parse");
     account_literal_for_chain_discriminant(&account_id, chain_discriminant)
 }
+fn rendered_nexus_topology(spec: &ProfileSpec) -> &'static str {
+    match spec.slug {
+        "iroha3-taira" => {
+            r#"[nexus]
+enabled = true
+lane_count = 7
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "core"
+description = "Primary execution lane"
+dataspace = "universal"
+visibility = "public"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "governance"
+description = "Governance & parliament traffic"
+dataspace = "universal"
+visibility = "public"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "zk"
+description = "Zero-knowledge attachments"
+dataspace = "universal"
+visibility = "public"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 3
+alias = "dpn"
+description = "Digital payments network traffic"
+dataspace = "dpn"
+visibility = "restricted"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 4
+alias = "external-poc"
+description = "External PoC traffic"
+dataspace = "is"
+visibility = "restricted"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 5
+alias = "boi-mobile"
+description = "Bank of Israel mobile-wallet traffic"
+dataspace = "is2"
+visibility = "restricted"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 6
+alias = "cbsi"
+description = "Central-bank service integration traffic"
+dataspace = "cbsi"
+visibility = "restricted"
+metadata = {}
+
+[[nexus.dataspace_catalog]]
+alias = "universal"
+id = 0
+description = "Shared public data space for core, governance, and zero-knowledge lanes"
+fault_tolerance = 1
+
+[[nexus.dataspace_catalog]]
+alias = "dpn"
+id = 10
+manifest_hash = "0a00000000000000000000000000000000000000000000000000000000000000"
+description = "Digital payments network data space"
+fault_tolerance = 1
+
+[[nexus.dataspace_catalog]]
+alias = "is"
+id = 6647857470246403404
+manifest_hash = "4cbd76b725ef415c000000000000000000000000000000000000000000000000"
+description = "External PoC data space"
+fault_tolerance = 1
+
+[[nexus.dataspace_catalog]]
+alias = "is2"
+id = 8477022798449861195
+manifest_hash = "4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b"
+description = "Bank of Israel mobile-wallet data space"
+fault_tolerance = 1
+
+[[nexus.dataspace_catalog]]
+alias = "cbsi"
+id = 20
+manifest_hash = "1400000000000000000000000000000000000000000000000000000000000000"
+description = "Central-bank service integration data space"
+fault_tolerance = 1
+
+[nexus.routing_policy]
+default_lane = 0
+default_dataspace = "universal"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "dpn"
+[nexus.routing_policy.rules.matcher]
+account = "*@dpn"
+
+[[nexus.routing_policy.rules]]
+lane = 4
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+account = "*@wonderland.is"
+
+[[nexus.routing_policy.rules]]
+lane = 5
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@boi.is2"
+
+[[nexus.routing_policy.rules]]
+lane = 5
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@leumi.is2"
+
+[[nexus.routing_policy.rules]]
+lane = 5
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@hapoalim.is2"
+
+[[nexus.routing_policy.rules]]
+lane = 5
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@discount.is2"
+
+[[nexus.routing_policy.rules]]
+lane = 5
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@mizrahi.is2"
+
+[[nexus.routing_policy.rules]]
+lane = 5
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@fibi.is2"
+
+[[nexus.routing_policy.rules]]
+lane = 5
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@onezero.is2"
+
+[[nexus.routing_policy.rules]]
+lane = 5
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@jerusalem.is2"
+
+[[nexus.routing_policy.rules]]
+lane = 6
+dataspace = "cbsi"
+[nexus.routing_policy.rules.matcher]
+account = "*@cbsi"
+
+[[nexus.routing_policy.rules]]
+lane = 6
+dataspace = "cbsi"
+[nexus.routing_policy.rules.matcher]
+account = "*@pob.cbsi"
+
+[[nexus.routing_policy.rules]]
+lane = 6
+dataspace = "cbsi"
+[nexus.routing_policy.rules.matcher]
+account = "*@bred.cbsi"
+
+[[nexus.routing_policy.rules]]
+lane = 6
+dataspace = "cbsi"
+[nexus.routing_policy.rules.matcher]
+account = "*@anz.cbsi"
+
+[[nexus.routing_policy.rules]]
+lane = 6
+dataspace = "cbsi"
+[nexus.routing_policy.rules.matcher]
+account = "*@bsp.cbsi"
+
+[[nexus.routing_policy.rules]]
+lane = 6
+dataspace = "cbsi"
+[nexus.routing_policy.rules.matcher]
+account = "*@m-selen.cbsi"
+
+[[nexus.routing_policy.rules]]
+lane = 6
+dataspace = "cbsi"
+[nexus.routing_policy.rules.matcher]
+account = "*@ezipei.cbsi"
+
+[[nexus.routing_policy.rules]]
+lane = 1
+dataspace = "universal"
+[nexus.routing_policy.rules.matcher]
+instruction = "governance"
+
+[[nexus.routing_policy.rules]]
+lane = 2
+dataspace = "universal"
+[nexus.routing_policy.rules.matcher]
+instruction = "smartcontract::deploy"
+"#
+        }
+        "iroha3-nexus" => {
+            r#"[nexus]
+enabled = true
+lane_count = 3
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "core"
+description = "Primary execution lane"
+dataspace = "universal"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "governance"
+description = "Governance & parliament traffic"
+dataspace = "universal"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "zk"
+description = "Zero-knowledge attachments"
+dataspace = "universal"
+metadata = {}
+
+[[nexus.dataspace_catalog]]
+alias = "universal"
+id = 0
+description = "Shared public data space for core, governance, and zero-knowledge lanes"
+fault_tolerance = 1
+
+[nexus.routing_policy]
+default_lane = 0
+default_dataspace = "universal"
+
+[[nexus.routing_policy.rules]]
+lane = 1
+dataspace = "universal"
+[nexus.routing_policy.rules.matcher]
+instruction = "governance"
+
+[[nexus.routing_policy.rules]]
+lane = 2
+dataspace = "universal"
+[nexus.routing_policy.rules.matcher]
+instruction = "smartcontract::deploy"
+"#
+        }
+        _ => {
+            r#"[nexus]
+enabled = true
+lane_count = 3
+"#
+        }
+    }
+}
+
 pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
     let specs = resolve_requested_profiles(&options.profiles)?;
     preflight_required_profile_inputs(&specs, options.nexus_xor_asset_definition_id.as_deref())?;
@@ -841,6 +1115,7 @@ allow_tool_prefixes = ["iroha."]
     };
     let max_payload_bytes =
         iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get();
+    let nexus_topology = rendered_nexus_topology(spec);
     let authenticated_non_validator_sources =
         iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
             .get();
@@ -917,9 +1192,7 @@ identity_public_key = "{stream_pub}"
 {streaming_private_key}
 {sorafs_site_bindings}
 
-[nexus]
-enabled = true
-lane_count = 3
+{nexus_topology}
 {taira_nexus_overrides}
 {governance_overrides}
 
@@ -948,6 +1221,7 @@ file = "genesis.signed.nrt"
         torii_address = torii_address,
         torii_max_content_len = torii_max_content_len,
         sorafs_site_bindings = sorafs_site_bindings,
+        nexus_topology = nexus_topology,
         taira_nexus_overrides = taira_nexus_overrides,
         taira_mcp_overrides = taira_mcp_overrides,
         governance_overrides = governance_overrides,
@@ -1106,6 +1380,16 @@ fn render_readme(
     } else {
         ""
     };
+    let topology_note = match spec.slug {
+        "iroha3-taira" => {
+            "- topology: 7 logical lanes over 5 physical dataspaces (`universal`, `dpn`, `is`, `is2`, `cbsi`); governance and zk are lanes in `universal`, not dataspaces\n- physical-deployment limit: this deterministic sample uses one 7-peer harness to validate config/genesis binding; it does not provision five disjoint server cohorts or per-dataspace manifests and is not evidence of a deployable physical topology\n"
+        }
+        "iroha3-nexus" => {
+            "- topology: 3 logical lanes (`core`, `governance`, `zk`) in the single physical `universal` dataspace\n"
+        }
+        _ => "",
+    };
+
     format!(
         r#"# {slug} sample bundle
 
@@ -1114,6 +1398,7 @@ fn render_readme(
 - {vrf_line}
 - deterministic genesis creation-time base (ms): {creation_time_ms}
 - genesis public key: {genesis_pk}
+{topology_note}
 - peers:
 {peer_rows}
 
@@ -1137,6 +1422,7 @@ Regenerate:
         vrf_line = vrf_line,
         creation_time_ms = PROFILE_GENESIS_CREATION_TIME_MS,
         genesis_pk = genesis_public_key,
+        topology_note = topology_note,
         peer_rows = peer_rows,
         profile = spec.profile_flag,
         verify_vrf_seed_arg = verify_vrf_seed_arg,
@@ -1485,6 +1771,232 @@ mod tests {
         );
     }
     #[test]
+    fn rendered_profile_topologies_separate_lanes_from_dataspaces() {
+        type ParsedTopology = (
+            i64,
+            Vec<(i64, String, String)>,
+            Vec<(String, i64)>,
+            Vec<(i64, String, Option<String>, Option<String>)>,
+        );
+
+        fn parsed_topology(spec: &ProfileSpec) -> ParsedTopology {
+            let table = rendered_nexus_topology(spec)
+                .parse::<toml::Table>()
+                .expect("rendered Nexus topology must be valid TOML");
+            let nexus = table
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .expect("rendered topology must contain [nexus]");
+            let lane_count = nexus
+                .get("lane_count")
+                .and_then(toml::Value::as_integer)
+                .expect("rendered topology must declare lane_count");
+            let lanes = nexus
+                .get("lane_catalog")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|lane| {
+                    let lane = lane.as_table().expect("lane catalog entry must be a table");
+                    (
+                        lane.get("index")
+                            .and_then(toml::Value::as_integer)
+                            .expect("lane entry must have an index"),
+                        lane.get("alias")
+                            .and_then(toml::Value::as_str)
+                            .expect("lane entry must have an alias")
+                            .to_owned(),
+                        lane.get("dataspace")
+                            .and_then(toml::Value::as_str)
+                            .expect("lane entry must bind a dataspace")
+                            .to_owned(),
+                    )
+                })
+                .collect();
+            let dataspaces = nexus
+                .get("dataspace_catalog")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|dataspace| {
+                    let dataspace = dataspace
+                        .as_table()
+                        .expect("dataspace catalog entry must be a table");
+                    (
+                        dataspace
+                            .get("alias")
+                            .and_then(toml::Value::as_str)
+                            .expect("dataspace entry must have an alias")
+                            .to_owned(),
+                        dataspace
+                            .get("id")
+                            .and_then(toml::Value::as_integer)
+                            .expect("dataspace entry must have an id"),
+                    )
+                })
+                .collect();
+            let rules = nexus
+                .get("routing_policy")
+                .and_then(toml::Value::as_table)
+                .and_then(|routing| routing.get("rules"))
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|rule| {
+                    let rule = rule.as_table().expect("routing rule must be a table");
+                    let matcher = rule
+                        .get("matcher")
+                        .and_then(toml::Value::as_table)
+                        .expect("routing rule must contain a matcher");
+                    (
+                        rule.get("lane")
+                            .and_then(toml::Value::as_integer)
+                            .expect("routing rule must name a lane"),
+                        rule.get("dataspace")
+                            .and_then(toml::Value::as_str)
+                            .expect("routing rule must name a dataspace")
+                            .to_owned(),
+                        matcher
+                            .get("account")
+                            .and_then(toml::Value::as_str)
+                            .map(str::to_owned),
+                        matcher
+                            .get("instruction")
+                            .and_then(toml::Value::as_str)
+                            .map(str::to_owned),
+                    )
+                })
+                .collect();
+            (lane_count, lanes, dataspaces, rules)
+        }
+
+        let (lane_count, lanes, dataspaces, rules) = parsed_topology(&PROFILES[1]);
+        assert_eq!(lane_count, 7);
+        assert_eq!(
+            lanes,
+            [
+                (0, "core".to_owned(), "universal".to_owned()),
+                (1, "governance".to_owned(), "universal".to_owned()),
+                (2, "zk".to_owned(), "universal".to_owned()),
+                (3, "dpn".to_owned(), "dpn".to_owned()),
+                (4, "external-poc".to_owned(), "is".to_owned()),
+                (5, "boi-mobile".to_owned(), "is2".to_owned()),
+                (6, "cbsi".to_owned(), "cbsi".to_owned()),
+            ]
+        );
+        assert_eq!(
+            dataspaces,
+            [
+                ("universal".to_owned(), 0),
+                ("dpn".to_owned(), 10),
+                ("is".to_owned(), 6_647_857_470_246_403_404),
+                ("is2".to_owned(), 8_477_022_798_449_861_195),
+                ("cbsi".to_owned(), 20),
+            ]
+        );
+        assert_eq!(rules.len(), 19);
+        assert_eq!(
+            rules.first(),
+            Some(&(3, "dpn".to_owned(), Some("*@dpn".to_owned()), None))
+        );
+        assert_eq!(
+            rules.get(1),
+            Some(&(4, "is".to_owned(), Some("*@wonderland.is".to_owned()), None,))
+        );
+        assert_eq!(
+            rules.get(17),
+            Some(&(
+                1,
+                "universal".to_owned(),
+                None,
+                Some("governance".to_owned()),
+            ))
+        );
+        assert_eq!(
+            rules.get(18),
+            Some(&(
+                2,
+                "universal".to_owned(),
+                None,
+                Some("smartcontract::deploy".to_owned()),
+            ))
+        );
+
+        let (lane_count, lanes, dataspaces, rules) = parsed_topology(&PROFILES[2]);
+        assert_eq!(lane_count, 3);
+        assert_eq!(
+            lanes,
+            [
+                (0, "core".to_owned(), "universal".to_owned()),
+                (1, "governance".to_owned(), "universal".to_owned()),
+                (2, "zk".to_owned(), "universal".to_owned()),
+            ]
+        );
+        assert_eq!(dataspaces, [("universal".to_owned(), 0)]);
+        assert_eq!(
+            rules,
+            [
+                (
+                    1,
+                    "universal".to_owned(),
+                    None,
+                    Some("governance".to_owned()),
+                ),
+                (
+                    2,
+                    "universal".to_owned(),
+                    None,
+                    Some("smartcontract::deploy".to_owned()),
+                ),
+            ]
+        );
+
+        let (lane_count, lanes, dataspaces, rules) = parsed_topology(&PROFILES[0]);
+        assert_eq!(lane_count, 3);
+        assert!(lanes.is_empty());
+        assert!(dataspaces.is_empty());
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn checked_in_profile_topologies_match_the_generator() {
+        for spec in [&PROFILES[1], &PROFILES[2]] {
+            let expected = rendered_nexus_topology(spec)
+                .parse::<toml::Table>()
+                .expect("rendered topology must be valid TOML");
+            let checked_in_path = workspace_root()
+                .join("defaults/kagami")
+                .join(spec.slug)
+                .join("config.toml");
+            let checked_in = fs::read_to_string(&checked_in_path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", checked_in_path.display()))
+                .parse::<toml::Table>()
+                .unwrap_or_else(|error| panic!("parse {}: {error}", checked_in_path.display()));
+            let expected_nexus = expected
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .expect("rendered topology must contain [nexus]");
+            let checked_in_nexus = checked_in
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .expect("checked-in profile must contain [nexus]");
+            for key in [
+                "lane_count",
+                "lane_catalog",
+                "dataspace_catalog",
+                "routing_policy",
+            ] {
+                assert_eq!(
+                    checked_in_nexus.get(key),
+                    expected_nexus.get(key),
+                    "checked-in {} {key} must match its generator",
+                    spec.slug
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rendered_profile_configs_pass_actual_config_admission() {
         let expected_hash = Hash::new(b"xtask profile config admission").to_string();
         for profile in PROFILES {
@@ -1623,6 +2135,9 @@ mod tests {
         ));
         assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-taira\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
+        assert!(readme.contains("7 logical lanes over 5 physical dataspaces"));
+        assert!(readme.contains("governance and zk are lanes in `universal`"));
+        assert!(readme.contains("does not provision five disjoint server cohorts"));
     }
     #[test]
     fn nexus_readme_regeneration_includes_asset_definition_id() {
@@ -1640,6 +2155,8 @@ mod tests {
             "cargo xtask kagami-profiles --profile iroha3-nexus \
              --nexus-xor-asset-definition-id xor-definition-id\n"
         ));
+        assert!(readme.contains("3 logical lanes (`core`, `governance`, `zk`)"));
+        assert!(readme.contains("single physical `universal` dataspace"));
     }
     #[test]
     fn nexus_requirement_is_preflighted_before_all_profile_mutation() {

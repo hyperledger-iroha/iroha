@@ -212,9 +212,14 @@ public final class SubscriptionToriiClient {
     if (params == null || params.isEmpty()) {
       return target;
     }
-    final StringBuilder builder = new StringBuilder(target.toString());
-    builder.append(target.toString().contains("?") ? "&" : "?");
+    final String targetText = target.toString();
+    final int rawFragmentIndex = targetText.indexOf('#');
+    final int fragmentIndex = rawFragmentIndex >= 0 ? rawFragmentIndex : targetText.length();
+    final StringBuilder builder = new StringBuilder(targetText.length() + 1);
+    builder.append(targetText, 0, fragmentIndex);
+    builder.append(builder.indexOf("?") >= 0 ? "&" : "?");
     builder.append(encodeQuery(params));
+    builder.append(targetText, fragmentIndex, targetText.length());
     return URI.create(builder.toString());
   }
 

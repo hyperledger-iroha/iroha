@@ -45,11 +45,13 @@ escrow catalog, or offline-specific health/admission gate. `/health` and
 invalid material referenced by a particular top-up or redemption operation is
 reported as that transaction's validation result.
 
-The checked-in profile contains both BOI dataspaces: `is` for the scenario
-browser and `is2` for the mobile wallet. Their logical lanes do not change this
-capability contract. The mobile product may expose offline UI while the
-scenario browser does not; validators in either physical cohort run the same
-universally capable Iroha software.
+The checked-in topology declares both BOI dataspace bindings: `is` for the
+scenario browser and `is2` for the mobile wallet. The declarations do not by
+themselves prove that either physical cohort is deployed; release evidence must
+bind each one to its own manifest and server/validator set. Their logical lanes
+do not change this capability contract. The mobile product may expose offline
+UI while the scenario browser does not; validators in either physical cohort
+run the same universally capable Iroha software.
 
 ## Network identity
 
@@ -58,9 +60,17 @@ universally capable Iroha software.
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
 - Consensus protocol: Sumeragi v2 state machine, wire revision 4 only (`wire_protocol_version = 4`)
 - Timing profile: authoritative 4,000 ms block cadence and one absolute 40,000 ms view-zero round deadline
-- Candidate bounds: 96 transactions, 21 MiB canonical body, and a four-times bounded queue scan
+- Candidate bounds: 96 transactions, 16 MiB canonical body, and a four-times bounded queue scan
 - Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
   geometry come from signed genesis, not a mutable local mode or RBC selector
+
+The checked-in `genesis.json` is an unsigned deployment template. Its
+`nexus_amx_context_hash` is the config-only projection and its
+`execution_policy_hash` is a non-deployable template value. The private bundle
+renderer must supply the final per-dataspace manifests, validator rosters, and
+runtime signer bindings; the deployment signer then replaces both commitments,
+refreshes the fingerprint, and signs the resulting exact manifest. Never treat
+the source template's execution-policy value as proof of the deployed policy.
 
 The v2 chain is a fresh-genesis reset. Never point a v2 validator at the archived chain's Kura,
 queue journal, or RBC session directories, and never attempt a mixed v1/v2 rolling upgrade. Keep
@@ -122,13 +132,14 @@ config rather than wrapper-local defaults:
 The co-located-validator storage contract is also explicit:
 
 - `nexus.storage.local_budget_bytes = 68_719_476_736` (64 GiB per validator)
-- Kura 75%, WSV snapshots 20%, SoraFS 0%, SoraNet spool 2.5%, and SoraVPN
-  spool 2.5%
+- Kura 74.99%, WSV snapshots 20%, SoraFS 0.01%, SoraNet spool 2.5%, and
+  SoraVPN spool 2.5%
 
-SoraFS storage is disabled on this profile. Do not remove the aggregate budget
-or reassign its zero share without rerunning the free-space and fsync
-preflight; near-full shared-host storage can turn restart durability barriers
-into multi-second stalls.
+SoraFS storage is disabled on this profile; its one-basis-point share is the
+minimum parser-valid reserve and does not enable the service. Do not remove the
+aggregate budget or reassign that reserve without rerunning the free-space and
+fsync preflight; near-full shared-host storage can turn restart durability
+barriers into multi-second stalls.
 
 ## Included artifacts
 
@@ -846,11 +857,15 @@ changes validator admission.
 ## Private profiles
 
 The canonical catalog and lane mapping live in this repository; runtime host
-allocations, credentials, and application-specific private-dataspace profiles
-do not. Keep each physical dataspace profile in the deployment repository and
-pass it to the renderer explicitly. Do not reuse a lane alias as the dataspace
-identity and do not claim a distinct dataspace without a distinct deployed
-cohort:
+allocations, credentials, per-dataspace manifests, and application-specific
+private-dataspace profiles do not. The checked-in roster and ordinary render
+command produce the `universal` cohort only; they are not a five-cohort release
+assembler. Keep each additional physical dataspace profile in the deployment
+repository and pass it to the renderer explicitly. A lane and a dataspace may
+use the same human-readable alias (as `dpn` and `cbsi` do), but their typed
+identities remain separate and one must never be inferred from the other. Do
+not claim a distinct dataspace without a distinct deployed cohort and its
+manifest:
 
 ```bash
 python3 scripts/render_taira_validator_bundle.py \

@@ -375,22 +375,37 @@ def test_autonomous_terminal_recovery_rejects_unchecked_later_carrier_group(
 def test_autonomous_terminal_recovery_rejects_queue_planning_before_terminal_partition(
     tmp_path: Path,
 ) -> None:
-    module = load_checker()
-    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    swap_ordered_once_after(
-        path,
-        "fn run_inner(",
-        "reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
-        "let planning = plan_lane_reservation_ownership(",
+    cases = (
+        (
+            "ordinary",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "fn run_non_pending_lifecycle_loop(",
+            "run_non_pending_lifecycle_loop",
+        ),
+        (
+            "pending-kura",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+            "fn reconcile_pending_lane_startup(",
+            "reconcile_pending_lane_startup",
+        ),
     )
-    errors = validate_autonomous_terminal_recovery_fixture(
-        tmp_path, module, models
-    )
-    assert any(
-        "run_inner" in error and "missing or reorders token" in error
-        for error in errors
-    ), errors
+    for fixture_name, relative, anchor, symbol in cases:
+        fixture = tmp_path / fixture_name
+        module = load_checker()
+        models = copy_autonomous_terminal_recovery_fixture(fixture, module)
+        swap_ordered_once_after(
+            fixture / relative,
+            anchor,
+            "reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
+            "let planning = plan_lane_reservation_ownership(",
+        )
+        errors = validate_autonomous_terminal_recovery_fixture(
+            fixture, module, models
+        )
+        assert any(
+            symbol in error and "missing or reorders token" in error
+            for error in errors
+        ), errors
 
 
 def test_autonomous_terminal_recovery_rejects_all_owned_deferral_predicate(

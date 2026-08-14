@@ -1,7 +1,8 @@
 //! Pure lifecycle schema and value types for the Sumeragi v2 coordinator.
 use super::{
     replay_authority::LifecycleReplayAuthorityV1,
-    scheduler_inputs::AuthenticatedSchedulerInputsFactory, work_registry::ReadyValidateCarrierSeal,
+    scheduler_inputs::AuthenticatedSchedulerInputsFactory,
+    selector::LifecycleIngressSchedulerFetchSeal, work_registry::ReadyValidateCarrierSeal,
 };
 use std::collections::{BTreeMap, BTreeSet};
 pub(super) const MAX_PHYSICAL_SLOTS_PER_RECORD: usize = 64;
@@ -1022,7 +1023,8 @@ impl DurablePayloadReference {
                 Self::None,
                 None
                 | Some(
-                    TerminalOutcome::Cancelled
+                    TerminalOutcome::Advanced
+                    | TerminalOutcome::Cancelled
                     | TerminalOutcome::Rejected(_)
                     | TerminalOutcome::Failed(_),
                 ),
@@ -1569,6 +1571,36 @@ pub(crate) struct SchedulerReadyInputs {
     runner: u64,
 }
 impl SchedulerReadyInputs {
+    /// Join one reserved ordinary certified-Fetch ingress transaction to its
+    /// exact Waiting coordinator row.
+    ///
+    /// This path is distinct from recovered-WAL Fetch scheduling: the selector
+    /// seal authenticates the prospective generation transition while the
+    /// caller retains the bounded I/O reservation.
+    pub(super) fn from_authenticated_waiting_fetch(
+        _factory: &AuthenticatedSchedulerInputsFactory,
+        record: &LifecycleRecord,
+        fetch: LifecycleIngressSchedulerFetchSeal,
+        live_debts: [u64; 6],
+    ) -> Option<Self> {
+        let [mode, capacity, selector, lane, source, runner] = live_debts;
+        let row = Self {
+            owner: record.owner,
+            key: record.key,
+            validate_attestation: None,
+            output_capacity_class: None,
+            physical_capacity_available: true,
+            mode,
+            capacity,
+            selector,
+            lane,
+            source,
+            runner,
+        };
+        (fetch.matches_waiting_record(record) && row.identity_matches(record.ordinal, record))
+            .then_some(row)
+    }
+
     /// Join one exact coordinator row, optional sealed Validate carrier, and
     /// the six authenticated runtime debts into a production scheduler row.
     ///
@@ -1728,7 +1760,7 @@ impl SchedulerReadyInputs {
         row.key = key;
         row
     }
-    /// Return whether this row names the coordinator's exact ready identity.
+    /// Return whether this row names the coordinator's exact record identity.
     pub(super) fn identity_matches(&self, ordinal: u128, record: &LifecycleRecord) -> bool {
         ordinal == record.ordinal
             && self.owner == record.owner
@@ -2136,12 +2168,9 @@ mod tests {
             LifecycleWorkClass::Fetch,
             Some(TerminalOutcome::Completed(None))
         ));
-        assert!(
-            !DurablePayloadReference::None
-                .matches_terminal(LifecycleWorkClass::Fetch, Some(TerminalOutcome::Advanced))
-        );
         for terminal in [
             None,
+            Some(TerminalOutcome::Advanced),
             Some(TerminalOutcome::Cancelled),
             Some(TerminalOutcome::Rejected(7)),
             Some(TerminalOutcome::Failed(9)),

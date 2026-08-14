@@ -1,4 +1,14 @@
 //! Sealed durable-open and authenticated restart reconciliation.
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
+
+#[cfg(test)]
+use iroha_config::parameters::actual::SumeragiV2Config;
+use thiserror::Error;
+
 #[cfg(test)]
 use super::authority;
 use super::{
@@ -25,13 +35,6 @@ use super::{
         ConcreteLifecycleWorkRegistry, PreparedCertifiedServeRegistryBatchV1,
     },
 };
-#[cfg(test)]
-use iroha_config::parameters::actual::SumeragiV2Config;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
-use thiserror::Error;
 /// Exclusive WAL-owned startup projection admitted by storage recovery.
 #[derive(Clone, Copy)]
 enum RecoveredWalStartupProjectionV1<'authority> {

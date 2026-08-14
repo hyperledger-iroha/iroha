@@ -7233,7 +7233,7 @@ where
 pub fn write_canonical_to_writer<T, W>(value: &T, writer: &mut W) -> Result<(), Error>
 where
     T: NoritoSerialize,
-    W: Write,
+    W: Write + ?Sized,
 {
     write_frame_to_writer_with_flags(value, writer, default_encode_flags())
 }
@@ -7253,7 +7253,7 @@ where
 pub fn write_frame_to_writer<T, W>(value: &T, writer: &mut W) -> Result<(), Error>
 where
     T: NoritoSerialize,
-    W: Write,
+    W: Write + ?Sized,
 {
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     write_frame_to_writer_with_flags(value, writer, base_flags)
@@ -7265,7 +7265,7 @@ fn write_frame_to_writer_with_flags<T, W>(
 ) -> Result<(), Error>
 where
     T: NoritoSerialize,
-    W: Write,
+    W: Write + ?Sized,
 {
     validate_header_flags(base_flags)?;
     let first_guard = EncodeContextGuard::enter();
@@ -7343,12 +7343,12 @@ where
 mod write_canonical_tests {
     include!("core/write_canonical_tests.rs");
 }
-struct FramedPayloadWriter<'a, W> {
+struct FramedPayloadWriter<'a, W: ?Sized> {
     inner: &'a mut W,
     len: usize,
     digest: crc64fast::Digest,
 }
-impl<W: Write> Write for FramedPayloadWriter<'_, W> {
+impl<W: Write + ?Sized> Write for FramedPayloadWriter<'_, W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.inner.write_all(bytes)?;
         self.len = self.len.saturating_add(bytes.len());

@@ -98,7 +98,7 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
             "sumeragi_v2_proof_ledger_async_source_cases.py",
         "test_leader_wire_physical_ingress_rejects_semantic_mutations":
             "sumeragi_v2_proof_ledger_async_source_cases.py",
-        "test_exact_serve_runtime_episode_rejects_semantic_mutations":
+        "test_direct_serve_predecessor_rejects_semantic_mutations":
             "sumeragi_v2_proof_ledger_async_source_cases.py",
         "test_local_runner_service_contract_rejects_production_loop_mutations":
             "sumeragi_v2_proof_ledger_async_fairness_cases.py",
@@ -106,6 +106,12 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
             "sumeragi_v2_proof_ledger_async_fairness_cases.py",
         "test_exact_output_production_source_mutations_fail_closed":
             "sumeragi_v2_proof_ledger_exact_output_cases.py",
+        "test_temporal_proof_promotions_require_prerequisites_and_ledger_order":
+            "sumeragi_v2_proof_ledger_trace_dependency_cases.py",
+        "test_successor_run_inner_parser_rejects_neighbor_lookalike":
+            "sumeragi_v2_proof_ledger_successor_production_cases.py",
+        "test_successor_production_source_mapping_mutations_fail_closed":
+            "sumeragi_v2_proof_ledger_successor_production_cases.py",
         "complete_ledger": "sumeragi_v2_proof_ledger_release_inventory_cases.py",
         "write_tlaps_fixture_logs":
             "sumeragi_v2_proof_ledger_release_inventory_cases.py",
@@ -175,7 +181,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 33
+    assert len(filenames) == len(set(filenames)) == 35
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -256,6 +262,8 @@ def copy_transport_hardening_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/irohad/src/main.rs"),
     ):
@@ -1413,8 +1421,6 @@ def test_completion_claim_rejects_unproved_debt_without_release_mode() -> None:
         )
         for error in errors
     )
-
-
 
 
 
@@ -6390,8 +6396,8 @@ def test_terminal_application_runner_call_site_seal_is_canonical() -> None:
         call_site.projection,
         call_site.brace_context,
     ) == (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "run_inner",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "run_lifecycle_active_height",
         "terminal_application",
         (),
     )
@@ -9021,7 +9027,7 @@ def copy_effect_capacity_mutation_fixture(tmp_path: Path, module) -> tuple[Path,
     """Copy the effect-capacity corpus and its persistent recovery seam."""
 
     repo_root = tmp_path / "repo"
-    formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = repo_root / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
     for name in module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS:
         shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
@@ -14586,7 +14592,6 @@ def test_successor_production_source_is_bound() -> None:
 
 
 
-
 def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mutants(
     tmp_path: Path,
 ) -> None:
@@ -14606,7 +14611,11 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
         "crates/iroha_core/src/sumeragi/v2_candidate.rs",
     )
@@ -14710,33 +14719,49 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             "live proposal safe-value call path",
         ),
         (
-            "runner_replay_owner_ignores_locked_subject",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "from_replayed_proposal",
-            "&& replayed.subject == locked_subject",
-            "&& true",
-            "exact replayed-proposal lock-owner authorization kernel",
-        ),
-        (
-            "runner_replay_projection_drops_subject",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "replayed_proposal_sign",
+            "recovered_attempt_mint_drops_subject",
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "from_control",
             "subject: proposal.subject,",
             "subject: wire::BlockSubject::default(),",
-            "replayed proposal tag/round/subject projection",
+            "WAL-authenticated opaque local-Proposal attempt mint",
         ),
         (
-            "runner_startup_disconnects_replay_owner",
+            "recovered_attempt_ignores_locked_subject",
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "exactly_matches_directive",
+            "&& self.subject == locked_subject",
+            "&& true",
+            "opaque recovered local-Proposal directive comparison",
+        ),
+        (
+            "preactivation_skips_opaque_attempt_comparison",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
+            "initialize_recovered_local_proposal",
+            "Some(recovered) if recovered.exactly_matches_directive(directive) => {",
+            "Some(recovered) if true => {",
+            "closed-ingress affine recovered Proposal join",
+        ),
+        (
+            "preactivation_skips_pristine_runner_gate",
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "run_inner",
-            "LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive)",
-            "LocalProposalState::from_replayed_proposal(None, initial_directive)",
-            "startup replay-owner handoff",
+            "bind_recovered_local_proposal",
+            "if !local_proposal.state.is_pristine() {",
+            "if false {",
+            "one-shot recovered Proposal bind into runner-local state",
+        ),
+        (
+            "activation_skips_affine_receipt_revalidation",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "activate_with",
+            "if !local_proposal.exactly_matches(self.executor.context().id(), current_directive) {",
+            "if false {",
+            "activation revalidation of the affine Proposal receipt",
         ),
         (
             "runner_non_validator_requests_locked_body",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "run_inner",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "run_lifecycle_active_height",
             "if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()",
             "if lock_outcome == GlobalBodyLockOutcome::Inserted",
             "locked-body refinement evidence must be requested only by a local validator at exact first admission",
@@ -14864,10 +14889,10 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         (
             "runner_replay_regression_accepts_foreign_subject",
             "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs",
-            "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
+            "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
             'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
             "let foreign_lock = directive(Some(subject), None);",
-            "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles",
+            "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions",
         ),
         (
             "wal_high_subject",
@@ -15983,8 +16008,6 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
     ), errors
 
 
-
-
 @pytest.mark.parametrize(
     ("relative_path", "old", "new", "error_fragment"),
     (
@@ -16606,10 +16629,6 @@ def test_typed_rollover_handoff_rejects_unexpected_config(
         "typed rollover-handoff configuration inventory must equal" in error
         for error in errors
     ), errors
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -21954,17 +21973,17 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         (
             "reply_route_geometry",
             "exact_output",
-            "runner construction must pass the exact P2P source geometry into lane work",
+            "lifecycle construction must pass the exact P2P source geometry into lane work",
         ),
         (
             "watchdog_poll",
             "local_runner",
-            "every serialized height-loop iteration must poll the liveness watchdog",
+            "every ordinary serialized height-loop iteration must poll liveness",
         ),
         (
             "ordinary_ingress_cut",
             "local_runner",
-            "the ordinary height path must invoke the bounded serialized runtime against the live ingress high-watermark",
+            "the ordinary loop must retain its configured post-ingress runtime batch",
         ),
         (
             "retained_response_pacemaker",
@@ -21979,22 +21998,12 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         (
             "pending_recovery_wake_bound",
             "local_runner",
-            "pending-tip recovery must wait only for the lesser of its remaining deadline",
+            "closed pending recovery must wait only for the lesser of its remaining deadline",
         ),
         (
             "exact_admission_timed_continue",
             "local_runner",
-            "all four explicit serialized height-loop continue edges must be finitely timed",
-        ),
-        (
-            "serve_ingress_binding",
-            "exact_output",
-            "the runner must bind Serve and leader-wire ingress to one joint per-height queue owner",
-        ),
-        (
-            "locked_body_first_admission",
-            "locked_body",
-            "locked-body refinement evidence must be requested only by a local validator at exact first admission",
+            "ordinary loop's four explicit continue edges and loop tail must remain finitely timed",
         ),
         (
             "retained_response_timeout_turn",
@@ -22003,141 +22012,130 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         ),
     ),
 )
-def test_run_inner_semantics_survive_all_reviewed_alias_digest_refreshes(
+def test_modular_runner_semantics_survive_their_item_digest_refreshes(
     tmp_path: Path,
     mutation: str,
     checker_name: str,
     expected_error: str,
 ) -> None:
-    """Every reviewed run-loop alias retains an independent semantic mutation."""
+    """Every modular run-loop owner retains an independent semantic mutation."""
 
     module = load_checker()
     formal_dir = reviewed_run_inner_fixture(tmp_path, module, checker_name)
-    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+    ordinary_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    )
+    pending_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
+    )
     if mutation == "reply_route_geometry":
+        path, item_name = ordinary_path, "run_non_pending_lifecycle_loop"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
-            "network.reply_route_source_capacity(),",
-            "network.reply_route_source_capacity().saturating_sub(1),",
+            path,
+            item_name,
+            "let lane_work_limits = lane_work_limits(\n"
+            "            &shared_config,\n"
+            "            network.reply_route_source_capacity(),",
+            "let lane_work_limits = lane_work_limits(\n"
+            "            &shared_config,\n"
+            "            network.reply_route_source_capacity().saturating_sub(1),",
         )
     elif mutation == "watchdog_poll":
+        path, item_name = ordinary_path, "run_lifecycle_active_height"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
+            path,
+            item_name,
             "liveness_watchdog.poll(Instant::now());",
             "let _watchdog_now = Instant::now();",
         )
     elif mutation == "ordinary_ingress_cut":
+        path, item_name = ordinary_path, "run_lifecycle_active_height"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
+            path,
+            item_name,
+            "advance_executor(receiver, executor, services, control_queue_capacity)?;",
             "advance_executor(\n"
-            "                    &block_rx,\n"
-            "                    &mut executor,\n"
-            "                    &mut services,\n"
-            "                    control_queue_capacity,\n"
-            "                )?;",
-            "advance_executor(\n"
-            "                    &mut executor,\n"
-            "                    &mut services,\n"
-            "                    control_queue_capacity,\n"
+            "                    receiver,\n"
+            "                    executor,\n"
+            "                    services,\n"
+            "                    control_queue_capacity.saturating_sub(1),\n"
             "                )?;",
         )
     elif mutation == "retained_response_pacemaker":
+        path, item_name = ordinary_path, "service_retained_certified_response"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
-            "advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;",
-            "let _ = (&block_rx, &mut executor, &mut services);",
+            path,
+            item_name,
+            "advance_pacemaker_once(receiver, executor, services)?;",
+            "let _ = (receiver, executor, services);",
         )
     elif mutation == "selected_serve_pacemaker":
+        path, item_name = ordinary_path, "service_certified_serve_barrier"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
+            path,
+            item_name,
             "service_certified_serve_barrier_liveness_turn(",
             "service_certified_serve_barrier_liveness_turn_for_test(",
         )
     elif mutation == "pending_recovery_wake_bound":
+        path, item_name = pending_path, "run_pending_kura_lifecycle_height"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
+            path,
+            item_name,
             "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
             "wake_rx.recv_timeout(remaining)",
         )
     elif mutation == "exact_admission_timed_continue":
+        path, item_name = ordinary_path, "run_lifecycle_active_height"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
-            "let Some(_certified_serve_producer_episode) = services\n"
-            "                .try_begin_certified_serve_producer_episode()\n"
-            "                .map_err(V2RunnerError::Service)?\n"
-            "            else {\n"
-            "                // Exact admission won the queue-locked race after the\n"
-            "                // observation above. Restart at the dedicated target turn.\n"
-            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "                continue;\n"
-            "            };",
-            "let Some(_certified_serve_producer_episode) = services\n"
-            "                .try_begin_certified_serve_producer_episode()\n"
-            "                .map_err(V2RunnerError::Service)?\n"
-            "            else {\n"
-            "                continue;\n"
-            "            };",
-        )
-    elif mutation == "serve_ingress_binding":
-        mutate_rust_item_source(
-            module,
-            runner_path,
-            "run_inner",
-            "HeightIngressBindings::new(",
-            "HeightIngressBindings::new_for_test(",
-        )
-    elif mutation == "locked_body_first_admission":
-        mutate_rust_item_source(
-            module,
-            runner_path,
-            "run_inner",
-            "if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()",
-            "if lock_outcome == GlobalBodyLockOutcome::Inserted",
+            path,
+            item_name,
+            "let Some(certified_serve_producer_episode) = certified_serve_producer_episode else {\n"
+            "            let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
+            "            continue;\n"
+            "        };",
+            "let Some(certified_serve_producer_episode) = certified_serve_producer_episode else {\n"
+            "            let _ = wake_rx.recv();\n"
+            "            continue;\n"
+            "        };",
         )
     else:
-        source = runner_path.read_text(encoding="utf-8")
-        region_start = source.index("                if response_backpressured {")
-        region_end = source.index(
-            "                    executor.reconcile_retained_response_certified_fence_escape_phase();",
-            region_start,
-        )
-        region = source[region_start:region_end]
-        old = "V2IngressDrainMode::TimeoutVoteEpisode"
-        assert region.count(old) == 1
-        mutated_region = region.replace(old, "V2IngressDrainMode::Ordinary", 1)
-        runner_path.write_text(
-            source[:region_start] + mutated_region + source[region_end:],
-            encoding="utf-8",
+        path, item_name = ordinary_path, "service_retained_certified_response"
+        mutate_rust_item_source(
+            module,
+            path,
+            item_name,
+            "V2IngressDrainMode::TimeoutVoteEpisode,",
+            "V2IngressDrainMode::Ordinary,",
         )
 
-    mutated_items = module.rust_items(
-        runner_path.read_text(encoding="utf-8"), "run_inner"
-    )
+    mutated_items = module.rust_items(path.read_text(encoding="utf-8"), item_name)
     assert len(mutated_items) == 1
     digest = module._rust_item_token_sha256(mutated_items[0])
-    module._PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256["run_inner"] = digest
-    module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256["run_inner"] = digest
-    module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256["run_inner"] = digest
-    module._PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
-        "runner::run_inner"
-    ] = digest
-    module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256["runner::run_inner"] = digest
-    module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256["run_inner"] = digest
-    module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
+    if checker_name == "exact_output":
+        module._PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256["ordinary_loop"] = digest
+    elif checker_name == "timeout_vote_episode":
+        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
+            "lifecycle_runner::service_certified_serve_barrier"
+        ] = digest
+    elif checker_name == "retained_response":
+        module._PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
+            "lifecycle_runner::service_retained_certified_response"
+        ] = digest
+    else:
+        role = "pending" if path == pending_path else "ordinary"
+        module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256[
+            f"{role}::{item_name}"
+        ] = digest
 
     errors = reviewed_run_inner_source_fidelity_errors(
         module, tmp_path, formal_dir, checker_name
@@ -23339,11 +23337,11 @@ def test_timeout_vote_episode_runner_mode_inventory_mutation(
         ),
         (
             "remove_selected_serve_timeout_turn",
-            "selected Serve must keep certificate escape inside",
+            "selected Serve must close its move-only predecessor admission before mapping the complete timeout-recovery suffix independently of it",
         ),
         (
-            "move_selected_serve_timeout_turn_under_claim",
-            "selected Serve must keep certificate escape inside",
+            "couple_selected_serve_liveness_to_predecessor",
+            "selected Serve must close its move-only predecessor admission before mapping the complete timeout-recovery suffix independently of it",
         ),
     ),
 )
@@ -23352,63 +23350,49 @@ def test_timeout_vote_episode_runner_schedule_mutations(
     mutation: str,
     expected_error: str,
 ) -> None:
-    """Both TimeoutVote turns are unconditional and Serve does not spend its claim."""
+    """Both TimeoutVote turns are unconditional and independent of the aperture."""
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    source = runner.read_text(encoding="utf-8")
+    relative = Path(
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    )
+    runner = tmp_path / relative
 
     if mutation == "remove_retained_response_timeout_turn":
-        region_start = source.index("                if response_backpressured {")
-        region_end = source.index(
-            "                    executor.reconcile_retained_response_certified_fence_escape_phase();",
-            region_start,
-        )
-        region = source[region_start:region_end]
-        call_start = region.rfind("                    drain_v2_ingress(")
-        assert call_start >= 0
-        call_end = region.index("                    )?;\n", call_start) + len(
-            "                    )?;\n"
-        )
-        mutated_region = region[:call_start] + region[call_end:]
-        source = source[:region_start] + mutated_region + source[region_end:]
+        item_name = "service_retained_certified_response"
+        old = """        drain_v2_ingress(
+            receiver,
+            executor,
+            services,
+            lane_work,
+            output_guard,
+            kura,
+            key_pair,
+            block_sync_server,
+            block_sync,
+            block_sync_request,
+            npos_vrf,
+            V2IngressDrainMode::TimeoutVoteEpisode,
+            1,
+        )?;
+"""
+        new = ""
     elif mutation == "remove_selected_serve_timeout_turn":
-        region_start = source.index(
-            "                service_certified_serve_barrier_liveness_turn("
-        )
-        region_end = source.index(
-            "                if !older_predecessor_remains {",
-            region_start,
-        )
-        region = source[region_start:region_end]
+        item_name = "service_certified_serve_barrier"
         old = "V2IngressDrainMode::TimeoutVoteEpisode"
-        assert region.count(old) == 1
-        mutated_region = region.replace(
-            old, "V2IngressDrainMode::Ordinary", 1
-        )
-        source = source[:region_start] + mutated_region + source[region_end:]
+        new = "V2IngressDrainMode::Ordinary"
     else:
-        before = (
-            "                service_certified_serve_barrier_liveness_turn(\n"
-            "                    recovering_interrupted_tip,\n"
-            "                    claimed_older_runtime_episode,\n"
-        )
-        under_claim = (
-            "                service_certified_serve_barrier_liveness_turn(\n"
-            "                    recovering_interrupted_tip\n"
-            "                        || !claimed_older_runtime_episode,\n"
-            "                    claimed_older_runtime_episode,\n"
-        )
-        assert source.count(before) == 1
-        source = source.replace(before, under_claim, 1)
+        item_name = "service_certified_serve_barrier"
+        old = "service_certified_serve_barrier_liveness_turn(false, |action| match action {"
+        new = "service_certified_serve_barrier_liveness_turn(older_predecessor_remains, |action| match action {"
 
-    runner.write_text(source, encoding="utf-8")
+    mutate_rust_item_source(module, runner, item_name, old, new)
     rebind_timeout_vote_episode_rust_item_seal(
         module,
         tmp_path,
-        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-        "run_inner",
+        relative,
+        item_name,
     )
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -28588,13 +28572,10 @@ SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS = (
             "lifecycle capacity must charge configured effect work",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-            "            usize::try_from("
-            "shared_config.limits.runtime_command_capacity)?,\n"
-            "            effect_work_capacity,",
-            "            effect_work_capacity,\n"
-            "            effect_work_capacity,",
-            "V4 serviced-candidate item run_inner",
+            Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
+            "            inputs.effect_queue,",
+            "            EffectQueueConfig::default(),",
+            "V4 serviced-candidate item launch",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -29088,14 +29069,14 @@ def test_serviced_candidate_reviewed_runtime_items_survive_digest_refresh(
             "live dispatch completion must retain successors, acknowledge the exact producer",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
             "            lifecycle_ordinals\n"
             "                .advance_past(high_watermark)\n"
-            "                .map_err(V2RunnerError::Service)?;",
+            "                .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;",
             "            let _ = high_watermark;",
-            "_SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256",
-            "run_inner",
-            "run_inner",
+            "_SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256",
+            "launch",
+            "launch",
             "both restored high-waters must advance the shared source",
         ),
         (
@@ -29181,8 +29162,6 @@ def test_serviced_candidate_v4_semantics_survive_item_digest_refresh(
     assert len(items) == 1
     digest = module._rust_item_token_sha256(items[0])
     getattr(module, digest_name)[digest_key] = digest
-    if relative == Path("crates/iroha_core/src/sumeragi/v2_runner.rs"):
-        module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
 
     errors = module._serviced_candidate_production_source_fidelity_errors(
         tmp_path
@@ -35846,7 +35825,6 @@ BY PTL
     assert any(
         "AsyncTypeInvariantObligation must state only" in error for error in errors
     )
-
 
 
 

@@ -1364,8 +1364,8 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         super::super::v2_worker::tests::install_lifecycle_planner_io_for_validator_for_test(
             &mut services,
             context.clone(),
-            tag,
             local,
+            tag,
             Arc::clone(&output_guard),
             body_store,
             body_store_identity.clone(),
@@ -1388,8 +1388,8 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         super::super::v2_worker::tests::install_lifecycle_planner_io_for_validator_for_test(
             &mut foreign_services,
             context,
-            tag,
             local,
+            tag,
             Arc::clone(&output_guard),
             foreign_store,
             foreign_store_identity,

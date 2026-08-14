@@ -28,7 +28,7 @@ use iroha_p2p::network::{
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     sync::{Mutex, atomic::AtomicUsize},
 };
 use tempfile::TempDir;

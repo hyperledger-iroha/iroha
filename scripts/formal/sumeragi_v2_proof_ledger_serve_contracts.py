@@ -1002,7 +1002,7 @@ _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
         "b25a9bde54862c23946d9a0565fd35f62eb94ef8f0eb31bee1487470fb164e95"
     ),
     "certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement": (
-        "dc7fd3972ed40bfe639eb2602801003cdbc3a397ff3b8509ae5cc4404b537d2a"
+        "20ebeffbe165ee149930b7acff321bf44b64e4fe07f03ba4dad541304f429ec6"
     ),
     "certified_serve_terminal_replay_source_retains_retired_route_and_reconnects": (
         "500a95efa15a2105f4ed42cf80160fc7d1ba18173ecbcad7baf394a48db4894c"
@@ -1020,7 +1020,10 @@ _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
         "fdbcc73d2d6dbe68e0ffa683f9a6413043e58a7b5013df9c8f080ca4185b26e5"
     ),
     "v2_worker_recovered_lifecycle_output_cases.rs": (
-        "df81ef557c420ac5050c91aae97335066f53b3aa223a6a0a3eed0d89b95c3922"
+        "101004202bb87e98d9372d80563277db29df21889f6df957fc3a131b7f8d3bc4"
+    ),
+    "v2_worker_nonzero_view_restart.rs": (
+        "b4e023c528ce068df688c6470a27a25ba14df45fb7553f053f8877cdda253fa9"
     ),
     "v2_worker_serve_unsealed_cases.rs": (
         "aaeeebba50f95dff140bda57b82be1c2379dc2e7c5330639e9cb0a02fe77b842"
@@ -1028,14 +1031,19 @@ _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
     "v2_worker_serve_decision_restart_cases.rs": (
         "4756497a5ce66a906a0b1e8195afe6e6978c55f88acb1ea7ca0ae0bbce131de6"
     ),
+    "v2_worker_certified_serve_budget_cases.rs": (
+        "0bad66535d74184e0576248ed79fd63754bc38f82c765126459bdcf5489a61ff"
+    ),
 }
 
 _WORKER_TEST_INCLUDE_TEST_COUNT = {
     "v2_worker_reply_route_cases.rs": 22,
     "v2_worker_backpressure_cases.rs": 21,
     "v2_worker_recovered_lifecycle_output_cases.rs": 8,
+    "v2_worker_nonzero_view_restart.rs": 1,
     "v2_worker_serve_unsealed_cases.rs": 23,
     "v2_worker_serve_decision_restart_cases.rs": 11,
+    "v2_worker_certified_serve_budget_cases.rs": 13,
 }
 
 _SERVE_TERMINAL_DISCHARGE_WORKER_ITEM_SHA256 = {
@@ -1168,7 +1176,7 @@ _SERVE_INGRESS_GATE_REGRESSION_TEST_SHA256 = {
 }
 _SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
     "fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers": (
-        "8830d0a705537df7599ad6815f8e41201655aaed5f399863cf9dcec7e6309bae"
+        "18af9d5d33613df8489c684650e8fde266299eed705ed67818d7cdd5d99d9f1c"
     ),
     "fair_ingress_gate_overflow_closes_without_partial_admission": (
         "5a36f512c8c77a9c370a1343f5fc5ad5a7ab669faa1f1e992e851c5ddcab7e5f"
@@ -1484,6 +1492,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_STRUCT_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
+    "prepare_leader_wire_launch": "e312bc9b0e4a97d11a8d195875c476e9bb37fa988551ecdf2cda4a536495df60",
     "producer_parent_replay_source_for_stage": (
         "de61146d932b8f0f65a799f8102e83013fce7f875e82d591b22528c75caab41f"
     ),
@@ -1606,7 +1615,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "ba31ffeba2ffc96269ae8d531d5d5a6a01fc80a5af50346e672c54e9fea9bc53"
+        "8b70e4c1d229b5d2fefd9eaa7f6a11a5ec6d07a0afff4dd275dc4cc7f4e972d1"
     ),
     "freeze_due_clock_owners": (
         "d28538a60f9391277b1db6c60b71ed694c1d776de425305c52f8703450ebae85"
@@ -1643,8 +1652,9 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
     ),
 }
-_SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
-    "run_inner": "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a",
+_SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
+    "launch": "1d04be799f92a3021f746d98af1b4fa1d025c9951c14531a6df6633f768dd974",
+    "into_serialized_runtime": "1afc003a9b27312c1d9b4868eb6dc1c42d6bd4f838b3ebe383131627c40972bd",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
     "open_rejects_a_preexisting_symlink_for_the_owned_wal_directory": (

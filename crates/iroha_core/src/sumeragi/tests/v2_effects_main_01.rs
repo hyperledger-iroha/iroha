@@ -600,7 +600,10 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
     )
     .expect("capacity-two executor");
     executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm source-faithful timeout");
     assert!(
         executor
@@ -736,164 +739,6 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
     assert!(!executor.status().fail_closed);
 }
 #[test]
-fn late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps() {
-    let mut fixture = ProductionTransportFixture::new();
-    let fetch_ordinal = fixture
-        .lifecycle_ordinals
-        .reserve_one()
-        .expect("reserve the passive Fetch lifecycle before Serve");
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        4_000,
-        0,
-    );
-    let signature =
-        SignatureOf::try_from_hash(fixture.validator_keys[0].private_key(), header.hash())
-            .expect("late Fetch block signature");
-    let block = SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
-    let body = block
-        .encode_wire()
-        .expect("late Fetch canonical block wire");
-    let subject = wire::BlockSubject {
-        parent_block_hash: None,
-        block_hash: block.hash(),
-        payload_hash: Hash::new(&body),
-    };
-    let manifest = canonical_payload_manifest(&fixture.context, fixture.round, subject, &body);
-    let fetch = AdapterEffect::FetchBody {
-        tag: tag(0),
-        round: fixture.round,
-        subject,
-        manifest: Some(manifest.clone()),
-        certified_sources: Vec::new(),
-        certificate: None,
-    };
-    let ownership = bind_adapter_effect_batch_ownership(
-        std::slice::from_ref(&fetch),
-        vec![RuntimeEffectOwnership::fresh_for_test(
-            tag(0),
-            fetch_ordinal,
-        )],
-    )
-    .expect("bind the passive Fetch to the shared actor ordinal");
-    fixture
-        .executor
-        .retain_effect_batch(vec![fetch], ownership)
-        .expect("retain the production-shaped Fetch effect");
-    let mut services = FakeServices {
-        requester_key: Some(fixture.requester_key.clone()),
-        ..FakeServices::default()
-    };
-    assert_eq!(
-        fixture
-            .executor
-            .drain_retained_effect_batch(&mut services, true)
-            .expect("dispatch the passive Fetch"),
-        1
-    );
-    let task = services
-        .fetch_tasks
-        .first()
-        .expect("Fetch service owns the passive request")
-        .clone();
-    assert_eq!(task.lifecycle_ordinal(), fetch_ordinal);
-    let serve_ordinal = fixture
-        .lifecycle_ordinals
-        .reserve_one()
-        .expect("reserve the selected Serve target after Fetch");
-    assert!(
-        fixture
-            .executor
-            .exact_serve_predecessor_episode_witness(Instant::now(), serve_ordinal, None)
-            .expect("observe the selected Serve before Fetch completion")
-            .is_none(),
-        "passive Fetch transport work alone cannot block Serve"
-    );
-    fixture
-        .executor
-        .complete_body_reconstruction(&task, manifest, body, &mut services)
-        .expect("late reconstruction materializes BodyAvailable under the Fetch owner");
-    let witness = fixture
-        .executor
-        .exact_serve_predecessor_episode_witness(Instant::now(), serve_ordinal, None)
-        .expect("observe late BodyAvailable behind the selected Serve")
-        .expect("late runnable predecessor reopens the completed Serve episode");
-    assert_eq!(witness.serve_lifecycle_ordinal(), serve_ordinal);
-    assert_eq!(witness.predecessor_lifecycle_ordinal(), fetch_ordinal);
-    assert_eq!(witness.episode(), 1);
-    let retained_response_ordinal = fixture
-        .lifecycle_ordinals
-        .reserve_one()
-        .expect("reserve an isolated retained-response target after Serve");
-    assert!(
-        fixture
-            .executor
-            .older_runtime_lifecycle_predates_retained_response(
-                Instant::now(),
-                retained_response_ordinal,
-            )
-            .expect("exercise the published retained-response predecessor probe")
-    );
-    assert_eq!(
-        fixture
-            .executor
-            .exact_serve_predecessor_episode_witness(Instant::now(), serve_ordinal, None)
-            .expect("retained-response probing cannot reset the selected-Serve witness"),
-        Some(witness),
-        "one continuous predecessor prefix retains one witness across target probes"
-    );
-    assert_eq!(
-        fixture.executor.status().queued_runtime_completions,
-        1,
-        "the late Fetch successor is runnable inside serialized runtime"
-    );
-    assert!(matches!(
-        fixture
-            .executor
-            .step(Instant::now(), &mut services)
-            .expect("the reopened predecessor owns the next serialized step"),
-        EffectExecutorStep::Advanced { .. }
-    ));
-    assert_eq!(fixture.executor.status().queued_runtime_completions, 0);
-    assert_eq!(
-        services.store_tasks.len(),
-        1,
-        "the reopened BodyAvailable transition must produce one Store successor"
-    );
-    assert_eq!(
-        services.store_tasks[0].lifecycle_ordinal(),
-        fetch_ordinal,
-        "the Store successor must keep the reopened Fetch owner"
-    );
-    assert!(fixture.executor.pending_fetches.is_empty());
-    assert!(
-        fixture
-            .executor
-            .exact_serve_predecessor_episode_witness(Instant::now(), serve_ordinal, None)
-            .expect("an incomplete Store remains passive")
-            .is_none(),
-        "pending Store work alone cannot reopen the Serve episode"
-    );
-    let stored_completion_evidence =
-        ExactServePredecessorCompletionEvidence::try_new(fetch_ordinal)
-            .expect("tracked Store completion retains the exact Fetch ordinal");
-    let replenished = fixture
-        .executor
-        .exact_serve_predecessor_episode_witness(
-            Instant::now(),
-            serve_ordinal,
-            Some(stored_completion_evidence),
-        )
-        .expect("a completed Store is runnable")
-        .expect("a completed Store reopens one later Serve episode");
-    assert_eq!(replenished.predecessor_lifecycle_ordinal(), fetch_ordinal);
-    assert_eq!(replenished.episode(), 2);
-    assert!(!fixture.executor.status().fail_closed);
-}
-#[test]
 fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
@@ -980,7 +825,10 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
     let started = Instant::now();
     fixture
         .executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm source-faithful timeout/retransmission clocks");
     let mut services = FakeServices {
         requester_key: Some(fixture.requester_key.clone()),
@@ -1116,7 +964,10 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
     let started = Instant::now();
     fixture
         .executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm production retransmission clocks");
     let mut services = FakeServices {
         requester_key: Some(fixture.requester_key.clone()),

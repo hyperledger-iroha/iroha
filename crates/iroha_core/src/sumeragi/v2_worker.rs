@@ -66,9 +66,8 @@ use super::{
         RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
     },
     v2_runtime::{
-        ExactServePredecessorCompletionEvidence, ExactServePredecessorEpisodeWitness,
-        LeaderWireRuntimeTerminal, RuntimeLifecycleOrdinalSource, RuntimeQueueLaneSnapshot,
-        SerializedV2Runtime,
+        ExactServePredecessorCompletionEvidence, LeaderWireRuntimeTerminal,
+        RuntimeLifecycleOrdinalSource, RuntimeQueueLaneSnapshot, SerializedV2Runtime,
     },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk, V2TransportError,
@@ -1160,16 +1159,15 @@ enum CertifiedServeIngressReservationState {
     PhysicallyDrainedPrepared(CertifiedServeLifecycleId),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CertifiedServeRuntimeEpisodeState {
-    Ready,
-    Claimed {
+enum CertifiedServePredecessorAdmissionState {
+    Closed,
+    Open {
         /// The one immutable older lifecycle allowed to acquire I/O positions
         /// during this turn. A bounded effect fan-out may enqueue more than
         /// one command for that same owner, but another owner must wait for
         /// the mandatory post-turn recheck.
         predecessor_ordinal: Option<u128>,
     },
-    Complete,
 }
 #[derive(Debug)]
 struct V2IoCertifiedServeIngressReservation {
@@ -1186,15 +1184,12 @@ struct V2IoCertifiedServeIngressReservation {
     /// carrier. A post-drain replay receives both a fresh `id` and a fresh
     /// carrier ordinal. An undrained occurrence never changes either value.
     carrier_ordinal: Option<u64>,
-    /// Bounded older-runtime closure for this exact ticket occurrence.
+    /// Bounded older-runtime admission for this exact ticket occurrence.
     ///
-    /// Each claimed turn admits or services at most one strictly older owner.
+    /// Each open turn admits or services at most one strictly older owner.
     /// A lost carrier closes the height instead of resuming this state from a
     /// requester retry.
-    runtime_episode: CertifiedServeRuntimeEpisodeState,
-    /// Latest runtime-issued predecessor episode observed for this immutable
-    /// target. A completed turn can reopen only for a strictly newer witness.
-    last_predecessor_episode_witness: Option<ExactServePredecessorEpisodeWitness>,
+    predecessor_admission: CertifiedServePredecessorAdmissionState,
 }
 impl V2IoCertifiedServeIngressReservation {
     fn barrier(&self) -> Result<CertifiedServeBarrier, String> {
@@ -1249,6 +1244,58 @@ impl CertifiedServeBarrier {
         self.carrier_ordinal
     }
 }
+
+/// Move-only authorization for one bounded older-I/O admission before an exact Serve target.
+///
+/// Runtime decides whether this turn is needed from the current lifecycle
+/// census. The worker independently binds every admitted command to at most
+/// one strictly older lifecycle owner. Dropping the authorization always
+/// closes that transient queue aperture.
+#[must_use = "the exact Serve predecessor admission must remain live for its bounded turn"]
+pub(crate) struct CertifiedServePredecessorAdmissionV1 {
+    queue: Arc<V2IoCommandQueue>,
+    output_guard: Arc<ConsensusOutputGuard>,
+    barrier: CertifiedServeBarrier,
+    armed: bool,
+}
+
+impl CertifiedServePredecessorAdmissionV1 {
+    fn new(
+        queue: Arc<V2IoCommandQueue>,
+        output_guard: Arc<ConsensusOutputGuard>,
+        barrier: CertifiedServeBarrier,
+    ) -> Self {
+        Self {
+            queue,
+            output_guard,
+            barrier,
+            armed: true,
+        }
+    }
+
+    /// Close the transient predecessor aperture after the bounded turn.
+    pub(crate) fn finish(mut self) -> Result<(), String> {
+        self.queue.close_serve_predecessor_admission(self.barrier)?;
+        self.armed = false;
+        Ok(())
+    }
+}
+
+impl Drop for CertifiedServePredecessorAdmissionV1 {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if self
+            .queue
+            .close_serve_predecessor_admission(self.barrier)
+            .is_err()
+        {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
 /// One finite runner episode in which already-selected local producers may
 /// acquire I/O ownership.
 ///
@@ -2623,9 +2670,9 @@ impl Drop for RecoveredDecisionApplyCapacityReservationV1<'_> {
                     .serve_ingress_reservation
                     .as_mut()
                     .expect("reserved recovered Apply predecessor retains its Serve ticket");
-                if let CertifiedServeRuntimeEpisodeState::Claimed {
+                if let CertifiedServePredecessorAdmissionState::Open {
                     predecessor_ordinal: selected,
-                } = &mut reservation.runtime_episode
+                } = &mut reservation.predecessor_admission
                     && *selected == Some(predecessor_ordinal)
                 {
                     *selected = None;
@@ -2755,9 +2802,9 @@ impl Drop for RecoveredLifecycleSignCapacityReservationV1<'_> {
                     .serve_ingress_reservation
                     .as_mut()
                     .expect("reserved recovered Sign predecessor retains its Serve ticket");
-                if let CertifiedServeRuntimeEpisodeState::Claimed {
+                if let CertifiedServePredecessorAdmissionState::Open {
                     predecessor_ordinal: selected,
-                } = &mut reservation.runtime_episode
+                } = &mut reservation.predecessor_admission
                     && *selected == Some(predecessor_ordinal)
                 {
                     *selected = None;
@@ -3052,8 +3099,8 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
             .serve_ingress_reservation
             .as_mut()
             .expect("selected recovered predecessor retains its exact Serve ticket");
-        match &mut reservation.runtime_episode {
-            CertifiedServeRuntimeEpisodeState::Claimed {
+        match &mut reservation.predecessor_admission {
+            CertifiedServePredecessorAdmissionState::Open {
                 predecessor_ordinal: selected,
             } => match selected {
                 Some(existing) => assert_eq!(
@@ -3062,9 +3109,8 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
                 ),
                 None => *selected = Some(predecessor_ordinal),
             },
-            CertifiedServeRuntimeEpisodeState::Ready
-            | CertifiedServeRuntimeEpisodeState::Complete => {
-                unreachable!("recovered predecessor escaped its claimed Serve turn")
+            CertifiedServePredecessorAdmissionState::Closed => {
+                unreachable!("recovered predecessor escaped its open Serve admission")
             }
         }
     }
@@ -4247,8 +4293,7 @@ fn restore_certified_serve_tombstones(
             state: CertifiedServeIngressReservationState::Provisional,
             handed_off: None,
             carrier_ordinal: None,
-            runtime_episode: CertifiedServeRuntimeEpisodeState::Ready,
-            last_predecessor_episode_witness: None,
+            predecessor_admission: CertifiedServePredecessorAdmissionState::Closed,
         };
         if serve_ingress_waiters.insert(id, reservation).is_some() {
             return Err("Sumeragi v2 durable Serve waiter ordinal is duplicated".to_owned());
@@ -4450,16 +4495,15 @@ impl V2IoCommandQueue {
                     if command_ordinal >= reservation.id.0 {
                         return None;
                     }
-                    match reservation.runtime_episode {
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                    match reservation.predecessor_admission {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: None,
                         } => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: Some(existing),
                         } if existing == command_ordinal => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Ready
-                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
-                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                        CertifiedServePredecessorAdmissionState::Closed
+                        | CertifiedServePredecessorAdmissionState::Open { .. } => None,
                     }
                 });
         let exact_target_active = state.serve_ingress_reservation.is_some()
@@ -4488,8 +4532,8 @@ impl V2IoCommandQueue {
                 .serve_ingress_reservation
                 .as_mut()
                 .expect("recovered Apply predecessor retains its exact Serve ticket");
-            match &mut reservation.runtime_episode {
-                CertifiedServeRuntimeEpisodeState::Claimed {
+            match &mut reservation.predecessor_admission {
+                CertifiedServePredecessorAdmissionState::Open {
                     predecessor_ordinal: selected,
                 } => match selected {
                     Some(existing) => assert_eq!(
@@ -4498,9 +4542,8 @@ impl V2IoCommandQueue {
                     ),
                     None => *selected = Some(predecessor_ordinal),
                 },
-                CertifiedServeRuntimeEpisodeState::Ready
-                | CertifiedServeRuntimeEpisodeState::Complete => {
-                    unreachable!("recovered Apply predecessor escaped its claimed Serve turn")
+                CertifiedServePredecessorAdmissionState::Closed => {
+                    unreachable!("recovered Apply predecessor escaped its open Serve admission")
                 }
             }
         }
@@ -4548,16 +4591,15 @@ impl V2IoCommandQueue {
                     if command_ordinal >= reservation.id.0 {
                         return None;
                     }
-                    match reservation.runtime_episode {
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                    match reservation.predecessor_admission {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: None,
                         } => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: Some(existing),
                         } if existing == command_ordinal => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Ready
-                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
-                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                        CertifiedServePredecessorAdmissionState::Closed
+                        | CertifiedServePredecessorAdmissionState::Open { .. } => None,
                     }
                 });
         let exact_target_active = state.serve_ingress_reservation.is_some()
@@ -4586,8 +4628,8 @@ impl V2IoCommandQueue {
                 .serve_ingress_reservation
                 .as_mut()
                 .expect("recovered Sign predecessor retains its exact Serve ticket");
-            match &mut reservation.runtime_episode {
-                CertifiedServeRuntimeEpisodeState::Claimed {
+            match &mut reservation.predecessor_admission {
+                CertifiedServePredecessorAdmissionState::Open {
                     predecessor_ordinal: selected,
                 } => match selected {
                     Some(existing) => assert_eq!(
@@ -4596,9 +4638,8 @@ impl V2IoCommandQueue {
                     ),
                     None => *selected = Some(predecessor_ordinal),
                 },
-                CertifiedServeRuntimeEpisodeState::Ready
-                | CertifiedServeRuntimeEpisodeState::Complete => {
-                    unreachable!("recovered Sign predecessor escaped its claimed Serve turn")
+                CertifiedServePredecessorAdmissionState::Closed => {
+                    unreachable!("recovered Sign predecessor escaped its open Serve admission")
                 }
             }
         }
@@ -4631,16 +4672,15 @@ impl V2IoCommandQueue {
                     if command_ordinal >= reservation.id.0 {
                         return None;
                     }
-                    match reservation.runtime_episode {
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                    match reservation.predecessor_admission {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: None,
                         } => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: Some(existing),
                         } if existing == command_ordinal => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Ready
-                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
-                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                        CertifiedServePredecessorAdmissionState::Closed
+                        | CertifiedServePredecessorAdmissionState::Open { .. } => None,
                     }
                 });
         let exact_target_active = state.serve_ingress_reservation.is_some()
@@ -5732,8 +5772,7 @@ impl V2IoCommandQueue {
             state: CertifiedServeIngressReservationState::Provisional,
             handed_off: Some(Arc::clone(&handed_off)),
             carrier_ordinal: Some(carrier_ordinal),
-            runtime_episode: CertifiedServeRuntimeEpisodeState::Ready,
-            last_predecessor_episode_witness: None,
+            predecessor_admission: CertifiedServePredecessorAdmissionState::Closed,
         };
         Self::insert_serve_ingress_waiter(&mut state, reservation);
         if let Err(reason) = self.persist_serve_state(
@@ -6703,113 +6742,61 @@ impl V2IoCommandQueue {
         }
         Ok(Some(lifecycle_id.request_hash))
     }
-    fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
-        let mut state = self.lock();
-        let materialized_request_hash = state.serve_barrier.map(|lifecycle| lifecycle.request_hash);
-        let reservation = state.serve_ingress_reservation.as_mut().ok_or_else(|| {
-            "Sumeragi v2 Serve runtime episode lost its exact ingress ticket".to_owned()
-        })?;
-        if !reservation.matches_barrier(barrier)
-            || materialized_request_hash
-                .is_some_and(|request_hash| request_hash != barrier.request_hash())
-        {
-            return Err("Sumeragi v2 Serve runtime episode changed barrier identity".to_owned());
-        }
-        match reservation.runtime_episode {
-            CertifiedServeRuntimeEpisodeState::Ready => {
-                reservation.runtime_episode = CertifiedServeRuntimeEpisodeState::Claimed {
-                    predecessor_ordinal: None,
-                };
-                Ok(true)
-            }
-            CertifiedServeRuntimeEpisodeState::Claimed { .. }
-            | CertifiedServeRuntimeEpisodeState::Complete => Ok(false),
-        }
-    }
-    /// Record one runtime-issued predecessor episode and reopen a sealed
-    /// target turn only when the witness is strictly newer.
-    fn observe_serve_predecessor_episode_witness(
+
+    fn open_serve_predecessor_admission(
         &self,
         barrier: CertifiedServeBarrier,
-        witness: ExactServePredecessorEpisodeWitness,
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         let mut state = self.lock();
         let materialized_request_hash = state.serve_barrier.map(|lifecycle| lifecycle.request_hash);
         let reservation = state.serve_ingress_reservation.as_mut().ok_or_else(|| {
-            "Sumeragi v2 Serve predecessor episode lost its exact ingress ticket".to_owned()
+            "Sumeragi v2 Serve predecessor admission lost its exact ingress ticket".to_owned()
         })?;
         if !reservation.matches_barrier(barrier)
             || materialized_request_hash
                 .is_some_and(|request_hash| request_hash != barrier.request_hash)
         {
             return Err(
-                "Sumeragi v2 Serve predecessor episode changed barrier identity".to_owned(),
+                "Sumeragi v2 Serve predecessor admission changed barrier identity".to_owned(),
             );
         }
-        if !witness.validate_exact()
-            || witness.serve_lifecycle_ordinal() != barrier.scheduler_ordinal()
-            || witness.predecessor_lifecycle_ordinal() >= barrier.scheduler_ordinal()
-        {
-            return Err("Sumeragi v2 Serve predecessor episode witness was invalid".to_owned());
+        match reservation.predecessor_admission {
+            CertifiedServePredecessorAdmissionState::Closed => {
+                reservation.predecessor_admission = CertifiedServePredecessorAdmissionState::Open {
+                    predecessor_ordinal: None,
+                };
+                Ok(())
+            }
+            CertifiedServePredecessorAdmissionState::Open { .. } => {
+                Err("Sumeragi v2 Serve predecessor admission opened twice in one turn".to_owned())
+            }
         }
-        if let Some(previous) = reservation.last_predecessor_episode_witness {
-            if !previous.validate_exact()
-                || previous.serve_lifecycle_ordinal() != barrier.scheduler_ordinal()
-            {
-                return Err(
-                    "Sumeragi v2 Serve predecessor episode retained invalid evidence".to_owned(),
-                );
-            }
-            if witness.episode() < previous.episode() {
-                return Err("Sumeragi v2 Serve predecessor episode regressed".to_owned());
-            }
-            if witness.episode() == previous.episode() {
-                if witness != previous {
-                    return Err(
-                        "Sumeragi v2 Serve predecessor episode changed exact evidence".to_owned(),
-                    );
-                }
-                return Ok(false);
-            }
-            let expected_episode = previous.episode().checked_add(1).ok_or_else(|| {
-                "Sumeragi v2 Serve predecessor episode consumer ordinal overflowed".to_owned()
-            })?;
-            if witness.episode() != expected_episode {
-                return Err("Sumeragi v2 Serve predecessor episode skipped an ordinal".to_owned());
-            }
-        } else if witness.episode() != 1 {
-            return Err("Sumeragi v2 Serve predecessor episode did not start at one".to_owned());
-        }
-        reservation.last_predecessor_episode_witness = Some(witness);
-        if reservation.runtime_episode == CertifiedServeRuntimeEpisodeState::Complete {
-            reservation.runtime_episode = CertifiedServeRuntimeEpisodeState::Ready;
-            return Ok(true);
-        }
-        Ok(false)
     }
     /// Return whether one claimed exact-Serve turn can dispatch an older
     /// completion-producing causal effect without losing its target position.
-    fn serve_runtime_predecessor_capacity_available(
+    fn serve_predecessor_capacity_available(
         &self,
         barrier: CertifiedServeBarrier,
     ) -> Result<bool, String> {
         let state = self.lock();
         let materialized_request_hash = state.serve_barrier.map(|lifecycle| lifecycle.request_hash);
         let reservation = state.serve_ingress_reservation.as_ref().ok_or_else(|| {
-            "Sumeragi v2 Serve runtime episode lost its exact ingress ticket".to_owned()
+            "Sumeragi v2 Serve predecessor admission lost its exact ingress ticket".to_owned()
         })?;
         if !reservation.matches_barrier(barrier)
             || materialized_request_hash
                 .is_some_and(|request_hash| request_hash != barrier.request_hash)
         {
-            return Err("Sumeragi v2 Serve runtime episode changed barrier identity".to_owned());
+            return Err(
+                "Sumeragi v2 Serve predecessor admission changed barrier identity".to_owned(),
+            );
         }
         if !matches!(
-            reservation.runtime_episode,
-            CertifiedServeRuntimeEpisodeState::Claimed { .. }
+            reservation.predecessor_admission,
+            CertifiedServePredecessorAdmissionState::Open { .. }
         ) {
             return Err(
-                "Sumeragi v2 Serve runtime predecessor capacity queried outside a claimed turn"
+                "Sumeragi v2 Serve predecessor capacity queried outside an open admission"
                     .to_owned(),
             );
         }
@@ -6823,33 +6810,33 @@ impl V2IoCommandQueue {
             || (state.commands.len() < self.capacity
                 && self.admission.has_capacity(V2IoAdmissionClass::Consensus)))
     }
-    fn finish_serve_runtime_episode_turn(
+
+    fn close_serve_predecessor_admission(
         &self,
         barrier: CertifiedServeBarrier,
-        older_predecessor_remains: bool,
     ) -> Result<(), String> {
         let mut state = self.lock();
         let materialized_request_hash = state.serve_barrier.map(|lifecycle| lifecycle.request_hash);
         let reservation = state.serve_ingress_reservation.as_mut().ok_or_else(|| {
-            "Sumeragi v2 Serve runtime episode lost its exact ingress ticket".to_owned()
+            "Sumeragi v2 Serve predecessor admission lost its exact ingress ticket".to_owned()
         })?;
         if !reservation.matches_barrier(barrier)
             || materialized_request_hash
                 .is_some_and(|request_hash| request_hash != barrier.request_hash)
         {
-            return Err("Sumeragi v2 Serve runtime episode changed barrier identity".to_owned());
+            return Err(
+                "Sumeragi v2 Serve predecessor admission changed barrier identity".to_owned(),
+            );
         }
         if !matches!(
-            reservation.runtime_episode,
-            CertifiedServeRuntimeEpisodeState::Claimed { .. }
+            reservation.predecessor_admission,
+            CertifiedServePredecessorAdmissionState::Open { .. }
         ) {
-            return Err("Sumeragi v2 Serve runtime episode settled an unclaimed turn".to_owned());
+            return Err(
+                "Sumeragi v2 Serve predecessor admission closed while already closed".to_owned(),
+            );
         }
-        reservation.runtime_episode = if older_predecessor_remains {
-            CertifiedServeRuntimeEpisodeState::Ready
-        } else {
-            CertifiedServeRuntimeEpisodeState::Complete
-        };
+        reservation.predecessor_admission = CertifiedServePredecessorAdmissionState::Closed;
         Ok(())
     }
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
@@ -7923,22 +7910,26 @@ impl V2IoCommandQueue {
                     if command_ordinal >= reservation.id.0 {
                         return None;
                     }
-                    match reservation.runtime_episode {
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                    match reservation.predecessor_admission {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: None,
                         } => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: Some(existing),
                         } if existing == command_ordinal => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Ready
-                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
-                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                        CertifiedServePredecessorAdmissionState::Closed
+                        | CertifiedServePredecessorAdmissionState::Open { .. } => None,
                     }
                 });
         let exact_target_active = state.serve_ingress_reservation.is_some()
             || !state.serve_ingress_waiters.is_empty()
             || state.serve_barrier.is_some();
-        if exact_target_active && exact_predecessor_ordinal.is_none() {
+        let rolled_back_shutdown = matches!(&command, V2IoCommand::Shutdown)
+            && state.serve_barrier.is_none()
+            && state.serve_ingress_reservation.is_none()
+            && state.serve_barrier_predecessors.is_empty()
+            && state.pending_serve_requests.is_empty();
+        if exact_target_active && exact_predecessor_ordinal.is_none() && !rolled_back_shutdown {
             return Err(V2IoTrySendError::Full(command));
         }
         let suspended_target = exact_predecessor_ordinal.is_some()
@@ -7968,8 +7959,8 @@ impl V2IoCommandQueue {
                 .serve_ingress_reservation
                 .as_mut()
                 .expect("claimed predecessor admission retains its exact Serve ticket");
-            match &mut reservation.runtime_episode {
-                CertifiedServeRuntimeEpisodeState::Claimed {
+            match &mut reservation.predecessor_admission {
+                CertifiedServePredecessorAdmissionState::Open {
                     predecessor_ordinal: selected,
                 } => match selected {
                     Some(existing) => assert_eq!(
@@ -7978,9 +7969,8 @@ impl V2IoCommandQueue {
                     ),
                     None => *selected = Some(predecessor_ordinal),
                 },
-                CertifiedServeRuntimeEpisodeState::Ready
-                | CertifiedServeRuntimeEpisodeState::Complete => {
-                    unreachable!("predecessor admission escaped its claimed Serve turn")
+                CertifiedServePredecessorAdmissionState::Closed => {
+                    unreachable!("predecessor admission escaped its open Serve turn")
                 }
             }
         }
@@ -8280,16 +8270,15 @@ impl V2IoCommandQueue {
                     if command_ordinal >= reservation.id.0 {
                         return None;
                     }
-                    match reservation.runtime_episode {
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                    match reservation.predecessor_admission {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: None,
                         } => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Claimed {
+                        CertifiedServePredecessorAdmissionState::Open {
                             predecessor_ordinal: Some(existing),
                         } if existing == command_ordinal => Some(command_ordinal),
-                        CertifiedServeRuntimeEpisodeState::Ready
-                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
-                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                        CertifiedServePredecessorAdmissionState::Closed
+                        | CertifiedServePredecessorAdmissionState::Open { .. } => None,
                     }
                 });
         let exact_target_active = state.serve_ingress_reservation.is_some()
@@ -8316,8 +8305,8 @@ impl V2IoCommandQueue {
                 .serve_ingress_reservation
                 .as_mut()
                 .expect("recovered Apply retry predecessor retains its exact Serve ticket");
-            match &mut reservation.runtime_episode {
-                CertifiedServeRuntimeEpisodeState::Claimed {
+            match &mut reservation.predecessor_admission {
+                CertifiedServePredecessorAdmissionState::Open {
                     predecessor_ordinal: selected,
                 } => match selected {
                     Some(existing) => assert_eq!(
@@ -8326,9 +8315,8 @@ impl V2IoCommandQueue {
                     ),
                     None => *selected = Some(predecessor_ordinal),
                 },
-                CertifiedServeRuntimeEpisodeState::Ready
-                | CertifiedServeRuntimeEpisodeState::Complete => {
-                    unreachable!("recovered Apply retry escaped its claimed Serve turn")
+                CertifiedServePredecessorAdmissionState::Closed => {
+                    unreachable!("recovered Apply retry escaped its open Serve admission")
                 }
             }
         }
@@ -8627,31 +8615,27 @@ impl V2IoCommandSender {
     fn serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.queue.serve_barrier()
     }
-    fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
-        self.queue.claim_serve_runtime_episode(barrier)
-    }
-    fn observe_serve_predecessor_episode_witness(
+
+    fn open_serve_predecessor_admission(
         &self,
         barrier: CertifiedServeBarrier,
-        witness: ExactServePredecessorEpisodeWitness,
-    ) -> Result<bool, String> {
-        self.queue
-            .observe_serve_predecessor_episode_witness(barrier, witness)
-    }
-    fn serve_runtime_predecessor_capacity_available(
-        &self,
-        barrier: CertifiedServeBarrier,
-    ) -> Result<bool, String> {
-        self.queue
-            .serve_runtime_predecessor_capacity_available(barrier)
-    }
-    fn finish_serve_runtime_episode_turn(
-        &self,
-        barrier: CertifiedServeBarrier,
-        older_predecessor_remains: bool,
     ) -> Result<(), String> {
-        self.queue
-            .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
+        self.queue.open_serve_predecessor_admission(barrier)
+    }
+
+    fn serve_predecessor_capacity_available(
+        &self,
+        barrier: CertifiedServeBarrier,
+    ) -> Result<bool, String> {
+        self.queue.serve_predecessor_capacity_available(barrier)
+    }
+
+    #[cfg(test)]
+    fn close_serve_predecessor_admission(
+        &self,
+        barrier: CertifiedServeBarrier,
+    ) -> Result<(), String> {
+        self.queue.close_serve_predecessor_admission(barrier)
     }
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
         self.queue.serve_barrier_waits_for_predecessor_completion()
@@ -10197,31 +10181,20 @@ impl V2IoHandle {
     fn serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.command_tx.serve_barrier()
     }
-    fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
-        self.command_tx.claim_serve_runtime_episode(barrier)
-    }
-    fn observe_serve_predecessor_episode_witness(
+
+    fn open_serve_predecessor_admission(
         &self,
         barrier: CertifiedServeBarrier,
-        witness: ExactServePredecessorEpisodeWitness,
-    ) -> Result<bool, String> {
-        self.command_tx
-            .observe_serve_predecessor_episode_witness(barrier, witness)
-    }
-    fn serve_runtime_predecessor_capacity_available(
-        &self,
-        barrier: CertifiedServeBarrier,
-    ) -> Result<bool, String> {
-        self.command_tx
-            .serve_runtime_predecessor_capacity_available(barrier)
-    }
-    fn finish_serve_runtime_episode_turn(
-        &self,
-        barrier: CertifiedServeBarrier,
-        older_predecessor_remains: bool,
     ) -> Result<(), String> {
+        self.command_tx.open_serve_predecessor_admission(barrier)
+    }
+
+    fn serve_predecessor_capacity_available(
+        &self,
+        barrier: CertifiedServeBarrier,
+    ) -> Result<bool, String> {
         self.command_tx
-            .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
+            .serve_predecessor_capacity_available(barrier)
     }
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
         self.command_tx
@@ -17596,6 +17569,26 @@ impl ProductionV2Services {
             &self.exact_output_handoff_owner,
         )
     }
+
+    /// Authenticate the applied State and durable Kura tip for no-clock recovery.
+    pub(in crate::sumeragi) fn matches_installed_pending_kura_tip(
+        &self,
+        expected: crate::sumeragi::v2_recovery::PendingKuraApply,
+    ) -> bool {
+        let Ok(height) = usize::try_from(expected.height()) else {
+            return false;
+        };
+        let Some(height) = std::num::NonZeroUsize::new(height) else {
+            return false;
+        };
+        self.context.id() == expected.context_id()
+            && self.context.height == expected.height()
+            && self.state.matches_kura_instance(&self.kura)
+            && self.state.committed_height() == height.get()
+            && self.state.latest_block_hash_fast() == Some(expected.block_hash())
+            && self.kura.get_durable_block_hash(height) == Some(expected.block_hash())
+    }
+
     fn owns_recovered_decision_apply_queue(&self, queue: &Arc<V2IoCommandQueue>) -> bool {
         self.io
             .as_ref()
@@ -18516,30 +18509,35 @@ impl ProductionV2Services {
     pub(crate) fn certified_serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.io.as_ref().map_or(Ok(None), V2IoHandle::serve_barrier)
     }
-    /// Claim one bounded older-runtime turn for this exact ticket.
+
+    /// Open one bounded older-I/O admission for this exact ticket.
     ///
-    /// A claimed turn must be settled after the executor re-evaluates the
-    /// strictly older owner set. The same undrained physical occurrence
-    /// retains this state across bounded selector retries. A process restart
-    /// locally terminalizes its durable lifecycle before exposing producers,
-    /// so correctness never depends on a requester minting a replacement
-    /// carrier.
-    pub(crate) fn claim_certified_serve_runtime_episode(
+    /// The returned move-only guard closes the aperture on every normal,
+    /// error, and unwind path. Runtime remains the sole authority deciding
+    /// whether the direct predecessor census requires this turn.
+    pub(crate) fn open_certified_serve_predecessor_admission(
         &self,
         barrier: CertifiedServeBarrier,
-    ) -> Result<bool, String> {
-        self.io
+    ) -> Result<CertifiedServePredecessorAdmissionV1, String> {
+        let io = self
+            .io
             .as_ref()
-            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
-            .claim_serve_runtime_episode(barrier)
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?;
+        io.open_serve_predecessor_admission(barrier)?;
+        Ok(CertifiedServePredecessorAdmissionV1::new(
+            Arc::clone(&io.command_tx.queue),
+            Arc::clone(&self.output_guard),
+            barrier,
+        ))
     }
     /// Project one completed strict predecessor without consuming it.
     ///
     /// This mirrors the exact-Serve completion selector at its current held or
     /// head I/O position and its least local reconstruction. Results that need
     /// a runtime slot are visible only when that slot exists. The returned
-    /// process-local evidence can reopen a sealed episode; the completion still
-    /// crosses into runtime only after the worker has claimed that episode.
+    /// process-local evidence participates in the next direct census; the
+    /// completion crosses into runtime only while the worker's bounded
+    /// predecessor admission is open.
     pub(crate) fn certified_serve_predecessor_completion_evidence(
         &self,
         runtime_capacity_available: bool,
@@ -18588,47 +18586,22 @@ impl ProductionV2Services {
             })
             .transpose()
     }
-    /// Consume one runtime-issued predecessor witness for this exact target.
-    ///
-    /// The first observation records the continuous episode. A sealed target
-    /// reopens only when the runtime later issues a strictly newer episode;
-    /// repeated observations of the same physical prefix stutter.
-    pub(crate) fn observe_certified_serve_predecessor_episode_witness(
-        &self,
-        barrier: CertifiedServeBarrier,
-        witness: ExactServePredecessorEpisodeWitness,
-    ) -> Result<bool, String> {
-        self.io
-            .as_ref()
-            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
-            .observe_serve_predecessor_episode_witness(barrier, witness)
-    }
-    /// Return whether this claimed turn can dispatch one strictly older causal
+
+    /// Return whether this open admission can dispatch one strictly older causal
     /// owner into the completion-producing I/O corridor.
     ///
     /// A full frozen Control prefix returns `false` until the worker consumes a
     /// unit. A materialized but uncommitted target returns `true`: its physical
     /// unit can be transferred to the older owner without releasing the
     /// logical exact-Serve barrier.
-    pub(crate) fn certified_serve_runtime_predecessor_capacity_available(
+    pub(crate) fn certified_serve_predecessor_capacity_available(
         &self,
         barrier: CertifiedServeBarrier,
     ) -> Result<bool, String> {
         self.io
             .as_ref()
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
-            .serve_runtime_predecessor_capacity_available(barrier)
-    }
-    /// Reopen the next bounded turn while an older owner remains, otherwise seal it.
-    pub(crate) fn finish_certified_serve_runtime_episode_turn(
-        &self,
-        barrier: CertifiedServeBarrier,
-        older_predecessor_remains: bool,
-    ) -> Result<(), String> {
-        self.io
-            .as_ref()
-            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
-            .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
+            .serve_predecessor_capacity_available(barrier)
     }
     /// Clone the internal gate which reserves Serve order at fair admission.
     pub(crate) fn certified_serve_ingress_gate(&self) -> Result<CertifiedServeIngressGate, String> {
@@ -20129,12 +20102,12 @@ impl ProductionV2Services {
     ///
     /// The task's immutable actor-global ordinal is inspected before the
     /// completion crosses into runtime. Consequently a completion created
-    /// after the ticket cannot use the ticket's one bounded predecessor
-    /// episode, even when fresh retransmissions repeatedly reopen ingress.
-    /// Until successful service, the worker projects the exact completed
-    /// predecessor without consuming it. That evidence reopens the ticket
-    /// before this claimed path transfers the same owner into runtime; an
-    /// incomplete asynchronous task remains passive and cannot veto Serve.
+    /// after the ticket cannot use its one bounded direct-admission turn, even
+    /// when fresh retransmissions repeatedly reopen ingress. Until successful
+    /// service, the worker projects the exact completed predecessor without
+    /// consuming it. That evidence opens the checked aperture before the same
+    /// owner transfers into runtime; an incomplete asynchronous task remains
+    /// passive and cannot veto Serve.
     pub(crate) fn drain_exact_serve_runtime_predecessor<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,

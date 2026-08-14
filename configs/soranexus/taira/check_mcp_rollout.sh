@@ -21,19 +21,22 @@ ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 ROLLOUT_CANARY_FAUCET_ASSET_ID="${ROLLOUT_CANARY_FAUCET_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
-EXPECTED_TAIRA_LANE_COUNT="${EXPECTED_TAIRA_LANE_COUNT:-7}"
-EXPECTED_UNIVERSAL_DATASPACE_ID="${EXPECTED_UNIVERSAL_DATASPACE_ID:-0}"
-EXPECTED_DPN_DATASPACE_ID="${EXPECTED_DPN_DATASPACE_ID:-10}"
-EXPECTED_IS_DATASPACE_ID="${EXPECTED_IS_DATASPACE_ID:-6647857470246403404}"
-EXPECTED_IS2_DATASPACE_ID="${EXPECTED_IS2_DATASPACE_ID:-8477022798449861195}"
-EXPECTED_CBSI_DATASPACE_ID="${EXPECTED_CBSI_DATASPACE_ID:-20}"
-EXPECTED_CORE_ROUTE_ALIAS="${EXPECTED_CORE_ROUTE_ALIAS:-core}"
-EXPECTED_GOVERNANCE_ROUTE_ALIAS="${EXPECTED_GOVERNANCE_ROUTE_ALIAS:-governance}"
-EXPECTED_ZK_ROUTE_ALIAS="${EXPECTED_ZK_ROUTE_ALIAS:-zk}"
-EXPECTED_DPN_ROUTE_ALIAS="${EXPECTED_DPN_ROUTE_ALIAS:-dpn}"
-EXPECTED_IS_ROUTE_ALIAS="${EXPECTED_IS_ROUTE_ALIAS:-external-poc}"
-EXPECTED_IS2_ROUTE_ALIAS="${EXPECTED_IS2_ROUTE_ALIAS:-boi-mobile}"
-EXPECTED_CBSI_ROUTE_ALIAS="${EXPECTED_CBSI_ROUTE_ALIAS:-cbsi}"
+# Release topology is repository policy, not an operator override. Keep these
+# constants immutable so an environment cannot redefine the topology that this
+# gate claims to validate.
+readonly EXPECTED_TAIRA_LANE_COUNT=7
+readonly EXPECTED_UNIVERSAL_DATASPACE_ID=0
+readonly EXPECTED_DPN_DATASPACE_ID=10
+readonly EXPECTED_IS_DATASPACE_ID=6647857470246403404
+readonly EXPECTED_IS2_DATASPACE_ID=8477022798449861195
+readonly EXPECTED_CBSI_DATASPACE_ID=20
+readonly EXPECTED_CORE_ROUTE_ALIAS="core"
+readonly EXPECTED_GOVERNANCE_ROUTE_ALIAS="governance"
+readonly EXPECTED_ZK_ROUTE_ALIAS="zk"
+readonly EXPECTED_DPN_ROUTE_ALIAS="dpn"
+readonly EXPECTED_IS_ROUTE_ALIAS="external-poc"
+readonly EXPECTED_IS2_ROUTE_ALIAS="boi-mobile"
+readonly EXPECTED_CBSI_ROUTE_ALIAS="cbsi"
 ROLLOUT_CANARY_FEE_PROGRAM_ID="${ROLLOUT_CANARY_FEE_PROGRAM_ID:-testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default}"
 ROLLOUT_CANARY_FEE_PROGRAM_REVISION="${ROLLOUT_CANARY_FEE_PROGRAM_REVISION:-1}"
 ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
@@ -260,6 +263,7 @@ validate_canonical_taira_topology() {
     "$EXPECTED_IS_ROUTE_ALIAS" \
     "$EXPECTED_IS2_ROUTE_ALIAS" \
     "$EXPECTED_CBSI_ROUTE_ALIAS" <<'PY'
+import json
 import pathlib
 import sys
 
@@ -409,20 +413,86 @@ if routing_policy.get("default_dataspace") != "universal":
 rules = routing_policy.get("rules")
 if not isinstance(rules, list):
     fail("nexus.routing_policy.rules is not an array")
-dataspace_by_lane = {lane_id: dataspace for lane_id, _, dataspace, _ in expected_lanes}
+expected_rules = [
+    (3, "dpn", "account", "*@dpn"),
+    (4, "is", "account", "*@wonderland.is"),
+    (5, "is2", "account", "*@boi.is2"),
+    (5, "is2", "account", "*@leumi.is2"),
+    (5, "is2", "account", "*@hapoalim.is2"),
+    (5, "is2", "account", "*@discount.is2"),
+    (5, "is2", "account", "*@mizrahi.is2"),
+    (5, "is2", "account", "*@fibi.is2"),
+    (5, "is2", "account", "*@onezero.is2"),
+    (5, "is2", "account", "*@jerusalem.is2"),
+    (6, "cbsi", "account", "*@cbsi"),
+    (6, "cbsi", "account", "*@pob.cbsi"),
+    (6, "cbsi", "account", "*@bred.cbsi"),
+    (6, "cbsi", "account", "*@anz.cbsi"),
+    (6, "cbsi", "account", "*@bsp.cbsi"),
+    (6, "cbsi", "account", "*@m-selen.cbsi"),
+    (6, "cbsi", "account", "*@ezipei.cbsi"),
+    (1, "universal", "instruction", "governance"),
+    (2, "universal", "instruction", "smartcontract::deploy"),
+]
+observed_rules = []
 for position, rule in enumerate(rules):
     if not isinstance(rule, dict):
         fail(f"nexus.routing_policy.rules[{position}] is not a table")
     lane_id = rule.get("lane")
     dataspace = rule.get("dataspace")
-    if isinstance(lane_id, bool) or lane_id not in dataspace_by_lane:
-        fail(f"nexus.routing_policy.rules[{position}] has unknown lane {lane_id!r}")
-    expected_dataspace = dataspace_by_lane[lane_id]
-    if dataspace != expected_dataspace:
+    matcher = rule.get("matcher")
+    if isinstance(lane_id, bool) or not isinstance(lane_id, int):
+        fail(f"nexus.routing_policy.rules[{position}].lane is not an integer")
+    if not isinstance(dataspace, str) or not dataspace:
+        fail(f"nexus.routing_policy.rules[{position}].dataspace is empty")
+    if not isinstance(matcher, dict):
+        fail(f"nexus.routing_policy.rules[{position}].matcher is not a table")
+    unknown_matcher_fields = set(matcher) - {"account", "instruction", "description"}
+    if unknown_matcher_fields:
         fail(
-            f"nexus.routing_policy.rules[{position}] maps lane {lane_id} to "
-            f"{dataspace!r}, expected {expected_dataspace!r}"
+            f"nexus.routing_policy.rules[{position}].matcher has unsupported fields "
+            f"{sorted(unknown_matcher_fields)!r}"
         )
+    selectors = [
+        (kind, matcher.get(kind))
+        for kind in ("account", "instruction")
+        if matcher.get(kind) is not None
+    ]
+    if len(selectors) != 1:
+        fail(
+            f"nexus.routing_policy.rules[{position}].matcher must contain exactly "
+            "one account or instruction selector"
+        )
+    matcher_kind, matcher_value = selectors[0]
+    if not isinstance(matcher_value, str) or not matcher_value:
+        fail(
+            f"nexus.routing_policy.rules[{position}].matcher.{matcher_kind} is empty"
+        )
+    description = matcher.get("description")
+    if description is not None and (
+        not isinstance(description, str) or not description
+    ):
+        fail(f"nexus.routing_policy.rules[{position}].matcher.description is empty")
+    observed_rules.append((lane_id, dataspace, matcher_kind, matcher_value))
+if observed_rules != expected_rules:
+    fail(
+        f"expected exact routing matcher tuples {expected_rules!r}, "
+        f"observed {observed_rules!r}"
+    )
+expected_runtime_rules = [
+    [lane_id, physical_dataspaces[dataspace], matcher_kind, matcher_value]
+    for lane_id, dataspace, matcher_kind, matcher_value in expected_rules
+]
+print(
+    json.dumps(
+        {
+            "default_lane": 0,
+            "default_dataspace": physical_dataspaces["universal"],
+            "rules": expected_runtime_rules,
+        },
+        separators=(",", ":"),
+    )
+)
 PY
 }
 
@@ -879,7 +949,10 @@ if [[ $SKIP_PUBLIC -eq 0 ]]; then
   REQUIRE_EXACT_GIT_SHA=1
 fi
 
-validate_canonical_taira_topology
+if ! EXPECTED_TAIRA_ROUTING_POLICY_JSON="$(validate_canonical_taira_topology)"; then
+  exit 1
+fi
+readonly EXPECTED_TAIRA_ROUTING_POLICY_JSON
 
 build_curl_resolve_args() {
   local url="$1"
@@ -1363,10 +1436,175 @@ for field in ("healthy", "min_samples_ok", "offset_ok", "confidence_ok"):
 PY
 }
 
+check_effective_routing_policy() {
+  local label="$1"
+  local status_path="$2"
+
+  python3 - "$label" "$status_path" "$EXPECTED_TAIRA_ROUTING_POLICY_JSON" <<'PY'
+import json
+import sys
+
+label, status_path, expected_routing_raw = sys.argv[1:]
+
+
+def fail(message):
+    raise SystemExit(f"{label}: Taira effective routing policy mismatch: {message}")
+
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member {key!r}")
+        result[key] = value
+    return result
+
+
+def require_uint(value, field):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        fail(f"{field} must be a non-negative integer, observed {value!r}")
+    return value
+
+
+try:
+    with open(status_path, "r", encoding="utf-8") as stream:
+        status = json.load(stream, object_pairs_hook=reject_duplicate_keys)
+except (OSError, ValueError, json.JSONDecodeError) as error:
+    fail(f"/status is invalid JSON: {error}")
+try:
+    expected = json.loads(
+        expected_routing_raw,
+        object_pairs_hook=reject_duplicate_keys,
+    )
+except (ValueError, json.JSONDecodeError) as error:
+    fail(f"canonical routing policy summary is invalid JSON: {error}")
+
+if not isinstance(status, dict):
+    fail("/status response is not an object")
+if not isinstance(expected, dict):
+    fail("canonical routing policy summary is not an object")
+
+policy_fields = {"default_lane", "default_dataspace", "rules"}
+if set(expected) != policy_fields:
+    fail(
+        "canonical routing policy summary must contain exactly "
+        f"{sorted(policy_fields)!r}"
+    )
+expected_default_lane = require_uint(
+    expected.get("default_lane"),
+    "canonical default_lane",
+)
+expected_default_dataspace = require_uint(
+    expected.get("default_dataspace"),
+    "canonical default_dataspace",
+)
+expected_rules_raw = expected.get("rules")
+if not isinstance(expected_rules_raw, list):
+    fail("canonical rules is not an array")
+expected_rules = []
+for position, rule in enumerate(expected_rules_raw):
+    if not isinstance(rule, list) or len(rule) != 4:
+        fail(f"canonical rules[{position}] is not a four-element routing tuple")
+    lane_id = require_uint(rule[0], f"canonical rules[{position}].lane")
+    dataspace_id = require_uint(
+        rule[1],
+        f"canonical rules[{position}].dataspace_id",
+    )
+    matcher_kind = rule[2]
+    matcher_value = rule[3]
+    if matcher_kind not in {"account", "instruction"}:
+        fail(f"canonical rules[{position}] has invalid matcher kind {matcher_kind!r}")
+    if not isinstance(matcher_value, str) or not matcher_value:
+        fail(f"canonical rules[{position}] has an empty matcher value")
+    expected_rules.append([lane_id, dataspace_id, matcher_kind, matcher_value])
+
+nexus = status.get("nexus")
+if not isinstance(nexus, dict):
+    fail("/status.nexus is not an object")
+policy = nexus.get("routing_policy")
+if not isinstance(policy, dict):
+    fail("/status.nexus.routing_policy is not an object")
+if set(policy) != policy_fields:
+    fail(
+        "/status.nexus.routing_policy must contain exactly "
+        f"{sorted(policy_fields)!r}, observed {sorted(policy)!r}"
+    )
+observed_default_lane = require_uint(
+    policy.get("default_lane"),
+    "/status.nexus.routing_policy.default_lane",
+)
+observed_default_dataspace = require_uint(
+    policy.get("default_dataspace"),
+    "/status.nexus.routing_policy.default_dataspace",
+)
+if observed_default_lane != expected_default_lane:
+    fail(f"default_lane must be {expected_default_lane}, observed {observed_default_lane}")
+if observed_default_dataspace != expected_default_dataspace:
+    fail(
+        "default_dataspace must be "
+        f"{expected_default_dataspace}, observed {observed_default_dataspace}"
+    )
+rules = policy.get("rules")
+if not isinstance(rules, list):
+    fail("/status.nexus.routing_policy.rules is not an array")
+observed_rules = []
+for position, rule in enumerate(rules):
+    if not isinstance(rule, dict):
+        fail(f"rules[{position}] is not an object")
+    rule_fields = {"lane", "dataspace_id", "matcher"}
+    if set(rule) != rule_fields:
+        fail(
+            f"rules[{position}] must contain exactly {sorted(rule_fields)!r}, "
+            f"observed {sorted(rule)!r}"
+        )
+    lane_id = require_uint(rule.get("lane"), f"rules[{position}].lane")
+    dataspace_id = require_uint(
+        rule.get("dataspace_id"),
+        f"rules[{position}].dataspace_id",
+    )
+    matcher = rule.get("matcher")
+    if not isinstance(matcher, dict):
+        fail(f"rules[{position}].matcher is not an object")
+    unknown_matcher_fields = set(matcher) - {
+        "account",
+        "instruction",
+        "description",
+    }
+    if unknown_matcher_fields:
+        fail(
+            f"rules[{position}].matcher has unsupported fields "
+            f"{sorted(unknown_matcher_fields)!r}"
+        )
+    selector_kinds = [
+        kind for kind in ("account", "instruction") if kind in matcher
+    ]
+    if len(selector_kinds) != 1:
+        fail(
+            f"rules[{position}].matcher must contain exactly one account or "
+            "instruction selector"
+        )
+    matcher_kind = selector_kinds[0]
+    matcher_value = matcher[matcher_kind]
+    if not isinstance(matcher_value, str) or not matcher_value:
+        fail(f"rules[{position}].matcher.{matcher_kind} is not a non-empty string")
+    if "description" in matcher:
+        description = matcher["description"]
+        if not isinstance(description, str) or not description:
+            fail(f"rules[{position}].matcher.description is empty")
+    observed_rules.append([lane_id, dataspace_id, matcher_kind, matcher_value])
+if observed_rules != expected_rules:
+    fail(
+        f"expected exact ordered rule tuples {expected_rules!r}, "
+        f"observed {observed_rules!r}"
+    )
+PY
+}
+
 check_status_snapshot() {
   local label="$1"
   local status_url="$2"
   local allow_pending_commit_qc="${3:-0}"
+  local snapshot_rc
 
   echo "==> ${label}: GET ${status_url}"
   http_request GET "$status_url"
@@ -1456,6 +1694,13 @@ if expected_dpn_commit:
         )
         sys.exit(1)
 PY
+  snapshot_rc=$?
+  if [[ $snapshot_rc -ne 0 ]]; then
+    return "$snapshot_rc"
+  fi
+  if ! check_effective_routing_policy "$label" "$last_body"; then
+    return 1
+  fi
 }
 
 check_sumeragi_snapshot() {
@@ -2040,24 +2285,24 @@ try:
     topology = json.loads(topology_raw, object_pairs_hook=reject_duplicate_keys)
 except (ValueError, json.JSONDecodeError) as error:
     fail(f"canonical topology summary is invalid JSON: {error}")
-
 if not isinstance(node_status, dict):
     fail("/status response is not an object")
 if not isinstance(sumeragi, dict):
     fail("/v1/sumeragi/status response is not an object")
 if not isinstance(topology, dict):
     fail("canonical topology summary is not an object")
-
 expected_lanes = topology.get("lanes")
 expected_dataspaces = topology.get("dataspaces")
+physical_dataspace_order = ("universal", "dpn", "is", "is2", "cbsi")
 if not isinstance(expected_lanes, list) or not isinstance(expected_dataspaces, dict):
     fail("canonical topology summary omitted lanes or dataspaces")
-if set(expected_dataspaces) != {"universal", "dpn", "is", "is2", "cbsi"}:
+if set(expected_dataspaces) != set(physical_dataspace_order):
     fail("canonical topology summary did not contain exactly five physical dataspaces")
 
 expected_by_lane = {}
 dataspace_alias_by_id = {}
-for alias, dataspace_id in expected_dataspaces.items():
+for alias in physical_dataspace_order:
+    dataspace_id = expected_dataspaces[alias]
     require_nonnegative_int(dataspace_id, f"dataspaces.{alias}")
     if dataspace_id in dataspace_alias_by_id:
         fail(f"physical dataspaces {alias!r} and {dataspace_alias_by_id[dataspace_id]!r} share an ID")
@@ -2128,7 +2373,7 @@ if set(catalog_by_lane) != set(expected_by_lane):
         f"the canonical IDs {sorted(expected_by_lane)!r}"
     )
 
-projections = {alias: [] for alias in expected_dataspaces}
+projections = {alias: [] for alias in physical_dataspace_order}
 for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.items():
     lane = teu_by_lane[lane_id]
     entry = catalog_by_lane[lane_id]
@@ -2191,12 +2436,17 @@ for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.ite
                 f"lane {lane_alias!r} manifest quorum {quorum} is invalid for "
                 f"{len(roster)} validators; expected {minimum_quorum}..{len(roster)}"
             )
-        if lane.get("manifest_required") is not True or lane.get("manifest_ready") is not True:
-            fail(f"lane {lane_alias!r} publishes a roster without a ready required manifest")
+        if lane.get("manifest_ready") is not True:
+            fail(f"lane {lane_alias!r} publishes a roster without a ready manifest")
         if not isinstance(lane_manifest_path, str) or not lane_manifest_path.strip():
             fail(f"lane {lane_alias!r} publishes a roster without a manifest_path")
     elif quorum is not None:
         fail(f"lane {lane_alias!r} publishes manifest_quorum without validators")
+    elif lane.get("manifest_required") is True:
+        fail(
+            f"lane {lane_alias!r} requires a ready manifest with a non-empty "
+            "validator roster"
+        )
     projections[dataspace_alias].append(
         {
             "lane_id": lane_id,
@@ -2241,7 +2491,8 @@ if not isinstance(context_id, list) or not context_id or any(
     fail("/v1/sumeragi/status.height_context_id is not a non-empty identity array")
 
 rosters = {}
-for dataspace_alias, lane_projections in projections.items():
+for dataspace_alias in physical_dataspace_order:
+    lane_projections = projections[dataspace_alias]
     nonempty = [projection for projection in lane_projections if projection["members"]]
     if dataspace_alias != "universal" and len(nonempty) != len(lane_projections):
         missing = sorted(
@@ -2292,7 +2543,8 @@ for dataspace_alias, lane_projections in projections.items():
             ),
         }
 seen_manifest_rosters = {}
-for dataspace_alias, roster in rosters.items():
+for dataspace_alias in physical_dataspace_order:
+    roster = rosters[dataspace_alias]
     members = roster.get("members")
     fingerprint = tuple(members)
     previous = seen_manifest_rosters.get(fingerprint)
@@ -2336,6 +2588,11 @@ capture_validator_fleet_sample() {
     fi
     status_copy="$(mktemp)"
     cp "$last_body" "$status_copy"
+
+    if ! check_effective_routing_policy "validator ${label}" "$status_copy"; then
+      rm -f "$status_copy" "$records_file"
+      return 1
+    fi
 
     if ! check_sumeragi_snapshot \
       "validator ${label}" \

@@ -5,7 +5,7 @@
 //! deterministic map so planning never makes the coordinator own physical
 //! bytes or service handles.
 #[cfg(test)]
-use super::{AdmissionRequest, LeaseId};
+use super::{AdmissionRequest, CausalRoot, LeaseId, schema::DurableBodyFrameReference};
 use super::{
     AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass, InitialLifecycleState,
     LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase,
@@ -30,6 +30,7 @@ use super::{
         RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
         RemoteProposalValidateReplayEvidenceV1, SealedLiveWalPersistedEffectV1,
         SignedBroadcastReplayEvidenceV1, SignedEquivocationReplayEvidenceV1,
+        exact_direct_signed_admission_authority,
     },
     schema::DurablePayloadReference,
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
@@ -1839,6 +1840,60 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
                     },
                 )
     }
+
+    /// Rejoin the retained historical Sign parent to this exact live Broadcast row.
+    fn validates_in_ledger(&self, ledger: &super::ledger::LifecycleLedgerV1) -> bool {
+        match &self.parent {
+            DurableRecoveredLifecycleSignParentV1::PhaseVote(parent) => ledger
+                .authenticate_recovered_phase_signed_broadcast(&self.verified, &parent.repair)
+                .is_ok_and(
+                    |(broadcast, parent_ordinal, sign_ordinal, broadcast_ordinal)| {
+                        parent_ordinal == parent.validation.address.ordinal
+                            && sign_ordinal == parent.repair.child_ordinal()
+                            && broadcast_ordinal == self.address.ordinal
+                            && broadcast.exactly_matches(&self.broadcast)
+                    },
+                ),
+            DurableRecoveredLifecycleSignParentV1::Control(parent) => {
+                parent.carrier.validates_signed_broadcast_in_ledger(
+                    &self.verified,
+                    &self.broadcast,
+                    ledger,
+                    self.address.ordinal,
+                )
+            }
+            DurableRecoveredLifecycleSignParentV1::NextWalVote(parent) => {
+                let Some(parent_record) = ledger
+                    .records()
+                    .iter()
+                    .find(|record| record.ordinal() == parent.address.ordinal)
+                else {
+                    return false;
+                };
+                let Some(broadcast_record) = ledger
+                    .records()
+                    .iter()
+                    .find(|record| record.ordinal() == self.address.ordinal)
+                else {
+                    return false;
+                };
+                parent.projection.exactly_matches_advanced_broadcast_parent(
+                    ledger.context(),
+                    parent_record,
+                    self.address.ordinal,
+                ) && self
+                    .broadcast
+                    .exactly_matches_record(broadcast_record, parent.address.owner)
+                    && ledger
+                        .records()
+                        .iter()
+                        .filter(|record| record.owner() == parent.address.owner)
+                        .count()
+                        == 2
+            }
+        }
+    }
+
     fn owns_control_recovery(&self, recovery: &AuthenticatedLifecycleRecoveryCut) -> bool {
         let DurableRecoveredLifecycleSignParentV1::Control(parent) = &self.parent else {
             return false;
@@ -1930,6 +1985,24 @@ impl DurableRecoveredLifecycleNextWalVoteSignWork {
                 .projection
                 .validates_at(&self.verified, address, installed_digest)
     }
+
+    fn validates_in_ledger(&self, ledger: &super::ledger::LifecycleLedgerV1) -> bool {
+        ledger
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == self.address.ordinal)
+            .is_some_and(|record| {
+                self.projection
+                    .exactly_matches_fresh_record(ledger.context(), record)
+                    && ledger
+                        .records()
+                        .iter()
+                        .filter(|candidate| candidate.owner() == self.address.owner)
+                        .count()
+                        == 1
+            })
+    }
+
     fn matches_current_ready_record(
         &self,
         address: ConcreteWorkAddress,
@@ -2797,6 +2870,7 @@ enum ConcreteLifecycleWorkKind {
     PendingAdapter {
         effect: AdapterEffect,
         pending: PendingRuntimeEffectBinding,
+        replay_authority: LifecycleReplayAuthorityV1,
     },
     CertifiedFetchCompletion(CertifiedFetchCompletion),
     DurableStoreBody(DurableStoreBody),
@@ -2845,21 +2919,65 @@ impl ConcreteLifecycleWork {
         effect: AdapterEffect,
         pending: PendingRuntimeEffectBinding,
     ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
+        let Some(replay_authority) = exact_direct_signed_admission_authority(&effect, &pending)
+        else {
+            return Err((RegistryError::CorruptWork, effect, pending));
+        };
+        Self::from_authorized_exact(effect, pending, replay_authority)
+    }
+
+    /// Seal one exact effect, pending binding, and already-authenticated replay envelope.
+    fn from_authorized_exact(
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        replay_authority: LifecycleReplayAuthorityV1,
+    ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
         if !pending.exactly_binds_adapter_effect(&effect) {
             return Err((RegistryError::UnboundEffect, effect, pending));
+        }
+        if exact_direct_signed_admission_authority(&effect, &pending)
+            .is_some_and(|direct| direct != replay_authority)
+        {
+            return Err((RegistryError::CorruptWork, effect, pending));
         }
         let digest = digest_from_hash(pending.exact_effect_identity());
         Ok(Self {
             digest,
-            kind: ConcreteLifecycleWorkKind::PendingAdapter { effect, pending },
+            kind: ConcreteLifecycleWorkKind::PendingAdapter {
+                effect,
+                pending,
+                replay_authority,
+            },
         })
     }
+
+    /// Construct an inert unsupported-effect carrier for registry-only tests.
+    #[cfg(test)]
+    pub(super) fn from_inert_fixture_for_test(
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+    ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
+        let replay_authority = super::replay_authority::exact_record_fixture(
+            LifecycleContext::new(LifecycleDigest::new([0xE1; 32]), 1),
+            LifecycleStageKind::StoreBody,
+            0xE1,
+        )
+        .authority;
+        Self::from_authorized_exact(effect, pending, replay_authority)
+    }
+
     /// Revalidate the sealed binding and its derived physical digest.
     pub(super) fn validate_exact(&self) -> bool {
         match &self.kind {
-            ConcreteLifecycleWorkKind::PendingAdapter { effect, pending } => {
+            ConcreteLifecycleWorkKind::PendingAdapter {
+                effect,
+                pending,
+                replay_authority,
+            } => {
                 pending.exactly_binds_adapter_effect(effect)
                     && self.digest == digest_from_hash(pending.exact_effect_identity())
+                    && exact_direct_signed_admission_authority(effect, pending)
+                        .is_none_or(|direct| &direct == replay_authority)
             }
             ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion) => {
                 completion.validates(self.digest)
@@ -2991,7 +3109,10 @@ impl ConcreteLifecycleWork {
     /// Recover one still-pending adapter pair after a failed or deferred transaction.
     /// A closed lifecycle carrier requires its future typed consumer and fails stop here.
     pub(super) fn into_pair(self) -> (AdapterEffect, PendingRuntimeEffectBinding) {
-        let ConcreteLifecycleWorkKind::PendingAdapter { effect, pending } = self.kind else {
+        let ConcreteLifecycleWorkKind::PendingAdapter {
+            effect, pending, ..
+        } = self.kind
+        else {
             panic!("closed lifecycle work requires its future typed consumer")
         };
         (effect, pending)
@@ -3031,9 +3152,9 @@ impl ConcreteLifecycleWork {
     }
     const fn pending_adapter_pair(&self) -> Option<(&AdapterEffect, &PendingRuntimeEffectBinding)> {
         match &self.kind {
-            ConcreteLifecycleWorkKind::PendingAdapter { effect, pending } => {
-                Some((effect, pending))
-            }
+            ConcreteLifecycleWorkKind::PendingAdapter {
+                effect, pending, ..
+            } => Some((effect, pending)),
             ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_) => None,
             ConcreteLifecycleWorkKind::DurableStoreBody(_) => None,
             ConcreteLifecycleWorkKind::DurableValidateBody(_) => None,
@@ -3331,13 +3452,13 @@ impl PreparedCertifiedServeRegistryBatchV1 {
     pub(super) fn preflights_fresh_registry(
         &self,
         registry: &ConcreteLifecycleWorkRegistry,
+        verified: &VerifiedHeightContext,
         current: &LifecycleCoordinator,
         staged: &LifecycleCoordinator,
     ) -> bool {
         self.entries.len() == 2
             && self.preflights_registry(registry)
-            && (registry.exactly_covers_recovered_ready_work(current)
-                || registry.exactly_covers_recovered_ready_work_and_wal_authority(current))
+            && registry.exactly_covers_all_live_work(verified, current)
             && current.active_context == staged.active_context
             && current.high_water.checked_add(2) == Some(staged.high_water)
             && self.exactly_matches_fresh_staged_append(current, staged)
@@ -3950,8 +4071,10 @@ impl PreparedLiveValidateSignRegistryWork {
         _permit: LiveValidateSignWorkProjectionPermit,
         effect: AdapterEffect,
         pending: PendingRuntimeEffectBinding,
+        replay_authority: LifecycleReplayAuthorityV1,
     ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
-        ConcreteLifecycleWork::from_exact(effect, pending).map(|work| Self { work })
+        ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)
+            .map(|work| Self { work })
     }
     /// Revalidate the still-closed effect/pending binding.
     pub(in crate::sumeragi) fn validates_exact(&self) -> bool {

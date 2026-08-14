@@ -586,9 +586,7 @@ impl super::ProductionLifecycleOwnerV1 {
         }
         if {
             let registry = self.registry.registry_mut();
-            !registry.exactly_covers_recovered_ready_work(&self.coordinator)
-                && !registry
-                    .exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
+            !registry.exactly_covers_all_live_work(&self.verified, &self.coordinator)
         } {
             return CertifiedServeConcreteAdmissionV1::retryable(
                 CertifiedServeConcreteAdmissionFailureV1::Coordinator,
@@ -714,6 +712,7 @@ impl super::ProductionLifecycleOwnerV1 {
             .registry_mut()
             .install_certified_serve_fresh_batch_before_publication(
                 batch,
+                &self.verified,
                 &self.coordinator,
                 &staged,
                 || self.coordinator.persist_exact_staged_successor(&staged),

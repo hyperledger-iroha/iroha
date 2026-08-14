@@ -27,7 +27,7 @@ pub(in crate::sumeragi) enum ProductionLifecyclePreActivationErrorV1 {
     /// Runner setup armed clocks reserved for the consuming activation boundary.
     #[error("launched lifecycle armed live clocks during preactivation setup")]
     ClocksAlreadyArmed,
-    /// The future activation could not lend the exact launched ingress.
+    /// The retained activation could not lend the exact launched ingress.
     #[error("launched lifecycle could not open its preactivation recovery ingress: {0}")]
     RecoveryIngress(String),
     /// The reducer could not expose its exact current local-Proposal directive.
@@ -111,6 +111,23 @@ impl ProductionLifecycleCanonicalRecoveryActivationV1
     }
 }
 
+impl ProductionLifecycleCanonicalRecoveryActivationV1
+    for crate::sumeragi::v2_runner::ProductionLifecyclePendingKuraRunnerActivationV1
+{
+    fn open_canonical_recovery_ingress<'activation>(
+        &'activation mut self,
+        launched_ingress: &Arc<crate::sumeragi::FairV2Ingress>,
+    ) -> Result<
+        crate::sumeragi::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'activation>,
+        crate::sumeragi::v2_runner::V2RunnerError,
+    > {
+        crate::sumeragi::v2_runner::ProductionLifecyclePendingKuraRunnerActivationV1::open_canonical_recovery_ingress(
+            self,
+            launched_ingress,
+        )
+    }
+}
+
 impl ProductionLifecyclePreActivationFailStopScopeV1 {
     pub(super) fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
         Self {
@@ -132,7 +149,7 @@ impl Drop for ProductionLifecyclePreActivationFailStopScopeV1 {
     }
 }
 
-fn missing_pending_kura_replay(
+pub(super) fn missing_pending_kura_replay(
     output_guard: &ConsensusOutputGuard,
 ) -> ProductionPendingKuraApplyInstallErrorV1 {
     output_guard.close_admission_for_restart();
@@ -260,15 +277,14 @@ impl LaunchedProductionLifecycleV1 {
         self.with_runner_setup_transaction(operation)
     }
 
-    /// Temporarily open the future activation's exact ingress for body recovery.
+    /// Temporarily open the retained activation's exact ingress for body recovery.
     ///
     /// This preserves the legacy admission boundary: normal fair ingress is
     /// temporarily open, while the runner callback must use only the canonical
     /// executed-body recovery predicate. The aperture closes before setup
     /// postflight, status remains unpublished, and live clocks stay unarmed.
-    // TODO: Replace both legacy canonical-body recovery openings in
-    // `v2_runner::run_inner` with this typed aperture at the atomic lifecycle
-    // owner cutover.
+    // PendingKura retains its dedicated no-clock recovery height. The
+    // non-Pending lifecycle loop routes both startup repair openings here.
     #[allow(dead_code, clippy::type_complexity)]
     pub(in crate::sumeragi) fn with_canonical_body_recovery_ingress<R, E>(
         &mut self,
@@ -308,6 +324,26 @@ impl LaunchedProductionLifecycleV1 {
         self.with_canonical_body_recovery_ingress_transaction(runner, activation, operation)
     }
 
+    /// Lend the recovery aperture to the no-clock interrupted-tip activation.
+    #[allow(dead_code, clippy::type_complexity)]
+    pub(in crate::sumeragi) fn with_pending_kura_canonical_body_recovery_ingress<R, E>(
+        &mut self,
+        runner: &mut crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+        activation: &mut crate::sumeragi::v2_runner::ProductionLifecyclePendingKuraRunnerActivationV1,
+        operation: impl FnOnce(
+            &crate::sumeragi::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'_>,
+            &mut crate::sumeragi::v2_effects::V2EffectExecutor<
+                crate::sumeragi::v2_runtime::SerializedV2Runtime,
+            >,
+            &mut crate::sumeragi::v2_worker::ProductionV2Services,
+        ) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<ProductionLifecyclePreActivationErrorV1>,
+    {
+        self.with_canonical_body_recovery_ingress_transaction(runner, activation, operation)
+    }
+
     /// Join one recovered local Proposal attempt to runner-local scheduling state.
     ///
     /// The WAL-authenticated attempt never exposes its tag, round, subject, or
@@ -317,7 +353,7 @@ impl LaunchedProductionLifecycleV1 {
     /// clearing the activation blocker. A mismatch or non-pristine runner state
     /// consumes the stale owner and fail-stop closes canonical output through
     /// [`Self::with_runner_setup`]. The production runner will mint and retain
-    /// this state only at its later atomic lifecycle cutover.
+    /// this state only inside the lifecycle-owned non-Pending runner.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn initialize_recovered_local_proposal(
         &mut self,
@@ -373,31 +409,6 @@ impl LaunchedProductionLifecycleV1 {
     ) {
         assert!(self.recovered_local_proposal_attempt.is_none());
         self.recovered_local_proposal_attempt = Some(recovered);
-    }
-
-    /// Install the sole pending-Kura Decision Fetch while ingress and clocks stay closed.
-    ///
-    /// The replay seal is taken exactly once and consumed inside the existing
-    /// non-permit fail-stop setup scope. Verification reconstructs the exact
-    /// pending-tip evidence before the effect may enter the local-only recovery
-    /// pipeline; neither the Fetch nor its WAL evidence crosses this boundary.
-    #[allow(dead_code, clippy::result_large_err)]
-    pub(in crate::sumeragi) fn install_pending_kura_apply(
-        &mut self,
-        runner: &mut crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
-    ) -> Result<
-        Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext>,
-        ProductionPendingKuraApplyInstallErrorV1,
-    > {
-        let Some(replay) = self.pending_kura_apply_replay.take() else {
-            let output_guard = self.services.lifecycle_output_guard();
-            return Err(missing_pending_kura_replay(output_guard.as_ref()));
-        };
-        self.with_runner_setup(runner, move |executor, services| {
-            replay
-                .install(executor, services)
-                .map_err(ProductionPendingKuraApplyInstallErrorV1::Effect)
-        })
     }
 }
 

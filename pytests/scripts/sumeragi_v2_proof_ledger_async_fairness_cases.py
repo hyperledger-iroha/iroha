@@ -2,44 +2,35 @@
     ("relative", "old", "new", "expected_error"),
     (
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "            liveness_watchdog.poll(Instant::now());\n",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "        liveness_watchdog.poll(Instant::now());\n",
             "",
-            "every serialized height-loop iteration must poll",
+            "every ordinary serialized height-loop iteration must poll liveness",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
             "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
             "                continue;\n",
             "                continue;\n",
-            "all four explicit serialized height-loop continue edges",
+            "ordinary loop's four explicit continue edges and loop tail",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                advance_executor(\n"
-            "                    &block_rx,\n"
-            "                    &mut executor,\n"
-            "                    &mut services,\n"
-            "                    control_queue_capacity,\n"
-            "                )?;",
-            "                advance_executor(\n"
-            "                    &mut executor,\n"
-            "                    &mut services,\n"
-            "                    control_queue_capacity,\n"
-            "                )?;",
-            "ordinary height path must invoke the bounded serialized runtime against the live ingress high-watermark",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "                advance_executor(receiver, executor, services, control_queue_capacity)?;",
+            "                advance_executor(receiver, executor, services, 1)?;",
+            "ordinary loop must retain its configured post-ingress runtime batch",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;",
-            "let _ = (&block_rx, &mut executor, &mut services);",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "advance_pacemaker_once(receiver, executor, services)?;",
+            "let _ = (receiver, executor, services);",
             "retained response episode must receive exactly one direct typed pacemaker turn",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "service_certified_serve_barrier_liveness_turn(\n",
-            "service_certified_serve_barrier_liveness_turn_for_test(\n",
-            "selected Serve must keep certificate escape inside",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "service_certified_serve_barrier_liveness_turn(false,",
+            "service_certified_serve_barrier_liveness_turn_for_test(false,",
+            "each modular selected-Serve barrier turn must dispatch its reviewed liveness suffix",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -49,8 +40,8 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
-            "            recovery.assert_complete();\n",
-            "            assert!(recovery.entered_view_one());\n",
+            "        recovery.assert_complete();\n",
+            "        assert!(recovery.entered_view_one());\n",
             "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
         ),
         (
@@ -58,7 +49,7 @@
             "    service()\n"
             "}\n\n"
             "/// Execute at most one typed timeout/Progress-root transition",
-            "    if _older_runtime_episode_claimed {\n"
+            "    if _predecessor_admission_open {\n"
             "        service()\n"
             "    } else {\n"
             "        Ok(())\n"
@@ -66,19 +57,19 @@
             "}\n\n"
             "/// Execute at most one typed timeout/Progress-root transition",
             "selected-Serve pacemaker service must remain independent of the "
-            "one-shot predecessor-episode claim",
+            "move-only predecessor admission",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
             "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
             "wake_rx.recv_timeout(remaining)",
-            "pending-tip recovery must wait only for the lesser of its remaining deadline",
+            "closed pending recovery must wait only for the lesser of its remaining deadline and the finite local wake bound",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs",
             "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
             "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
-            "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",
+            "dropping a borrowed turn must advance exactly one finite Completion, Runtime, or Ingress target",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",

@@ -18,12 +18,12 @@ use super::{
         durable_body_frame_reference, execution_commitment,
     },
     schema::{
-        CandidateAdmission, CausalRoot, DurableBodyFrameReference, DurablePayloadReference,
-        DurableRecordMetadata, DurableServeNegativeOutcome, InitialLifecycleState,
-        LifecycleContext, LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord,
-        LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleWorkClass, OwnerId,
-        PhysicalGeometry, PhysicalSlot, PhysicalSlotId, PredecessorScope, ProducerTurnAdmission,
-        TerminalOutcome, serve_and_producer_keys_match,
+        CandidateAdmission, CausalRoot, DurableBodyFrameReference, DurableContinuationEdge,
+        DurablePayloadReference, DurableRecordMetadata, DurableServeNegativeOutcome,
+        InitialLifecycleState, LifecycleContext, LifecycleDigest, LifecycleKey, LifecyclePhase,
+        LifecycleRecord, LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleWorkClass,
+        OwnerId, PhysicalGeometry, PhysicalSlot, PhysicalSlotId, PredecessorScope,
+        ProducerTurnAdmission, TerminalOutcome, serve_and_producer_keys_match,
     },
     selector::CertifiedFetchCompletionAuthority,
     work_registry::{
@@ -2011,6 +2011,36 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
             && record.continuation() == Some(super::schema::DurableContinuation::None)
             && record.replay_matches_candidate(&self.candidate)
     }
+
+    /// Compare the exact Advanced next-WAL Vote parent of one live Broadcast.
+    pub(super) fn exactly_matches_advanced_broadcast_parent(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+        broadcast_ordinal: u128,
+    ) -> bool {
+        let edge = match self.candidate.stage.kind() {
+            LifecycleStageKind::SignPrepareVote => DurableContinuationEdge::SignPrepareToBroadcast,
+            LifecycleStageKind::SignCommitVote => DurableContinuationEdge::SignCommitToBroadcast,
+            _ => return false,
+        };
+        let owner = OwnerId::new(self.candidate.causal_root, record.ordinal());
+        recovered_next_wal_vote_candidate_shape_is_exact(&self.candidate, context)
+            && record.key() == Some(self.candidate.key)
+            && record.owner() == owner
+            && record.work_class() == Some(LifecycleWorkClass::SignVote)
+            && record.stage() == Some(self.candidate.stage)
+            && record.terminal() == Some(Some(TerminalOutcome::Advanced))
+            && record.reconstruction_source() == self.candidate.reconstruction_source
+            && record.durable_payload() == Some(DurablePayloadReference::None)
+            && record.continuation()
+                == Some(super::schema::DurableContinuation::successor(
+                    edge,
+                    broadcast_ordinal,
+                ))
+            && record.replay_matches_candidate(&self.candidate)
+    }
+
     /// Insert this exact candidate after its fresh row has been revalidated.
     pub(super) fn splice_candidate_from_fresh_record(
         &self,
@@ -2277,7 +2307,19 @@ impl SealedLiveWalPersistedEffectV1 {
         let LiveWalPersistedPendingV1::ValidateSignBound(pending) = pending else {
             unreachable!("exact live Validate-to-Sign seal retains its bound pending owner")
         };
-        match PreparedLiveValidateSignRegistryWork::from_exact(permit, effect, pending) {
+        let LiveWalPersistedReplayStateV1::Canonical {
+            authority: replay_authority,
+            ..
+        } = &replay.state
+        else {
+            unreachable!("exact live Validate-to-Sign seal retains canonical WAL authority")
+        };
+        match PreparedLiveValidateSignRegistryWork::from_exact(
+            permit,
+            effect,
+            pending,
+            replay_authority.clone(),
+        ) {
             Ok(work) => Ok(work),
             Err((_error, effect, pending)) => Err(Self {
                 effect,
@@ -4469,6 +4511,7 @@ mod tests {
 pub(super) use tests::{
     ReplayCase, durable_certified_fetch_projection_fixture, exact_body_record_fixture,
     exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
-    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
-    exact_replay_authority_for_payload_fixture, foreign_certified_serve_family_authority_fixture,
+    exact_pending_certified_fetch_candidate_fixture, exact_record_fixture,
+    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
+    foreign_certified_serve_family_authority_fixture,
 };

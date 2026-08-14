@@ -794,8 +794,8 @@ fn cold_durable_proposal_refanout_atomically_owns_control_and_chunks() {
     let _service_io = install_lifecycle_planner_io_for_validator_for_test(
         &mut service,
         service_context.clone(),
-        active_tag,
         proposal.proposer,
+        active_tag,
         Arc::clone(&output_guard),
         body_store,
         body_store_identity.clone(),

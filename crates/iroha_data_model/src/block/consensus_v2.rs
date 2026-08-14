@@ -1581,7 +1581,7 @@ impl TimeoutCertificate {
             return Err(ValidationError::TimeoutGroupsNotStrictlySorted);
         }
         let mut all_signers = BTreeSet::new();
-        let mut highest_at_view: Option<(View, BlockSubject)> = None;
+        let mut highest_at_view: Option<(View, BlockSubject, ExecutionCommitment)> = None;
         for group in &self.groups {
             if group.signers.is_empty() {
                 return Err(ValidationError::EmptyTimeoutGroup);
@@ -1604,15 +1604,23 @@ impl TimeoutCertificate {
                 }
                 highest.validate(context)?;
                 match highest_at_view {
-                    Some((view, subject)) if view == highest.round.view => {
-                        if subject != highest.subject {
+                    Some((view, subject, execution_commitment)) if view == highest.round.view => {
+                        if subject != highest.subject
+                            || execution_commitment != highest.execution_commitment
+                        {
                             return Err(ValidationError::ConflictingHighestPrepare);
                         }
                     }
-                    Some((view, _)) if view > highest.round.view => {
+                    Some((view, _, _)) if view > highest.round.view => {
                         return Err(ValidationError::TimeoutGroupsNotStrictlySorted);
                     }
-                    _ => highest_at_view = Some((highest.round.view, highest.subject)),
+                    _ => {
+                        highest_at_view = Some((
+                            highest.round.view,
+                            highest.subject,
+                            highest.execution_commitment,
+                        ));
+                    }
                 }
             }
             for signer in &group.signers {
