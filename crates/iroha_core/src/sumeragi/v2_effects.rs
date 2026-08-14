@@ -154,6 +154,65 @@ use super::{
 };
 use crate::kura::KuraV2CommitReceipt;
 
+/// Whether one exact fair-ingress occurrence may cross retained reducer debt.
+///
+/// This pure predicate is shared by ordinary checked dequeue and lifecycle
+/// queue selection. Current-height certified-Serve preparation remains a
+/// separate, stateful runner/service transaction after this common gate.
+pub(crate) fn v2_ingress_head_can_drain<R: EffectRuntime>(
+    inbound: &super::InboundBlockMessage,
+    executor: &V2EffectExecutor<R>,
+    terminal_subject: Option<wire::BlockSubject>,
+) -> bool {
+    let BlockMessage::V2(message) = inbound.message() else {
+        return true;
+    };
+    if message.validate_version().is_err() {
+        return true;
+    }
+    if terminal_subject.is_some() && v2_payload_is_terminal_reducer_control(&message.payload) {
+        return true;
+    }
+    if let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
+        && certified_body_request_is_superseded_after_decision(
+            request,
+            terminal_subject,
+            executor.context().height,
+        )
+    {
+        return true;
+    }
+    let Some(ingress_ownership) = inbound.ingress_ownership() else {
+        return true;
+    };
+    executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
+}
+
+/// Return whether finality makes one competing same-height body request obsolete.
+pub(crate) fn certified_body_request_is_superseded_after_decision(
+    request: &wire::CertifiedBodyRequest,
+    terminal_subject: Option<wire::BlockSubject>,
+    active_height: wire::Height,
+) -> bool {
+    terminal_subject
+        .is_some_and(|decided| request.round.height == active_height && request.subject != decided)
+}
+
+/// Return whether one payload can directly advance or close reducer finality.
+pub(crate) const fn v2_payload_is_terminal_reducer_control(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    matches!(
+        payload,
+        wire::ConsensusMessageV2Payload::Proposal(_)
+            | wire::ConsensusMessageV2Payload::Vote(_)
+            | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+            | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+    )
+}
+
 /// Return whether one authenticated envelope can retire a hung signing fence.
 ///
 /// Only a TC or a CommitQC changes the reducer incarnation strongly enough to
@@ -1809,12 +1868,15 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchRequestRegistrationErrorV1 {
 /// the registry's claimed-carrier arming token and installs both dedicated
 /// indexes in one assertion-only tail.
 #[must_use = "dropping a recovered request reservation leaves executor indexes unchanged"]
-pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestRegistrationV1<'executor> {
-    executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestRegistrationV1<
+    'executor,
+    R: EffectRuntime,
+> {
+    executor: &'executor mut V2EffectExecutor<R>,
     owner: Option<RecoveredDecisionFetchRequestOwnerV1>,
 }
 
-impl PreparedRecoveredDecisionFetchRequestRegistrationV1<'_> {
+impl<R: EffectRuntime> PreparedRecoveredDecisionFetchRequestRegistrationV1<'_, R> {
     /// Return the reserved exact lifecycle key.
     pub(in crate::sumeragi) fn dispatch_key(
         &self,
@@ -2971,6 +3033,22 @@ enum RestartEffectSource {
 }
 
 pub(crate) trait EffectRuntime {
+    /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
+    fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        _message: &wire::ConsensusMessageV2,
+        _ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        false
+    }
+    /// Decide whether an exact TimeoutVote carrier may close retained restart debt.
+    fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        _message: &wire::ConsensusMessageV2,
+        _ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        false
+    }
     /// Publish the first receiver-local physical ordinal not yet admitted.
     /// Synthetic runtimes have no outer ingress and may retain the default.
     fn set_ingress_physical_cut(&mut self, _physical_cut: u128) -> Result<(), String> {
@@ -3328,6 +3406,30 @@ pub(crate) trait EffectRuntime {
 }
 
 impl EffectRuntime for SerializedV2Runtime {
+    fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        SerializedV2Runtime::can_admit_network_message_with_ingress_ownership(
+            self,
+            message,
+            ingress_ownership,
+        )
+    }
+
+    fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        SerializedV2Runtime::can_admit_timeout_vote_recovery_episode(
+            self,
+            message,
+            ingress_ownership,
+        )
+    }
+
     fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
         SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
     }
@@ -3959,20 +4061,16 @@ fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
     })
 }
 
-impl V2EffectExecutor<SerializedV2Runtime> {
-    /// Reserve the sole dedicated recovered Decision Fetch owner position.
+impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Preflight one dedicated recovered request without retaining an executor borrow.
     ///
-    /// Exact hash, logical request identity, body coordinates, and both ordinary
-    /// and recovered reverse indexes are checked while the executor is
-    /// exclusively borrowed. No map changes until the returned reservation
-    /// consumes the claimed registry carrier.
-    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(
-        &mut self,
-        owner: RecoveredDecisionFetchRequestOwnerV1,
-    ) -> Result<
-        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_>,
-        RecoveredDecisionFetchRequestRegistrationErrorV1,
-    > {
+    /// `Ok(false)` is reserved for the configured request-capacity bound. Every
+    /// identity, index, coordinate, or existing dedicated-owner conflict stays
+    /// a typed error so the scheduler cannot hide corruption as backpressure.
+    pub(in crate::sumeragi) fn recovered_decision_fetch_registration_available(
+        &self,
+        owner: &RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<bool, RecoveredDecisionFetchRequestRegistrationErrorV1> {
         if self.output_guard.restart_required()
             || self.fatal_reason.is_some()
             || !owner.validates_exact_executor_context(&self.context, &self.requester)
@@ -3984,14 +4082,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         }
         let key = owner.dispatch_key();
         let request_hash = owner.request_hash();
-        if self
-            .outstanding_requests
-            .len()
-            .checked_add(self.recovered_decision_fetches.len())
-            .is_none_or(|owned| owned >= self.config.max_certified_requests)
-        {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
-        }
         if !self.recovered_decision_fetches.is_empty()
             || self
                 .recovered_decision_fetch_by_request
@@ -4016,12 +4106,41 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         {
             return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ConflictingOwner);
         }
+        if self
+            .outstanding_requests
+            .len()
+            .checked_add(self.recovered_decision_fetches.len())
+            .is_none_or(|owned| owned >= self.config.max_certified_requests)
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Reserve the sole dedicated recovered Decision Fetch owner position.
+    ///
+    /// Exact hash, logical request identity, body coordinates, and both ordinary
+    /// and recovered reverse indexes are checked while the executor is
+    /// exclusively borrowed. No map changes until the returned reservation
+    /// consumes the claimed registry carrier.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(
+        &mut self,
+        owner: RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_, R>,
+        RecoveredDecisionFetchRequestRegistrationErrorV1,
+    > {
+        if !self.recovered_decision_fetch_registration_available(&owner)? {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
+        }
         Ok(PreparedRecoveredDecisionFetchRequestRegistrationV1 {
             executor: self,
             owner: Some(owner),
         })
     }
+}
 
+impl V2EffectExecutor<SerializedV2Runtime> {
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the
@@ -4273,6 +4392,11 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime.arm_live_clocks(now)
     }
 
+    /// Prove runner setup has not crossed the one-shot live-clock boundary.
+    pub(in crate::sumeragi) fn lifecycle_live_clocks_are_unarmed(&self) -> bool {
+        !self.runtime.lifecycle_live_clocks_are_armed()
+    }
+
     /// Freeze the exact executor/runtime around one lifecycle-owned Apply completion.
     pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(
         &mut self,
@@ -4515,58 +4639,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime.round_tag()
     }
 
-    /// Whether the fair-ingress head can make progress without violating the
-    /// retained reducer-effect prefix.
-    ///
-    /// Reducer-producing traffic remains behind an undispatched causal suffix.
-    /// Exact-body chunks and certified responses are transport completions,
-    /// however, and may be the only events able to release the pending-work
-    /// capacity blocking that suffix. They never enter the
-    /// reducer FIFO directly, so admitting them cannot overtake reducer state.
-    /// A `CommitCertificateResponse` is reducer-producing because the runner
-    /// unwraps its authenticated CommitQC before retiring discovery ownership;
-    /// that exact terminal certificate is nevertheless an allowed escape from
-    /// retained debt because it can retire a hung signing fence.
-    pub(crate) fn can_admit_network_message_with_ingress_ownership(
-        &self,
-        message: &wire::ConsensusMessageV2,
-        ingress_ownership: &FairV2IngressOwnershipEvidence,
-    ) -> bool {
-        if self.fatal_reason.is_some() || self.output_guard.restart_required() {
-            return false;
-        }
-        let retained_dispatch_allows =
-            self.retained_dispatch_allows_network_ingress(&message.payload);
-        let timeout_vote_recovery_episode = !retained_dispatch_allows
-            && self
-                .runtime
-                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership);
-        (retained_dispatch_allows || timeout_vote_recovery_episode)
-            && self
-                .runtime
-                .can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
-    }
-
-    /// Whether this fair-ingress head may cross retained reducer debt solely
-    /// to close an absolute-timeout restart cycle.
-    ///
-    /// The runtime predicate accepts only the finite current-view universe of
-    /// pre-cut TimeoutVote owners and one first post-cut owner per roster
-    /// source. This wrapper deliberately skips the retained-dispatch filter but
-    /// grants neither certified capacity nor signature-fence authority; full
-    /// authentication still occurs after the checked dequeue.
-    pub(crate) fn can_admit_timeout_vote_recovery_episode(
-        &self,
-        message: &wire::ConsensusMessageV2,
-        ingress_ownership: &FairV2IngressOwnershipEvidence,
-    ) -> bool {
-        self.fatal_reason.is_none()
-            && !self.output_guard.restart_required()
-            && self
-                .runtime
-                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership)
-    }
-
     #[cfg(test)]
     pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
         if self.fatal_reason.is_some()
@@ -4646,6 +4718,53 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Borrow the immutable context governing this executor height.
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         &self.context
+    }
+
+    /// Snapshot the exact terminal subject governing lifecycle queue selection.
+    pub(crate) fn lifecycle_terminal_subject(
+        &self,
+    ) -> Result<Option<wire::BlockSubject>, EffectExecutorError> {
+        self.ensure_open()?;
+        self.runtime
+            .reconciliation_frontier()
+            .map(|frontier| frontier.decision.map(|(_, _, subject, _)| subject))
+            .map_err(|error| EffectExecutorError::Runtime(error.to_string()))
+    }
+
+    /// Whether the fair-ingress head can make progress without violating the
+    /// retained reducer-effect prefix.
+    pub(crate) fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        if self.fatal_reason.is_some() || self.output_guard.restart_required() {
+            return false;
+        }
+        let retained_dispatch_allows =
+            self.retained_dispatch_allows_network_ingress(&message.payload);
+        let timeout_vote_recovery_episode = !retained_dispatch_allows
+            && self
+                .runtime
+                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership);
+        (retained_dispatch_allows || timeout_vote_recovery_episode)
+            && self
+                .runtime
+                .can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
+    }
+
+    /// Whether this fair-ingress head may cross retained reducer debt solely
+    /// to close an absolute-timeout restart cycle.
+    pub(crate) fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        self.fatal_reason.is_none()
+            && !self.output_guard.restart_required()
+            && self
+                .runtime
+                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership)
     }
 
     /// Rejoin one launched service to this executor's exact body-store owner.
@@ -14063,7 +14182,8 @@ mod tests {
         v2_block_sync::{CommitCertificateAdmissionError, V2BlockSyncDiscovery},
         v2_core::Generation,
         v2_lifecycle_coordinator::{
-            CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
+            CertifiedFetchReadyPublicationError, LifecycleDigest, LifecycleIngressIoTargetKind,
+            LifecyclePhase, LifecycleState, ProductionIngressCapacityRetry,
             ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
             ProductionIngressTurnPreparation, ProductionRecoveredDecisionFetchPersistenceErrorV1,
             ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
@@ -14297,6 +14417,23 @@ mod tests {
     }
 
     impl EffectRuntime for FakeRuntime {
+        fn can_admit_network_message_with_ingress_ownership(
+            &self,
+            message: &wire::ConsensusMessageV2,
+            ingress_ownership: &FairV2IngressOwnershipEvidence,
+        ) -> bool {
+            ingress_ownership.validate_exact()
+                && ingress_ownership.matches_message(&BlockMessage::V2(message.clone()))
+        }
+
+        fn can_admit_timeout_vote_recovery_episode(
+            &self,
+            _message: &wire::ConsensusMessageV2,
+            _ingress_ownership: &FairV2IngressOwnershipEvidence,
+        ) -> bool {
+            false
+        }
+
         fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
             assert!(!self.panic_step, "model safety-WAL step panic");
             if self.scheduler_ownership_ready {
@@ -24328,6 +24465,11 @@ mod tests {
             authenticated,
         );
         assert!(owner.validates_exact_executor_context(&fixture.context, &requester));
+        assert_eq!(
+            executor.recovered_decision_fetch_registration_available(&owner),
+            Ok(true),
+            "an exact vacant recovered owner reports physical executor capacity"
+        );
         let request_hash = owner.request_hash();
         assert!(
             executor
@@ -24342,6 +24484,147 @@ mod tests {
                 .is_none()
         );
         assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+        assert_eq!(
+            executor.recovered_decision_fetch_registration_available(
+                executor
+                    .recovered_decision_fetches
+                    .get(&key)
+                    .expect("installed recovered owner remains indexed"),
+            ),
+            Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied),
+            "an existing dedicated owner is corruption/ownership, not capacity backpressure"
+        );
+
+        let ingress =
+            crate::sumeragi::FairV2Ingress::new(32, 5 * 512 * 1024, 512 * 1024, 0, 512 * 1024);
+        ingress
+            .configure_roster(
+                fixture
+                    .context
+                    .roster
+                    .iter()
+                    .map(|power| power.validator.clone()),
+            )
+            .expect("fixture roster fits the recovered selector ingress");
+        ingress.state.lock().leader_wire_context =
+            Some((fixture.context.id(), fixture.context.height));
+        ingress.open().expect("open recovered selector ingress");
+        let recovered_response = |responder: wire::ValidatorIndex| {
+            let mut response = wire::CertifiedBodyResponse {
+                request_hash,
+                manifest: fixture.manifest.clone(),
+                body: fixture.body.clone(),
+                responder,
+                signature: Vec::new(),
+            };
+            response.signature = Signature::new(
+                fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
+                    .private_key(),
+                &response.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            response
+        };
+        let mut ordinary_response = recovered_response(2);
+        ordinary_response.request_hash = HashOf::from_untyped_unchecked(Hash::new(
+            b"ordinary response ahead of recovered Decision Fetch",
+        ));
+        ordinary_response.signature = Signature::new(
+            fixture.validator_keys[2].private_key(),
+            &ordinary_response.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                        ordinary_response.clone(),
+                    ),
+                )),
+                Some(fixture.context.roster[2].validator.clone()),
+            )),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let ordinary_ordinal = ingress.state.lock().last_admission_ordinal;
+        let mut first_recovered_ordinal = None;
+        for responder in [0, 1] {
+            let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(recovered_response(
+                    responder,
+                )),
+            ));
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(
+                    message,
+                    Some(
+                        fixture.context.roster
+                            [usize::try_from(responder).expect("small responder index")]
+                        .validator
+                        .clone(),
+                    ),
+                )),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            first_recovered_ordinal
+                .get_or_insert_with(|| ingress.state.lock().last_admission_ordinal);
+        }
+        let queue_depth_before_selector = ingress.len();
+        let physical_cut_before_selector = ingress.next_physical_admission_ordinal();
+        assert!(
+            executor
+                .prepare_next_recovered_decision_fetch_ingress_selector(&ingress)
+                .expect("ordinary fair head is a non-fatal lifecycle pass-through")
+                .is_none(),
+            "a later recovered response cannot leapfrog the ordinary fair winner",
+        );
+        assert_eq!(ingress.len(), queue_depth_before_selector);
+        let drained_ordinary = ingress
+            .try_recv_if_checked(|_| true)
+            .expect("ordinary checked dequeue remains available")
+            .expect("ordinary winner remains queued after lifecycle pass-through");
+        assert_eq!(
+            drained_ordinary
+                .ingress_ownership()
+                .expect("ordinary response retains physical ownership")
+                .first
+                .physical_admission_ordinal,
+            ordinary_ordinal,
+        );
+        assert!(matches!(
+            drained_ordinary.message(),
+            BlockMessage::V2(message)
+                if matches!(
+                    &message.payload,
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)
+                        if response.request_hash == ordinary_response.request_hash
+                )
+        ));
+        let mut selected = executor
+            .prepare_next_recovered_decision_fetch_ingress_selector(&ingress)
+            .expect("queue-owned recovered response selection remains exact")
+            .expect("one recovered response family is selected");
+        assert_eq!(
+            selected.selected_cut_for_test().2,
+            first_recovered_ordinal.expect("one recovered response was enqueued"),
+            "the queue-owned selector chooses the next fair exact family occurrence",
+        );
+        let target = selected
+            .take_lifecycle_io_target()
+            .expect("the selected target remains a recovered Fetch persistence carrier");
+        assert_eq!(
+            target.kind(),
+            LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
+        );
+        assert!(target.matches_recovered_decision_fetch_key(key));
+        drop(selected);
+        assert_eq!(ingress.len(), queue_depth_before_selector - 1);
+        assert_eq!(
+            ingress.next_physical_admission_ordinal(),
+            physical_cut_before_selector,
+            "queue-owned selector discovery cannot dequeue or renumber ingress",
+        );
 
         let uncertified_effect = AdapterEffect::FetchBody {
             tag: tag(0),

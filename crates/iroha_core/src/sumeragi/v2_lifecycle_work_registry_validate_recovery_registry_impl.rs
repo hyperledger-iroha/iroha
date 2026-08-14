@@ -1,4 +1,10 @@
 impl ConcreteLifecycleWorkRegistry {
+    /// Remove one exact fixture carrier without exposing the registry map.
+    #[cfg(test)]
+    pub(super) fn remove_exact_for_test(&mut self, address: ConcreteWorkAddress) -> bool {
+        self.entries.remove(&address).is_some()
+    }
+
     /// Return whether one Broadcast carrier declares a paired next Vote.
     pub(super) fn recovered_lifecycle_signed_broadcast_declares_next_vote(
         &self,
@@ -1705,7 +1711,7 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .collect::<Vec<_>>();
         self.entries.len() == live_fetches.len() + extra.cardinality()
-            && self.exact_optional_recovered_wal_authority(coordinator, extra)
+            && self.exact_optional_recovered_wal_authority(coordinator, extra, false)
             && live_fetches.into_iter().all(|record| {
                 if record.state != super::LifecycleState::Ready || record.physical_slots.len() != 1
                 {
@@ -1799,7 +1805,26 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
     ) -> bool {
-        self.exactly_covers_ready_work_with_extra(coordinator, extra, None)
+        self.exactly_covers_ready_work_with_extra(coordinator, extra, None, false)
+    }
+
+    /// Verify the complete live registry immediately before final retirement.
+    ///
+    /// This preserves every startup rule except for the one volatile state
+    /// created by durable signed-Broadcast refanout. That Broadcast may be
+    /// parked on its exact `Recovery(digest)` generation after output handoff;
+    /// no other Waiting or Claimed carrier is admitted here.
+    pub(super) fn exactly_covers_finalization_work(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> bool {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return false;
+        }
+        let Some(extra) = self.exact_recovered_wal_registry_slot() else {
+            return false;
+        };
+        self.exactly_covers_ready_work_with_extra(coordinator, extra, None, true)
     }
 
     fn exactly_covers_ready_work_with_extra(
@@ -1807,6 +1832,7 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
         active_serve: Option<&TurnLease>,
+        allow_refanned_broadcast: bool,
     ) -> bool {
         let live = coordinator
             .records
@@ -1822,7 +1848,11 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .collect::<Vec<_>>();
         self.entries.len() == live.len() + extra.cardinality()
-            && self.exact_optional_recovered_wal_authority(coordinator, extra)
+            && self.exact_optional_recovered_wal_authority(
+                coordinator,
+                extra,
+                allow_refanned_broadcast,
+            )
             && live.into_iter().all(|record| {
                 let is_active_serve = active_serve.is_some_and(|lease| {
                     record.work_class == LifecycleWorkClass::CertifiedServe
@@ -1911,7 +1941,7 @@ impl ConcreteLifecycleWorkRegistry {
         let Some(sign) = self.exact_recovered_wal_registry_slot() else {
             return false;
         };
-        self.exactly_covers_ready_work_with_extra(coordinator, sign, Some(lease))
+        self.exactly_covers_ready_work_with_extra(coordinator, sign, Some(lease), false)
     }
 
     /// Prove the complete private registry and exact active Serve lease without
@@ -2049,6 +2079,7 @@ impl ConcreteLifecycleWorkRegistry {
         &self,
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
+        allow_refanned_broadcast: bool,
     ) -> bool {
         let unsupported_live = coordinator
             .records
@@ -2105,7 +2136,6 @@ impl ConcreteLifecycleWorkRegistry {
                 if record.ordinal != address.ordinal
                     || record.owner != address.owner
                     || record.work_class != LifecycleWorkClass::Broadcast
-                    || record.state != super::LifecycleState::Ready
                 {
                     return false;
                 }
@@ -2115,11 +2145,20 @@ impl ConcreteLifecycleWorkRegistry {
                         ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
                             broadcast
                         ) if record.physical_slots.get(&address.slot) == Some(&work.digest)
-                            && broadcast.matches_current_ready_record(
-                                address,
-                                work.digest,
-                                coordinator,
-                            )
+                            && broadcast.is_unpaired()
+                            && if allow_refanned_broadcast {
+                                broadcast.matches_current_finalization_record(
+                                    address,
+                                    work.digest,
+                                    coordinator,
+                                )
+                            } else {
+                                broadcast.matches_current_ready_record(
+                                    address,
+                                    work.digest,
+                                    coordinator,
+                                )
+                            }
                     )
                 })
             }
@@ -2141,12 +2180,15 @@ impl ConcreteLifecycleWorkRegistry {
                     return false;
                 };
                 if broadcast_record.work_class != LifecycleWorkClass::Broadcast
-                    || broadcast_record.state != super::LifecycleState::Ready
                     || next_sign_record.work_class != LifecycleWorkClass::SignVote
                     || next_sign_record.state != super::LifecycleState::Ready
                 {
                     return false;
                 }
+                let Some(&next_sign_digest) = next_sign_record.physical_slots.get(&next_sign.slot)
+                else {
+                    return false;
+                };
                 let broadcast_exact = self.entries.get(&broadcast).is_some_and(|work| {
                     matches!(
                         &work.kind,
@@ -2154,11 +2196,20 @@ impl ConcreteLifecycleWorkRegistry {
                             carrier
                         ) if broadcast_record.physical_slots.get(&broadcast.slot)
                             == Some(&work.digest)
-                            && carrier.matches_current_ready_record(
-                                broadcast,
-                                work.digest,
-                                coordinator,
-                            )
+                            && carrier.pairs_exact_next_sign(next_sign, next_sign_digest)
+                            && if allow_refanned_broadcast {
+                                carrier.matches_current_finalization_record(
+                                    broadcast,
+                                    work.digest,
+                                    coordinator,
+                                )
+                            } else {
+                                carrier.matches_current_ready_record(
+                                    broadcast,
+                                    work.digest,
+                                    coordinator,
+                                )
+                            }
                     )
                 });
                 let next_sign_exact = self.entries.get(&next_sign).is_some_and(|work| {

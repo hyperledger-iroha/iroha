@@ -52,7 +52,7 @@ execution or release receipts.
 
 ## 2026-08-13 mutable-development closure snapshot
 
-- The bound inventory contains exactly 854 production tests across 40 modules,
+- The bound inventory contains exactly 855 production tests across 40 modules,
   including 436 source-sealed ownership/regression names, plus 525 G-UNIT
   tests and 55 grouped Native negative controls. Its source-sealed pre-network
   corridor contains 88 legs. These are source counts, not claims that any suite
@@ -1792,7 +1792,7 @@ The receipt-required
 `merge_share_transport_rejects_omission_nonleader_body_and_legacy_version`
 regression rejects a legacy merge-share version while leaving the signing guard
 unauthorized. It replaced one required release-corridor selector, preserving the
-854-production-test and 525-G-UNIT-test inventory counts; source binding is not
+855-production-test and 525-G-UNIT-test inventory counts; source binding is not
 an execution receipt.
 `KuraReplicaAdvertV1` is explicit and clean-break. Its nested runtime policy
 configures and validates TTL, refresh cadence, evictable window, replica floor,
@@ -1859,7 +1859,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 854 tests across 40 modules, including 436
+inventory contains exactly 855 tests across 40 modules, including 436
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -1894,7 +1894,7 @@ checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
 execution of all 525 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 854 production, 525 G-UNIT,
+candidate Cargo run or full matrix execution: the 855 production, 525 G-UNIT,
 and 55-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
@@ -2109,7 +2109,7 @@ TODOs remain out of scope as recorded below.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 854-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 855-production-test,
   525-G-UNIT-test, and 55-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not

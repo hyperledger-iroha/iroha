@@ -691,6 +691,63 @@ pub(super) struct LifecycleLedgerRecordV1 {
     continuation: PersistedDurableContinuationV1,
 }
 
+/// Move-only all-row finalization successor prepared from one exact frame.
+///
+/// Its fields remain private to the ledger module, so siblings cannot combine
+/// an arbitrary current frame with a caller-built terminal successor before
+/// the exact publication transaction.
+#[must_use = "staged finalization retirement must cross its exact LedgerV1 publication"]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct StagedFinalizationRetirementV1 {
+    current: LifecycleLedgerV1,
+    retired: LifecycleLedgerV1,
+}
+
+/// Move-only proof that the exact all-row finalization successor is durable.
+///
+/// The publication token retains both the pre-fsync and retired frames. Only
+/// its consuming commit may clear the concrete registry and logical
+/// coordinator, so no sibling can name a post-publication tail using raw
+/// caller-supplied ledgers.
+#[must_use = "published finalization retirement must commit its in-memory owners"]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct PublishedFinalizationRetirementV1 {
+    coordinator: LifecycleCoordinator,
+    current: LifecycleLedgerV1,
+    retired: LifecycleLedgerV1,
+}
+
+impl PublishedFinalizationRetirementV1 {
+    fn authenticates_source(&self) -> bool {
+        LifecycleLedgerV1::from_coordinator(&self.coordinator)
+            .is_ok_and(|ledger| ledger == self.current)
+    }
+
+    /// Consume the exact logical and concrete owners after durable publication.
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn consume_owners(
+        self,
+        mut registry: LifecycleWorkRegistryHolder,
+    ) {
+        assert!(self.authenticates_source());
+        assert!(
+            registry
+                .registry_mut()
+                .exactly_covers_finalization_work(&self.coordinator),
+            "published finalization must consume the preflighted concrete census",
+        );
+        assert_eq!(self.current.context(), self.retired.context());
+        assert_eq!(self.current.high_water(), self.retired.high_water());
+        assert_eq!(self.current.records().len(), self.retired.records().len());
+        assert!(self.retired.producer_debts.is_empty());
+        assert!(
+            self.retired
+                .records()
+                .iter()
+                .all(|record| record.terminal().is_some_and(|terminal| terminal.is_some()))
+        );
+        drop(registry);
+        drop(self.coordinator);
+    }
+}
+
 /// One-shot proof that decoded replay data is still enclosed by its exact
 /// opened LedgerV1 row while joining the authenticated body-store frame.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableCertifiedFetchLedgerJoinPermit {
@@ -1629,17 +1686,71 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
 
 /// Opaque running H+1 lifecycle stack joined to its retired-H authority.
 ///
-/// TODO: The generic lifecycle-coordinator replacement must consume this
-/// complete wrapper while arming live clocks, opening authenticated ingress,
-/// activating the completion observer, and publishing typed successor status.
-/// The production restart bridge is deliberately narrower: it consumes the
-/// retired authority after reauthenticating the canonical ledger/status pair
-/// and neither launches nor credits this generic replacement.
+/// Its sole activation method consumes both halves, arms live clocks, activates
+/// the completion observer, and publishes H+1 only through the retained retired
+/// CompleteTip authority. The resulting generic activated owner contains no
+/// predecessor authority and cannot repeat that one-shot publication.
 #[must_use = "the launched CompleteTip successor must remain sealed until final activation"]
 #[allow(dead_code)]
 pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
     launched: super::launch::LaunchedProductionLifecycleV1,
     retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
+}
+
+impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+    /// Temporarily recover canonical bodies without separating retired H from H+1.
+    #[allow(dead_code, clippy::type_complexity, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn with_canonical_body_recovery_ingress<R, E>(
+        &mut self,
+        runner: &mut super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+        activation: &mut super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        operation: impl FnOnce(
+            &super::super::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'_>,
+            &mut super::super::v2_effects::V2EffectExecutor<
+                super::super::v2_runtime::SerializedV2Runtime,
+            >,
+            &mut super::super::v2_worker::ProductionV2Services,
+        ) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<super::launch::ProductionLifecyclePreActivationErrorV1>,
+    {
+        self.launched
+            .with_complete_tip_canonical_body_recovery_ingress(runner, activation, operation)
+    }
+
+    /// Bind recovered local-Proposal ownership before consuming the H/H+1 join.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn initialize_recovered_local_proposal(
+        &mut self,
+        runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+    ) -> Result<
+        (
+            super::super::v2::LocalProposalDirective,
+            super::launch::ProductionLifecyclePreparedLocalProposalStateV1,
+        ),
+        super::launch::ProductionLifecyclePreActivationErrorV1,
+    > {
+        self.launched.initialize_recovered_local_proposal(runner)
+    }
+
+    /// Consume the sealed H/H+1 join into one exact live-height activation.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn activate(
+        self,
+        now: std::time::Instant,
+        runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        local_proposal: super::launch::ProductionLifecyclePreparedLocalProposalStateV1,
+    ) -> Result<
+        super::launch::ActivatedProductionLifecycleV1,
+        super::launch::ProductionLifecycleActivationErrorV1,
+    > {
+        let Self {
+            launched,
+            retirement,
+        } = self;
+        launched.activate_recovered_complete_tip(now, runner, retirement, local_proposal)
+    }
 }
 // COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END
 
@@ -1763,9 +1874,14 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             &terminal.ledger,
             refreshed_serve_payloads,
         )?;
-        let retired = terminal
+        let staged = terminal
             .ledger
-            .stage_complete_tip_all_row_retirement(serve_reconciliation)?;
+            .stage_finalized_height_all_row_retirement(serve_reconciliation)?;
+        let StagedFinalizationRetirementV1 {
+            current: staged_current,
+            retired,
+        } = staged;
+        debug_assert_eq!(staged_current, terminal.ledger);
         if !retired
             .authenticate_complete_tip_terminal_apply(&terminal.complete_tip)
             .is_ok_and(|ordinal| ordinal == terminal.apply_ordinal)

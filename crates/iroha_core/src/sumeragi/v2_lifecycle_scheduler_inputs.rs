@@ -18,8 +18,9 @@ use crate::sumeragi::{
     v2_worker::{
         AuthenticatedLifecycleIoCapacity, LifecycleIoCapacityCaptureFailure,
         LifecycleIoCapacityWait, LifecycleIoCapacityWaitStatus, ProductionV2Services,
-        RecoveredDecisionApplyCapacityCaptureErrorV1, RecoveredDecisionApplyCapacityCaptureV1,
-        RecoveredDecisionFetchExactOutputCaptureV1, RecoveredLifecycleSignBroadcastOutputCaptureV1,
+        RecoveredCompletionCapacityProbeV1, RecoveredDecisionApplyCapacityCaptureErrorV1,
+        RecoveredDecisionApplyCapacityCaptureV1, RecoveredDecisionFetchExactOutputCaptureV1,
+        RecoveredLifecycleSignBroadcastOutputCaptureV1,
         RecoveredLifecycleSignCapacityCaptureErrorV1, RecoveredLifecycleSignCapacityCaptureV1,
     },
 };
@@ -86,6 +87,35 @@ fn authenticated_ready_row(
         recovered_apply_attestation,
         recovered_sign_attestation,
         recovered_fetch_attestation,
+        live_debts,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticated_ready_row_with_physical_capacity(
+    factory: &AuthenticatedSchedulerInputsFactory,
+    record: &super::LifecycleRecord,
+    validate_attestation: Option<AttestedReadyValidateDemand>,
+    recovered_apply_attestation: Option<
+        super::work_registry::ReadyRecoveredDecisionApplyAttestation,
+    >,
+    recovered_sign_attestation: Option<
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+    >,
+    recovered_fetch_attestation: Option<
+        super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
+    >,
+    physical_capacity_available: bool,
+    live_debts: [u64; 6],
+) -> Option<SchedulerReadyInputs> {
+    SchedulerReadyInputs::from_authenticated_with_physical_capacity(
+        factory,
+        record,
+        validate_attestation,
+        recovered_apply_attestation,
+        recovered_sign_attestation,
+        recovered_fetch_attestation,
+        physical_capacity_available,
         live_debts,
     )
 }
@@ -301,6 +331,141 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchDispatchErrorV1 {
     ReservedOwnerMismatch,
 }
 
+/// Result of one all-row recovered Completion capacity transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "the composite recovered Completion dispatch result must be observed"]
+pub(in crate::sumeragi) enum ProductionRecoveredCompletionDispatchV1 {
+    /// No physically available row was claimed; every Ready carrier remains unchanged.
+    CapacityUnavailable,
+    /// The selected recovered Apply now owns one dedicated worker command.
+    ApplyQueued {
+        /// Exact selected lifecycle ordinal.
+        ordinal: u128,
+    },
+    /// The selected recovered Sign now owns one dedicated worker command.
+    SignQueued {
+        /// Exact selected lifecycle ordinal.
+        ordinal: u128,
+    },
+    /// The selected recovered Fetch owns its executor request and exact fanout.
+    FetchDispatched {
+        /// Exact selected lifecycle ordinal.
+        ordinal: u128,
+    },
+}
+
+/// Closed failure while one mixed recovered Completion census is authenticated.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionRecoveredCompletionDispatchErrorV1 {
+    /// The logical owner already latched a fail-closed condition.
+    CoordinatorFaulted(super::CoordinatorFault),
+    /// A prior turn still owns the sole active lease.
+    UnsettledLease(super::LeaseId),
+    /// The launched executor, worker, body store, or output guard is foreign.
+    ForeignServiceOwner,
+    /// Coordinator records and the reverse Ready index disagree.
+    InvalidReadyCensus,
+    /// One Ready row failed its exact closed registry attestation.
+    InvalidCarrier,
+    /// Service signing or the joint physical-corridor census failed.
+    Service(String),
+    /// A Fetch executor owner conflicted with the exact request catalogs.
+    Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
+    /// Planning selected no authenticated physical row or another work class.
+    UnexpectedPlan,
+    /// The selected claimed carrier could not project its exact task.
+    DispatchProjection,
+    /// The selected physical reservation and logical carrier disagreed.
+    ReservedOwnerMismatch,
+}
+
+/// Nonmutating class of Ready work visible to the unified Completion driver.
+///
+/// `PassThrough` covers ordinary/stateful rows. `Invalid` is reserved for a
+/// broken Ready-index bijection or an already faulted owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProductionCompletionReadyWorkV1 {
+    /// No Ready lifecycle record exists.
+    None,
+    /// One complete Apply/Sign/Fetch census must use the joint physical cut.
+    RecoveredIo,
+    /// A recovered Broadcast has a full-census refanout transaction.
+    RecoveredLifecycleBroadcast,
+    /// The ordinary/stateful owner, or a future composite census, must run.
+    PassThrough,
+    /// Coordinator state is not safe to classify without restart.
+    Invalid,
+}
+
+enum AuthenticatedRecoveredCompletionReadyV1 {
+    Apply(super::work_registry::ReadyRecoveredDecisionApplyAttestation),
+    Sign(super::work_registry::ReadyRecoveredLifecycleSignAttestationV1),
+    Fetch(super::work_registry::ReadyRecoveredDecisionFetchAttestationV1),
+}
+
+fn classify_completion_ready_classes(
+    classes: &[LifecycleWorkClass],
+) -> ProductionCompletionReadyWorkV1 {
+    if classes.is_empty() {
+        return ProductionCompletionReadyWorkV1::None;
+    }
+    if classes.iter().any(|class| {
+        matches!(
+            class,
+            LifecycleWorkClass::Store
+                | LifecycleWorkClass::EnterView
+                | LifecycleWorkClass::EquivocationReport
+                | LifecycleWorkClass::InvalidBodyReport
+                | LifecycleWorkClass::CertifiedServe
+                | LifecycleWorkClass::ProducerTurn
+        )
+    }) {
+        return ProductionCompletionReadyWorkV1::PassThrough;
+    }
+    // Broadcast refanout has the existing full-census factory and can
+    // authenticate concurrent Validate, Apply, Sign, and Fetch rows. It is
+    // deliberately chosen before standalone Validate passes through.
+    if classes
+        .iter()
+        .any(|class| *class == LifecycleWorkClass::Broadcast)
+    {
+        return ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast;
+    }
+    if classes
+        .iter()
+        .any(|class| *class == LifecycleWorkClass::Validate)
+    {
+        return ProductionCompletionReadyWorkV1::PassThrough;
+    }
+    if classes.iter().all(|class| {
+        matches!(
+            class,
+            LifecycleWorkClass::Apply
+                | LifecycleWorkClass::SignVote
+                | LifecycleWorkClass::SignProposal
+                | LifecycleWorkClass::SignTimeout
+                | LifecycleWorkClass::Fetch
+        )
+    }) {
+        return ProductionCompletionReadyWorkV1::RecoveredIo;
+    }
+    match classes[0] {
+        LifecycleWorkClass::Apply
+        | LifecycleWorkClass::SignVote
+        | LifecycleWorkClass::SignProposal
+        | LifecycleWorkClass::SignTimeout
+        | LifecycleWorkClass::Fetch => ProductionCompletionReadyWorkV1::RecoveredIo,
+        LifecycleWorkClass::Store
+        | LifecycleWorkClass::Validate
+        | LifecycleWorkClass::Broadcast
+        | LifecycleWorkClass::EnterView
+        | LifecycleWorkClass::EquivocationReport
+        | LifecycleWorkClass::InvalidBodyReport
+        | LifecycleWorkClass::CertifiedServe
+        | LifecycleWorkClass::ProducerTurn => ProductionCompletionReadyWorkV1::PassThrough,
+    }
+}
+
 /// Phase-A outcome for one selected recovered Decision Fetch response.
 #[must_use = "capacity wait or queued durable persistence must remain owner-visible"]
 pub(crate) enum ProductionRecoveredDecisionFetchPersistenceV1 {
@@ -345,6 +510,18 @@ pub(crate) struct PreparedProductionIngressCapacityWait {
     selector: PreparedLifecycleIngressSelector,
 }
 
+/// Consuming classification of one retained production ingress capacity wait.
+#[allow(variant_size_differences)]
+#[must_use = "pending capacity ownership must be reparked or retried exactly once"]
+pub(crate) enum ProductionIngressCapacityRetry {
+    /// No release occurred; the complete wait remains owned.
+    Pending(PreparedProductionIngressCapacityWait),
+    /// A real release occurred and yielded the unchanged prepared selector.
+    Released(PreparedLifecycleIngressSelector),
+    /// The mode or exact service generation changed incompatibly.
+    RestartRequired,
+}
+
 impl PreparedProductionIngressCapacityWait {
     /// Classify the exact retained service generation without exposing it.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -361,6 +538,38 @@ impl PreparedProductionIngressCapacityWait {
             }
             LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
                 ProductionIngressCapacityStatus::RestartRequired
+            }
+        }
+    }
+
+    /// Consume this wait only after checking the exact executor and service.
+    ///
+    /// The retained selector has no getter. A real release is the sole branch
+    /// which yields it for another Phase-A attempt; pending ownership returns
+    /// whole, while terminal/foreign generations require cold recovery.
+    pub(crate) fn retry(
+        self,
+        services: &ProductionV2Services,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+    ) -> ProductionIngressCapacityRetry {
+        if self.mode != executor.lifecycle_mode_rank_snapshot() {
+            return ProductionIngressCapacityRetry::RestartRequired;
+        }
+        match self.wait.status(services) {
+            LifecycleIoCapacityWaitStatus::SamePending => {
+                ProductionIngressCapacityRetry::Pending(self)
+            }
+            LifecycleIoCapacityWaitStatus::Released => {
+                let Self {
+                    mode: _,
+                    wait: _,
+                    selector,
+                } = self;
+                ProductionIngressCapacityRetry::Released(selector)
+            }
+            LifecycleIoCapacityWaitStatus::GenerationExhausted
+            | LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
+                ProductionIngressCapacityRetry::RestartRequired
             }
         }
     }
@@ -584,6 +793,37 @@ fn direct_registry_scheduler_inputs(
 }
 
 impl ProductionLifecycleOwnerV1 {
+    /// Classify Ready work without claiming a lease or reserving capacity.
+    ///
+    /// Broadcast refanout and recovered Apply/Sign/Fetch each authenticate their
+    /// complete supported census. Stateful Serve/Producer and other ordinary
+    /// rows pass through rather than turning legal coexistence into corruption.
+    pub(crate) fn classify_completion_ready_work(&self) -> ProductionCompletionReadyWorkV1 {
+        if self.coordinator.fault.is_some() {
+            return ProductionCompletionReadyWorkV1::Invalid;
+        }
+        if self.coordinator.active_lease.is_some() {
+            return ProductionCompletionReadyWorkV1::PassThrough;
+        }
+        let exact_ready = self
+            .coordinator
+            .records
+            .iter()
+            .filter_map(|(ordinal, record)| {
+                matches!(record.state, LifecycleState::Ready).then_some(*ordinal)
+            })
+            .collect::<BTreeSet<_>>();
+        if exact_ready != self.coordinator.ready_index {
+            return ProductionCompletionReadyWorkV1::Invalid;
+        }
+        let classes = exact_ready
+            .iter()
+            .filter_map(|ordinal| self.coordinator.records.get(ordinal))
+            .map(|record| record.work_class)
+            .collect::<Vec<_>>();
+        classify_completion_ready_classes(&classes)
+    }
+
     /// Plan one turn from the complete directly-owned production Ready census.
     ///
     /// No snapshot or raw rank row leaves the owner. Unsupported carriers fail
@@ -594,6 +834,330 @@ impl ProductionLifecycleOwnerV1 {
     ) -> Result<super::TurnPlan, ProductionSchedulerInputsError> {
         let inputs = direct_registry_scheduler_inputs(&self.coordinator, &self.registry)?;
         Ok(self.coordinator.plan_turn(inputs))
+    }
+
+    /// Authenticate, rank, and dispatch one complete recovered I/O Ready census.
+    ///
+    /// Apply, Sign, and Fetch rows are all attested before the service freezes
+    /// its worker and exact-output corridors. The coordinator sees every row's
+    /// physical availability in one snapshot and claims at most one. No caller
+    /// can probe a wrong class or reobserve capacity after selection.
+    pub(super) fn dispatch_recovered_completion_with_runner_debt(
+        &mut self,
+        services: &ProductionV2Services,
+        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+        runner_debt: u64,
+    ) -> Result<ProductionRecoveredCompletionDispatchV1, ProductionRecoveredCompletionDispatchErrorV1>
+    {
+        if let Some(fault) = self.coordinator.fault {
+            return Err(ProductionRecoveredCompletionDispatchErrorV1::CoordinatorFaulted(fault));
+        }
+        if let Some(lease) = self.coordinator.active_lease.as_ref() {
+            return Err(ProductionRecoveredCompletionDispatchErrorV1::UnsettledLease(lease.id));
+        }
+        let Some(body_store_identity) = self.body_store_identity.as_ref() else {
+            return Err(ProductionRecoveredCompletionDispatchErrorV1::ForeignServiceOwner);
+        };
+        if self.body_store.is_some()
+            || !services.matches_lifecycle_body_store(body_store_identity)
+            || !services.matches_lifecycle_executor_output_guard(executor)
+        {
+            return Err(ProductionRecoveredCompletionDispatchErrorV1::ForeignServiceOwner);
+        }
+        let exact_ready = self.coordinator.ready_index.clone();
+        if exact_ready.is_empty()
+            || self
+                .coordinator
+                .records
+                .iter()
+                .filter_map(|(ordinal, record)| {
+                    matches!(record.state, LifecycleState::Ready).then_some(*ordinal)
+                })
+                .collect::<BTreeSet<_>>()
+                != exact_ready
+        {
+            return Err(ProductionRecoveredCompletionDispatchErrorV1::InvalidReadyCensus);
+        }
+        let mode = executor.lifecycle_mode_rank_snapshot();
+        let context = self.verified.context();
+        if mode.height() != context.height || mode.context_id() != context.id() {
+            return Err(ProductionRecoveredCompletionDispatchErrorV1::ForeignServiceOwner);
+        }
+        let mut authenticated = BTreeMap::new();
+        let mut classes = BTreeMap::new();
+        let mut probes = Vec::with_capacity(exact_ready.len());
+        for ordinal in &exact_ready {
+            let record = self
+                .coordinator
+                .records
+                .get(ordinal)
+                .ok_or(ProductionRecoveredCompletionDispatchErrorV1::InvalidReadyCensus)?;
+            let (ready, probe) = match record.work_class {
+                LifecycleWorkClass::Apply => {
+                    let attestation = self
+                        .registry
+                        .attest_ready_recovered_decision_apply(&self.coordinator, *ordinal)
+                        .map_err(|_| {
+                            ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier
+                        })?;
+                    if attestation.demand() != ReadyRecoveredDecisionApplyDemand::BoundedIo
+                        || !attestation.dispatch_key().matches_height_context(context)
+                    {
+                        return Err(ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier);
+                    }
+                    let key = attestation.dispatch_key();
+                    (
+                        AuthenticatedRecoveredCompletionReadyV1::Apply(attestation),
+                        RecoveredCompletionCapacityProbeV1::Apply {
+                            ordinal: *ordinal,
+                            key,
+                        },
+                    )
+                }
+                LifecycleWorkClass::SignVote
+                | LifecycleWorkClass::SignProposal
+                | LifecycleWorkClass::SignTimeout => {
+                    let attestation = self
+                        .registry
+                        .attest_ready_recovered_lifecycle_sign(&self.coordinator, *ordinal)
+                        .map_err(|_| {
+                            ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier
+                        })?;
+                    if attestation.demand()
+                        != super::work_registry::ReadyRecoveredLifecycleSignDemandV1::BoundedIo
+                        || !attestation.dispatch_key().matches_height_context(context)
+                    {
+                        return Err(ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier);
+                    }
+                    let key = attestation.dispatch_key();
+                    (
+                        AuthenticatedRecoveredCompletionReadyV1::Sign(attestation),
+                        RecoveredCompletionCapacityProbeV1::Sign {
+                            ordinal: *ordinal,
+                            key,
+                        },
+                    )
+                }
+                LifecycleWorkClass::Fetch => {
+                    let mut attestation = self
+                        .registry
+                        .registry_mut()
+                        .attest_ready_recovered_decision_fetch(&self.coordinator, *ordinal)
+                        .map_err(|_| {
+                            ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier
+                        })?;
+                    if attestation.demand()
+                        != super::work_registry::ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor
+                        || !attestation.dispatch_key().matches_height_context(context)
+                    {
+                        return Err(
+                            ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier,
+                        );
+                    }
+                    let dispatch_key = attestation.dispatch_key();
+                    let owner = services
+                        .authenticate_recovered_decision_fetch_request(
+                            attestation.take_request_authority(),
+                        )
+                        .map_err(ProductionRecoveredCompletionDispatchErrorV1::Service)?;
+                    if owner.dispatch_key() != dispatch_key {
+                        return Err(ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier);
+                    }
+                    let executor_available = executor
+                        .recovered_decision_fetch_registration_available(&owner)
+                        .map_err(ProductionRecoveredCompletionDispatchErrorV1::Executor)?;
+                    (
+                        AuthenticatedRecoveredCompletionReadyV1::Fetch(attestation),
+                        RecoveredCompletionCapacityProbeV1::Fetch {
+                            ordinal: *ordinal,
+                            owner,
+                            executor_available,
+                        },
+                    )
+                }
+                LifecycleWorkClass::Store
+                | LifecycleWorkClass::Validate
+                | LifecycleWorkClass::Broadcast
+                | LifecycleWorkClass::EnterView
+                | LifecycleWorkClass::EquivocationReport
+                | LifecycleWorkClass::InvalidBodyReport
+                | LifecycleWorkClass::CertifiedServe
+                | LifecycleWorkClass::ProducerTurn => {
+                    return Err(ProductionRecoveredCompletionDispatchErrorV1::InvalidReadyCensus);
+                }
+            };
+            if authenticated.insert(*ordinal, ready).is_some()
+                || classes.insert(*ordinal, record.work_class).is_some()
+            {
+                return Err(ProductionRecoveredCompletionDispatchErrorV1::InvalidReadyCensus);
+            }
+            probes.push(probe);
+        }
+        let census = services
+            .capture_recovered_completion_capacity_census(probes)
+            .map_err(ProductionRecoveredCompletionDispatchErrorV1::Service)?;
+        let factory = AuthenticatedSchedulerInputsFactory::new();
+        let mut ready_rows = BTreeMap::new();
+        for (ordinal, ready) in authenticated {
+            let record = self
+                .coordinator
+                .records
+                .get(&ordinal)
+                .ok_or(ProductionRecoveredCompletionDispatchErrorV1::InvalidReadyCensus)?;
+            let (physical_available, predecessor_debt) = census
+                .authenticated_capacity(ordinal, &factory)
+                .ok_or(ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier)?;
+            let live_debts = [mode.debt(), predecessor_debt, 0, 0, 0, runner_debt];
+            let row = match ready {
+                AuthenticatedRecoveredCompletionReadyV1::Apply(attestation) => {
+                    authenticated_ready_row_with_physical_capacity(
+                        &factory,
+                        record,
+                        None,
+                        Some(attestation),
+                        None,
+                        None,
+                        physical_available,
+                        live_debts,
+                    )
+                }
+                AuthenticatedRecoveredCompletionReadyV1::Sign(attestation) => {
+                    authenticated_ready_row_with_physical_capacity(
+                        &factory,
+                        record,
+                        None,
+                        None,
+                        Some(attestation),
+                        None,
+                        physical_available,
+                        live_debts,
+                    )
+                }
+                AuthenticatedRecoveredCompletionReadyV1::Fetch(attestation) => {
+                    authenticated_ready_row_with_physical_capacity(
+                        &factory,
+                        record,
+                        None,
+                        None,
+                        None,
+                        Some(attestation),
+                        physical_available,
+                        live_debts,
+                    )
+                }
+            }
+            .ok_or(ProductionRecoveredCompletionDispatchErrorV1::InvalidCarrier)?;
+            if ready_rows.insert(ordinal, row).is_some() {
+                return Err(ProductionRecoveredCompletionDispatchErrorV1::InvalidReadyCensus);
+            }
+        }
+        let inputs = authenticated_scheduler_inputs(factory, BTreeMap::new(), ready_rows);
+        let lease = match self.coordinator.plan_turn(inputs) {
+            super::TurnPlan::Execute(lease) => lease,
+            super::TurnPlan::Waiting(_) | super::TurnPlan::Idle => {
+                census.complete_without_selection();
+                return Ok(ProductionRecoveredCompletionDispatchV1::CapacityUnavailable);
+            }
+            super::TurnPlan::FailClosed(_) => {
+                return Err(ProductionRecoveredCompletionDispatchErrorV1::UnexpectedPlan);
+            }
+        };
+        let ordinal = lease.ordinal();
+        let Some(expected_class) = classes.get(&ordinal).copied() else {
+            return Err(ProductionRecoveredCompletionDispatchErrorV1::UnexpectedPlan);
+        };
+        if lease.work_class() != expected_class {
+            return Err(ProductionRecoveredCompletionDispatchErrorV1::UnexpectedPlan);
+        }
+        match expected_class {
+            LifecycleWorkClass::Apply => {
+                let reservation = census.select_apply(ordinal).map_err(|_| {
+                    ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch
+                })?;
+                let prepared = self
+                    .registry
+                    .prepare_recovered_decision_apply_dispatch(&self.coordinator, &lease)
+                    .map_err(|_| {
+                        ProductionRecoveredCompletionDispatchErrorV1::DispatchProjection
+                    })?;
+                if !reservation.preflight(&prepared) {
+                    return Err(
+                        ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch,
+                    );
+                }
+                reservation.commit(prepared);
+                Ok(ProductionRecoveredCompletionDispatchV1::ApplyQueued { ordinal })
+            }
+            LifecycleWorkClass::SignVote
+            | LifecycleWorkClass::SignProposal
+            | LifecycleWorkClass::SignTimeout => {
+                if !lease
+                    .output_reservation()
+                    .is_some_and(|reservation| reservation.class() == CapacityClass::Consensus)
+                {
+                    return Err(ProductionRecoveredCompletionDispatchErrorV1::UnexpectedPlan);
+                }
+                let reservation = census.select_sign(ordinal).map_err(|_| {
+                    ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch
+                })?;
+                let prepared = self
+                    .registry
+                    .prepare_recovered_lifecycle_sign_dispatch(&self.coordinator, &lease)
+                    .map_err(|_| {
+                        ProductionRecoveredCompletionDispatchErrorV1::DispatchProjection
+                    })?;
+                if !reservation.preflight(&prepared) {
+                    return Err(
+                        ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch,
+                    );
+                }
+                reservation.commit(prepared);
+                Ok(ProductionRecoveredCompletionDispatchV1::SignQueued { ordinal })
+            }
+            LifecycleWorkClass::Fetch => {
+                let (owner, output) = census.select_fetch(ordinal).map_err(|_| {
+                    ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch
+                })?;
+                let registration = executor
+                    .prepare_recovered_decision_fetch_request_registration(owner)
+                    .map_err(ProductionRecoveredCompletionDispatchErrorV1::Executor)?;
+                let dispatch_key = registration.dispatch_key();
+                let prepared = self
+                    .registry
+                    .registry_mut()
+                    .prepare_recovered_decision_fetch_dispatch(
+                        &self.coordinator,
+                        &lease,
+                        dispatch_key,
+                    )
+                    .map_err(|_| {
+                        ProductionRecoveredCompletionDispatchErrorV1::DispatchProjection
+                    })?;
+                if prepared.dispatch_key() != registration.dispatch_key() {
+                    return Err(
+                        ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch,
+                    );
+                }
+                let installed = registration.commit(prepared);
+                if installed != dispatch_key {
+                    return Err(
+                        ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch,
+                    );
+                }
+                output.commit();
+                Ok(ProductionRecoveredCompletionDispatchV1::FetchDispatched { ordinal })
+            }
+            LifecycleWorkClass::Store
+            | LifecycleWorkClass::Validate
+            | LifecycleWorkClass::Broadcast
+            | LifecycleWorkClass::EnterView
+            | LifecycleWorkClass::EquivocationReport
+            | LifecycleWorkClass::InvalidBodyReport
+            | LifecycleWorkClass::CertifiedServe
+            | LifecycleWorkClass::ProducerTurn => {
+                Err(ProductionRecoveredCompletionDispatchErrorV1::UnexpectedPlan)
+            }
+        }
     }
 
     /// Reserve, claim, and queue the sole Ready recovered Decision Apply.
@@ -644,7 +1208,7 @@ impl ProductionLifecycleOwnerV1 {
         self.dispatch_recovered_decision_apply_with_runner_debt(services, executor, runner.debt())
     }
 
-    fn dispatch_recovered_decision_apply_with_runner_debt(
+    pub(super) fn dispatch_recovered_decision_apply_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
         executor: &V2EffectExecutor<SerializedV2Runtime>,
@@ -811,7 +1375,7 @@ impl ProductionLifecycleOwnerV1 {
         self.dispatch_recovered_lifecycle_sign_with_runner_debt(services, executor, runner.debt())
     }
 
-    fn dispatch_recovered_lifecycle_sign_with_runner_debt(
+    pub(super) fn dispatch_recovered_lifecycle_sign_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
         executor: &V2EffectExecutor<SerializedV2Runtime>,
@@ -1014,7 +1578,7 @@ impl ProductionLifecycleOwnerV1 {
         self.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(services, runner.debt())
     }
 
-    fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
+    pub(super) fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
         runner_debt: u64,
@@ -1385,7 +1949,7 @@ impl ProductionLifecycleOwnerV1 {
         self.dispatch_recovered_decision_fetch_with_runner_debt(services, executor, runner.debt())
     }
 
-    fn dispatch_recovered_decision_fetch_with_runner_debt(
+    pub(super) fn dispatch_recovered_decision_fetch_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
@@ -1607,7 +2171,7 @@ impl ProductionLifecycleOwnerV1 {
     }
 
     #[allow(clippy::result_large_err)]
-    fn persist_recovered_decision_fetch_response_after_runner(
+    pub(super) fn persist_recovered_decision_fetch_response_after_runner(
         &mut self,
         services: &ProductionV2Services,
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
@@ -1931,20 +2495,164 @@ impl ProductionLifecycleOwnerV1 {
 }
 
 #[cfg(test)]
+#[allow(dead_code)] // Whole-state equality observes these fields in the fail-closed regression.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RecoveredBroadcastSchedulerStateForTest {
+    records: BTreeMap<u128, super::LifecycleRecord>,
+    key_index: BTreeMap<super::LifecycleKey, u128>,
+    owner_index: BTreeMap<super::CausalRoot, super::OwnerId>,
+    ready_index: BTreeSet<u128>,
+    active_lease: Option<super::TurnLease>,
+    high_water: u128,
+    next_lease: Option<u128>,
+    durable_records: BTreeMap<u128, super::schema::DurableRecordMetadata>,
+    capacity_used: BTreeMap<CapacityClass, usize>,
+    capacity_generation: BTreeMap<CapacityClass, u64>,
+    observed_generation: BTreeMap<super::WaitSource, u64>,
+    producer_debts: BTreeMap<u128, u128>,
+    fault: Option<super::CoordinatorFault>,
+    declares_pair: bool,
+    paired_ordinal: Option<u128>,
+}
+
+#[cfg(test)]
 mod recovered_sign_capacity_tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use super::super::schema::SchedulerEpisode;
-    use super::{AuthenticatedSchedulerInputsFactory, authenticated_ready_row};
+    use super::{
+        AuthenticatedSchedulerInputsFactory, ProductionRecoveredCompletionDispatchV1,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1, ProductionV2Services,
+        authenticated_ready_row,
+    };
     use crate::sumeragi::v2_lifecycle_coordinator::{
         CapacityClass, CausalRoot, LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord,
         LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleState, LifecycleWorkClass,
-        OwnerId, PhysicalSlotId, PredecessorScope, SchedulerEpisodeUniverse,
-        work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        OwnerId, PhysicalSlotId, PredecessorScope, ProductionLifecycleOwnerV1,
+        SchedulerEpisodeUniverse, work_registry::ReadyRecoveredLifecycleSignAttestationV1,
     };
+    use iroha_crypto::{Hash, KeyPair};
+    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 
     fn digest(byte: u8) -> LifecycleDigest {
         LifecycleDigest::new([byte; 32])
+    }
+
+    fn worker_context(keys: &[KeyPair]) -> wire::HeightContext {
+        let roster = keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let context = wire::HeightContext {
+            network_id: crate::sumeragi::synthetic_network_id("v2-worker-test"),
+            protocol_version: wire::PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
+            mode: wire::ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: wire::DualQuorum::from_roster(&roster)
+                .expect("scheduler fixture equal-vote quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
+            execution_policy_hash: Hash::new(b"test execution policy"),
+            da_layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 8,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 32,
+                max_chunk_count: 8,
+            },
+            leader_seed: [0x33; 32],
+        };
+        context.validate().expect("valid scheduler fixture context");
+        context
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn recovered_broadcast_scheduler_fixture() -> (
+        ProductionLifecycleOwnerV1,
+        ProductionV2Services,
+        crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
+        tempfile::TempDir,
+        u128,
+        u128,
+        u128,
+    ) {
+        let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("scheduler fixture validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified scheduler fixture context");
+        let directory = tempfile::TempDir::new().expect("temporary scheduler fixture storage");
+        let (mut owner, broadcast_ordinal, paired_ordinal, unrelated_ordinal) =
+            ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                verified,
+                &keys[0],
+                directory.path(),
+            );
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let planner_io = owner.bind_body_store_to_planner_io_for_test(
+            &mut services,
+            Arc::clone(&output_guard),
+            8,
+        );
+        (
+            owner,
+            services,
+            planner_io,
+            directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        )
+    }
+
+    fn recovered_completion_runtime(
+        verified: crate::sumeragi::v2::VerifiedHeightContext,
+        root: &std::path::Path,
+    ) -> crate::sumeragi::v2_runtime::SerializedV2Runtime {
+        let (adapter, startup) = crate::sumeragi::v2::SumeragiV2Adapter::open(
+            root.join("completion-runtime.wal"),
+            verified,
+            Some(0),
+            crate::sumeragi::v2_core::Generation::new(1),
+            [0xC7; 32],
+            crate::sumeragi::v2::AdapterFingerprints {
+                node: Hash::new(b"recovered completion node"),
+                build: Hash::new(b"recovered completion build"),
+                config: Hash::new(b"recovered completion config"),
+            },
+            crate::sumeragi::v2::DeferredAdmissionOrdinalSource::new(0),
+        )
+        .expect("open recovered Completion runtime");
+        assert!(startup.is_empty());
+        crate::sumeragi::v2_runtime::SerializedV2Runtime::new(
+            adapter,
+            startup,
+            Instant::now(),
+            Duration::from_secs(10),
+            crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+        )
+        .expect("wrap recovered Completion adapter")
+        .0
     }
 
     #[test]
@@ -2009,6 +2717,242 @@ mod recovered_sign_capacity_tests {
             "every recovered signature must reserve its mandatory Broadcast slot before claim"
         );
     }
+
+    #[test]
+    fn composite_recovered_completion_dispatches_one_ranked_sign_and_preserves_the_other() {
+        let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("composite scheduler validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified composite scheduler context");
+        let directory = tempfile::TempDir::new().expect("temporary composite scheduler storage");
+        let runtime = recovered_completion_runtime(verified.clone(), directory.path());
+        let (mut owner, broadcast, paired, unrelated) =
+            ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                verified,
+                &keys[0],
+                directory.path(),
+            );
+        assert!(owner.retire_ready_work_for_completion_test(broadcast));
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let (mut executor, planner_io) = owner.bind_body_store_to_recovered_completion_io_for_test(
+            &mut services,
+            runtime,
+            Arc::clone(&output_guard),
+            2,
+        );
+
+        assert_eq!(
+            owner
+                .dispatch_recovered_completion_with_runner_debt(&services, &mut executor, 0,)
+                .expect("the joint physical census dispatches one exact Sign"),
+            ProductionRecoveredCompletionDispatchV1::SignQueued { ordinal: paired }
+        );
+        let state = owner.recovered_broadcast_scheduler_state_for_test(broadcast);
+        assert!(matches!(
+            state.records[&paired].state,
+            LifecycleState::Claimed(_)
+        ));
+        assert_eq!(state.records[&unrelated].state, LifecycleState::Ready);
+        assert!(state.active_lease.is_some());
+        assert!(state.fault.is_none());
+        assert!(!output_guard.restart_required());
+        planner_io.detach(&mut services);
+    }
+
+    #[test]
+    fn composite_recovered_completion_capacity_unavailable_claims_no_ready_sign() {
+        let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("capacity scheduler validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified capacity scheduler context");
+        let directory = tempfile::TempDir::new().expect("temporary capacity scheduler storage");
+        let runtime = recovered_completion_runtime(verified.clone(), directory.path());
+        let (mut owner, broadcast, paired, unrelated) =
+            ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                verified,
+                &keys[0],
+                directory.path(),
+            );
+        assert!(owner.retire_ready_work_for_completion_test(broadcast));
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let (mut executor, planner_io) = owner.bind_body_store_to_recovered_completion_io_for_test(
+            &mut services,
+            runtime,
+            Arc::clone(&output_guard),
+            1,
+        );
+        planner_io.saturate_consensus_prefix(&services);
+        let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast);
+
+        assert_eq!(
+            owner
+                .dispatch_recovered_completion_with_runner_debt(&services, &mut executor, 0,)
+                .expect("a saturated joint census is a typed unavailable turn"),
+            ProductionRecoveredCompletionDispatchV1::CapacityUnavailable
+        );
+        assert_eq!(
+            owner.recovered_broadcast_scheduler_state_for_test(broadcast),
+            before,
+            "physical unavailability cannot claim or reorder either Ready Sign"
+        );
+        assert_eq!(before.records[&paired].state, LifecycleState::Ready);
+        assert_eq!(before.records[&unrelated].state, LifecycleState::Ready);
+        assert!(!output_guard.restart_required());
+        planner_io.release_all_predecessors();
+        planner_io.detach(&mut services);
+    }
+
+    #[test]
+    fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign() {
+        let (
+            mut owner,
+            services,
+            _planner_io,
+            _directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        ) = recovered_broadcast_scheduler_fixture();
+        let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(before.declares_pair);
+        assert_eq!(before.paired_ordinal, Some(paired_ordinal));
+        assert_eq!(broadcast_ordinal.checked_add(1), Some(paired_ordinal));
+        assert!(before.ready_index.contains(&broadcast_ordinal));
+        assert!(before.ready_index.contains(&paired_ordinal));
+        assert!(before.ready_index.contains(&unrelated_ordinal));
+
+        assert_eq!(
+            owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                .expect("the complete exact pair census refans out"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: broadcast_ordinal,
+            }
+        );
+
+        let after = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(matches!(
+            after.records[&broadcast_ordinal].state,
+            LifecycleState::Waiting(_)
+        ));
+        assert_eq!(after.records[&paired_ordinal].state, LifecycleState::Ready);
+        assert_eq!(
+            after.records[&unrelated_ordinal].state,
+            LifecycleState::Ready
+        );
+        assert!(after.active_lease.is_none());
+        assert!(after.fault.is_none());
+
+        let (
+            mut bounded_owner,
+            bounded_services,
+            _bounded_planner_io,
+            _bounded_directory,
+            bounded_broadcast,
+            _bounded_pair,
+            bounded_unrelated,
+        ) = recovered_broadcast_scheduler_fixture();
+        assert!(bounded_owner.retire_unrelated_sign_for_finalization_test(bounded_unrelated));
+        assert_eq!(
+            bounded_owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
+                    &bounded_services,
+                    0,
+                )
+                .expect("the bounded finalization pair refans out"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: bounded_broadcast,
+            }
+        );
+        assert!(
+            bounded_owner.finalization_registry_census_is_exact_for_test(),
+            "finalization accepts the exact volatile refanout wait beside its Ready next Sign"
+        );
+    }
+
+    #[test]
+    fn recovered_broadcast_refanout_treats_adjacent_unlinked_sign_independently() {
+        let (
+            mut owner,
+            services,
+            _planner_io,
+            _directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        ) = recovered_broadcast_scheduler_fixture();
+        assert_eq!(broadcast_ordinal.checked_add(1), Some(paired_ordinal));
+        assert!(owner.clear_recovered_broadcast_pair_link_for_test(broadcast_ordinal));
+        let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(!before.declares_pair);
+        assert_eq!(before.paired_ordinal, None);
+
+        assert_eq!(
+            owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                .expect("an adjacent unlinked Sign uses ordinary Sign attestation"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: broadcast_ordinal,
+            }
+        );
+        let after = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert_eq!(after.records[&paired_ordinal].state, LifecycleState::Ready);
+        assert_eq!(
+            after.records[&unrelated_ordinal].state,
+            LifecycleState::Ready
+        );
+        assert!(after.active_lease.is_none());
+        assert!(after.fault.is_none());
+    }
+
+    #[test]
+    fn recovered_broadcast_refanout_rejects_corrupt_retained_link_without_mutation() {
+        let (
+            mut owner,
+            services,
+            _planner_io,
+            _directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        ) = recovered_broadcast_scheduler_fixture();
+        assert!(owner.corrupt_recovered_broadcast_pair_link_for_test(broadcast_ordinal));
+        let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(before.declares_pair);
+        assert_eq!(before.paired_ordinal, None);
+        assert!(before.ready_index.contains(&broadcast_ordinal));
+        assert!(before.ready_index.contains(&paired_ordinal));
+        assert!(before.ready_index.contains(&unrelated_ordinal));
+
+        assert_eq!(
+            owner.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0),
+            Err(ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier)
+        );
+        assert_eq!(
+            owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal),
+            before,
+            "a declared but invalid retained link must fail before coordinator mutation"
+        );
+        assert!(owner.retire_unrelated_sign_for_finalization_test(unrelated_ordinal));
+        assert!(
+            !owner.finalization_registry_census_is_exact_for_test(),
+            "finalization must reject the corrupted exact next-Sign link"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2024,6 +2968,245 @@ impl LifecycleCoordinator {
 
 #[cfg(test)]
 impl ProductionLifecycleOwnerV1 {
+    /// Add one closed WAL-backed Sign beside an existing recovered I/O row.
+    pub(in crate::sumeragi) fn add_recovered_next_vote_completion_for_test(
+        &mut self,
+        marker: u8,
+    ) -> u128 {
+        self.registry
+            .add_recovered_next_vote_scheduler_fixture_for_test(
+                &mut self.coordinator,
+                &self.verified,
+                marker,
+            )
+            .expect("install one exact recovered next-Vote Sign fixture")
+    }
+
+    /// Recheck one selected and one preserved row without exposing owner parts.
+    pub(in crate::sumeragi) fn recovered_completion_selection_is_exact_for_test(
+        &self,
+        selected: u128,
+        preserved: u128,
+    ) -> bool {
+        self.coordinator.fault.is_none()
+            && self.coordinator.active_lease.as_ref().is_some_and(|lease| {
+                lease.ordinal() == selected
+                    && self
+                        .coordinator
+                        .records
+                        .get(&selected)
+                        .is_some_and(|record| {
+                            matches!(record.state, LifecycleState::Claimed(id) if id == lease.id())
+                        })
+            })
+            && self
+                .coordinator
+                .records
+                .get(&preserved)
+                .is_some_and(|record| record.state == LifecycleState::Ready)
+            && self.coordinator.ready_index.contains(&preserved)
+            && !self.coordinator.ready_index.contains(&selected)
+    }
+
+    /// Build the opaque recovered Broadcast-pair census used by scheduler tests.
+    ///
+    /// The returned scalars are ordinals only; every WAL, body, signature, and
+    /// concrete-work authority remains owned by the production-shaped owner.
+    fn recovered_broadcast_pair_scheduler_fixture_for_test(
+        verified: crate::sumeragi::v2::VerifiedHeightContext,
+        local_signer: &iroha_crypto::KeyPair,
+        root: &std::path::Path,
+    ) -> (Self, u128, u128, u128) {
+        use super::{CapacityClass, schema::CapacityGeometry};
+
+        let context = super::projection::lifecycle_context(verified.context());
+        let mut coordinator = LifecycleCoordinator::new(
+            context,
+            0,
+            CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 8))),
+        );
+        let (registry, broadcast_ordinal, paired_ordinal, unrelated_ordinal) =
+            LifecycleWorkRegistryHolder::recovered_broadcast_pair_scheduler_fixture_for_test(
+                &mut coordinator,
+                &verified,
+                local_signer,
+            );
+        let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
+            root.join("body"),
+            verified.context().clone(),
+        )
+        .expect("open exact scheduler fixture body store");
+        let (payload_store, recovery) =
+            crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                &root.join("serve"),
+                verified.context(),
+            )
+            .expect("open exact scheduler fixture Serve payload store");
+        let serve_payloads = recovery
+            .authenticate(&verified, local_signer, &body_store)
+            .expect("authenticate empty scheduler fixture Serve payload census");
+        (
+            Self {
+                verified,
+                coordinator,
+                registry,
+                payload_store,
+                serve_payloads,
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: Some(
+                    crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+                ),
+            },
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        )
+    }
+
+    /// Clear the retained link without exposing either closed carrier.
+    fn clear_recovered_broadcast_pair_link_for_test(&mut self, broadcast_ordinal: u128) -> bool {
+        self.registry
+            .clear_recovered_broadcast_pair_link_for_test(&self.coordinator, broadcast_ordinal)
+    }
+
+    /// Corrupt the retained link digest without exposing either closed carrier.
+    fn corrupt_recovered_broadcast_pair_link_for_test(&mut self, broadcast_ordinal: u128) -> bool {
+        self.registry
+            .corrupt_recovered_broadcast_pair_link_for_test(&self.coordinator, broadcast_ordinal)
+    }
+
+    /// Snapshot only copyable/cloneable scheduler state and pair classification.
+    fn recovered_broadcast_scheduler_state_for_test(
+        &self,
+        broadcast_ordinal: u128,
+    ) -> RecoveredBroadcastSchedulerStateForTest {
+        RecoveredBroadcastSchedulerStateForTest {
+            records: self.coordinator.records.clone(),
+            key_index: self.coordinator.key_index.clone(),
+            owner_index: self.coordinator.owner_index.clone(),
+            ready_index: self.coordinator.ready_index.clone(),
+            active_lease: self.coordinator.active_lease.clone(),
+            high_water: self.coordinator.high_water,
+            next_lease: self.coordinator.next_lease,
+            durable_records: self.coordinator.durable_records.clone(),
+            capacity_used: self.coordinator.capacity_used.clone(),
+            capacity_generation: self.coordinator.capacity_generation.clone(),
+            observed_generation: self.coordinator.observed_generation.clone(),
+            producer_debts: self.coordinator.producer_debts.clone(),
+            fault: self.coordinator.fault,
+            declares_pair: self
+                .registry
+                .recovered_lifecycle_signed_broadcast_declares_next_vote(
+                    &self.coordinator,
+                    broadcast_ordinal,
+                ),
+            paired_ordinal: self
+                .registry
+                .recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(
+                    &self.coordinator,
+                    broadcast_ordinal,
+                ),
+        }
+    }
+
+    /// Remove the deliberately unrelated fixture Sign from the bounded owner.
+    fn retire_unrelated_sign_for_finalization_test(&mut self, ordinal: u128) -> bool {
+        self.retire_ready_work_for_completion_test(ordinal)
+    }
+
+    /// Remove one exact Ready carrier and terminalize only its logical row.
+    fn retire_ready_work_for_completion_test(&mut self, ordinal: u128) -> bool {
+        let Some(record) = self.coordinator.records.get(&ordinal) else {
+            return false;
+        };
+        let Some((&slot, _)) = record.physical_slots.first_key_value() else {
+            return false;
+        };
+        let Some(address) =
+            super::work_registry::ConcreteWorkAddress::new(record.owner, ordinal, slot)
+        else {
+            return false;
+        };
+        if !self
+            .registry
+            .registry_for_test_mut()
+            .remove_exact_for_test(address)
+        {
+            return false;
+        }
+        self.coordinator
+            .finish_terminal(ordinal, super::TerminalOutcome::Cancelled)
+            .is_ok()
+    }
+
+    /// Open one clean production executor before moving this owner's body
+    /// store into the matching bounded service worker.
+    pub(in crate::sumeragi) fn bind_body_store_to_recovered_completion_io_for_test(
+        &mut self,
+        services: &mut ProductionV2Services,
+        runtime: crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
+        class_capacity: usize,
+    ) -> (
+        crate::sumeragi::v2_effects::V2EffectExecutor<
+            crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        >,
+        crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
+    ) {
+        let body_store = self
+            .body_store
+            .take()
+            .expect("the startup owner transfers its body store exactly once");
+        let identity = body_store.instance_identity();
+        let context = self.verified.context().clone();
+        let requester = context.roster[0].validator.clone();
+        let (executor, body_store) =
+            crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
+                runtime,
+                body_store,
+                context.clone(),
+                requester,
+                Some(0),
+                std::sync::Arc::clone(&output_guard),
+                crate::sumeragi::v2_effects::EffectQueueConfig::default(),
+            )
+            .expect("open the clean recovered Completion executor");
+        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_test(
+            services,
+            context,
+            output_guard,
+            body_store,
+            identity.clone(),
+            class_capacity,
+        );
+        self.body_store_identity = Some(identity);
+        (executor, fixture)
+    }
+
+    /// Exercise the production all-row Completion transaction without a
+    /// forgeable runner snapshot.
+    pub(in crate::sumeragi) fn dispatch_recovered_completion_for_test(
+        &mut self,
+        services: &ProductionV2Services,
+        executor: &mut crate::sumeragi::v2_effects::V2EffectExecutor<
+            crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        >,
+        runner_debt: u64,
+    ) -> Result<ProductionRecoveredCompletionDispatchV1, ProductionRecoveredCompletionDispatchErrorV1>
+    {
+        self.dispatch_recovered_completion_with_runner_debt(services, executor, runner_debt)
+    }
+
+    /// Recheck the exact finalization-only registry census without exposing it.
+    fn finalization_registry_census_is_exact_for_test(&self) -> bool {
+        self.registry
+            .registry_for_test()
+            .exactly_covers_finalization_work(&self.coordinator)
+    }
+
     /// Build one storage-owning production owner around the exact selected
     /// Fetch carrier used by the cross-module planner transaction regression.
     pub(in crate::sumeragi) fn waiting_fetch_for_ingress_test(
@@ -2152,5 +3335,66 @@ impl ProductionLifecycleOwnerV1 {
             self.coordinator.fault,
             self.coordinator.active_lease.is_some(),
         )
+    }
+}
+
+#[cfg(test)]
+mod unified_completion_classifier_tests {
+    use super::*;
+
+    #[test]
+    fn supported_ready_coexistence_selects_only_a_full_census_transaction() {
+        assert_eq!(
+            classify_completion_ready_classes(&[
+                LifecycleWorkClass::Validate,
+                LifecycleWorkClass::Broadcast,
+                LifecycleWorkClass::SignVote,
+                LifecycleWorkClass::Apply,
+                LifecycleWorkClass::Fetch,
+            ]),
+            ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast
+        );
+        assert_eq!(
+            classify_completion_ready_classes(&[
+                LifecycleWorkClass::Broadcast,
+                LifecycleWorkClass::ProducerTurn,
+            ]),
+            ProductionCompletionReadyWorkV1::PassThrough
+        );
+        assert_eq!(
+            classify_completion_ready_classes(&[
+                LifecycleWorkClass::Broadcast,
+                LifecycleWorkClass::CertifiedServe,
+            ]),
+            ProductionCompletionReadyWorkV1::PassThrough
+        );
+        assert_eq!(
+            classify_completion_ready_classes(&[
+                LifecycleWorkClass::Apply,
+                LifecycleWorkClass::SignProposal,
+                LifecycleWorkClass::Fetch,
+            ]),
+            ProductionCompletionReadyWorkV1::RecoveredIo
+        );
+    }
+
+    #[test]
+    fn exact_single_ready_io_classes_use_the_same_composite_dispatcher() {
+        assert_eq!(
+            classify_completion_ready_classes(&[LifecycleWorkClass::Apply]),
+            ProductionCompletionReadyWorkV1::RecoveredIo
+        );
+        assert_eq!(
+            classify_completion_ready_classes(&[LifecycleWorkClass::SignTimeout]),
+            ProductionCompletionReadyWorkV1::RecoveredIo
+        );
+        assert_eq!(
+            classify_completion_ready_classes(&[LifecycleWorkClass::Fetch]),
+            ProductionCompletionReadyWorkV1::RecoveredIo
+        );
+        assert_eq!(
+            classify_completion_ready_classes(&[]),
+            ProductionCompletionReadyWorkV1::None
+        );
     }
 }

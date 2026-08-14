@@ -451,6 +451,27 @@ impl RecoveredDecisionApplyDispatchKeyV1 {
         }
     }
 
+    /// Build an exact queue key bound to one real fixture height context.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_height_context_test(
+        context: &wire::HeightContext,
+        ordinal: u128,
+        discriminator: u8,
+    ) -> Self {
+        let mut context_id = [0_u8; 32];
+        context_id.copy_from_slice(context.id().0.as_ref());
+        let causal_root =
+            super::CausalRoot::new(LifecycleDigest::new([discriminator.wrapping_add(1); 32]));
+        Self {
+            context: LifecycleDigest::new(context_id),
+            height: context.height,
+            owner: OwnerId::new(causal_root, ordinal),
+            ordinal,
+            slot: PhysicalSlotId::for_capacity(CapacityClass::Effect, 0),
+            digest: LifecycleDigest::new([discriminator.wrapping_add(2); 32]),
+        }
+    }
+
     /// Recheck the exact wire height context owning this queue position.
     pub(in crate::sumeragi) fn matches_height_context(self, context: &wire::HeightContext) -> bool {
         let mut context_id = [0_u8; 32];
@@ -648,6 +669,29 @@ impl RecoveredLifecycleSignDispatchKeyV1 {
         Self {
             context,
             height: 1,
+            owner: OwnerId::new(causal_root, ordinal),
+            ordinal,
+            slot: PhysicalSlotId::for_capacity(CapacityClass::Effect, 0),
+            digest: LifecycleDigest::new([discriminator.wrapping_add(2); 32]),
+            class,
+        }
+    }
+
+    /// Build an exact class-sensitive queue key for one real fixture context.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_height_context_test(
+        context: &wire::HeightContext,
+        ordinal: u128,
+        discriminator: u8,
+        class: RecoveredLifecycleSignClassV1,
+    ) -> Self {
+        let mut context_id = [0_u8; 32];
+        context_id.copy_from_slice(context.id().0.as_ref());
+        let causal_root =
+            super::CausalRoot::new(LifecycleDigest::new([discriminator.wrapping_add(1); 32]));
+        Self {
+            context: LifecycleDigest::new(context_id),
+            height: context.height,
             owner: OwnerId::new(causal_root, ordinal),
             ordinal,
             slot: PhysicalSlotId::for_capacity(CapacityClass::Effect, 0),
@@ -1821,6 +1865,18 @@ impl fmt::Debug for DurableRecoveredLifecycleSignedBroadcastWork {
 }
 
 impl DurableRecoveredLifecycleSignedBroadcastWork {
+    fn pairs_exact_next_sign(
+        &self,
+        next_address: ConcreteWorkAddress,
+        next_digest: LifecycleDigest,
+    ) -> bool {
+        self.paired_next_sign == Some((next_address, next_digest))
+    }
+
+    fn is_unpaired(&self) -> bool {
+        self.paired_next_sign.is_none()
+    }
+
     fn validates_at(
         &self,
         address: ConcreteWorkAddress,
@@ -1853,6 +1909,21 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
     ) -> bool {
         self.validates_at(address, installed_digest)
             && self.broadcast.matches_current_ready_record(
+                coordinator.active_context,
+                address,
+                installed_digest,
+                coordinator,
+            )
+    }
+
+    fn matches_current_finalization_record(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+    ) -> bool {
+        self.validates_at(address, installed_digest)
+            && self.broadcast.matches_current_finalization_record(
                 coordinator.active_context,
                 address,
                 installed_digest,

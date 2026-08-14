@@ -1807,4 +1807,3 @@ def main() -> int:
         f"Sumeragi v2 aggregate release receipt {action}: {args.output}"
     )
     return 0
-

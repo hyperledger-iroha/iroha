@@ -62,7 +62,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
             LaneConfigMetadata {
                 id: LaneId::new(1),
-                dataspace_id: DataSpaceId::new(1),
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "governance".to_owned(),
                 description: Some("Governance & parliament traffic".to_owned()),
                 visibility: LaneVisibility::Restricted,
@@ -75,7 +75,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
             LaneConfigMetadata {
                 id: LaneId::new(2),
-                dataspace_id: DataSpaceId::new(2),
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "zk".to_owned(),
                 description: Some("Zero-knowledge attachments".to_owned()),
                 visibility: LaneVisibility::Restricted,
@@ -90,26 +90,14 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
     )
     .expect("lane catalog");
 
-    let dataspace_catalog = DataSpaceCatalog::new(vec![
-        DataSpaceMetadata {
-            id: DataSpaceId::UNIVERSAL,
-            alias: "universal".to_owned(),
-            description: Some("Single-lane data space".to_owned()),
-            fault_tolerance: 1,
-        },
-        DataSpaceMetadata {
-            id: DataSpaceId::new(1),
-            alias: "governance".to_owned(),
-            description: Some("Governance proposals & manifests".to_owned()),
-            fault_tolerance: 1,
-        },
-        DataSpaceMetadata {
-            id: DataSpaceId::new(2),
-            alias: "zk".to_owned(),
-            description: Some("Zero-knowledge proofs and attachments".to_owned()),
-            fault_tolerance: 1,
-        },
-    ])
+    let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+        id: DataSpaceId::UNIVERSAL,
+        alias: "universal".to_owned(),
+        description: Some(
+            "Shared public data space for core, governance, and zero-knowledge lanes".to_owned(),
+        ),
+        fault_tolerance: 1,
+    }])
     .expect("dataspace catalog");
 
     let policy = LaneRoutingPolicy {
@@ -118,7 +106,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
         rules: vec![
             LaneRoutingRule {
                 lane: LaneId::new(1),
-                dataspace: Some(DataSpaceId::new(1)),
+                dataspace: Some(DataSpaceId::UNIVERSAL),
                 matcher: LaneRoutingMatcher {
                     account: None,
                     instruction: Some("register::domain".to_owned()),
@@ -127,7 +115,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
             LaneRoutingRule {
                 lane: LaneId::new(2),
-                dataspace: Some(DataSpaceId::new(2)),
+                dataspace: Some(DataSpaceId::UNIVERSAL),
                 matcher: LaneRoutingMatcher {
                     account: None,
                     instruction: Some("mint".to_owned()),
@@ -369,11 +357,11 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
 
     let decision = router.route(&governance_tx);
     assert_eq!(decision.lane_id, LaneId::new(1));
-    assert_eq!(decision.dataspace_id, DataSpaceId::new(1));
+    assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
     let decision = router.route(&zk_tx);
     assert_eq!(decision.lane_id, LaneId::new(2));
-    assert_eq!(decision.dataspace_id, DataSpaceId::new(2));
+    assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
     let decision = router.route(&default_tx);
     assert_eq!(decision.lane_id, LaneId::new(0));
@@ -412,7 +400,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     );
     let governance = router.route_with_view(&governance_tx, &state.view());
     assert_eq!(governance.lane_id, LaneId::new(1));
-    assert_eq!(governance.dataspace_id, DataSpaceId::new(1));
+    assert_eq!(governance.dataspace_id, DataSpaceId::UNIVERSAL);
 
     let zk_tx = build_tx(
         network_id,
@@ -431,7 +419,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     );
     let zk = router.route_with_view(&zk_tx, &state.view());
     assert_eq!(zk.lane_id, LaneId::new(2));
-    assert_eq!(zk.dataspace_id, DataSpaceId::new(2));
+    assert_eq!(zk.dataspace_id, DataSpaceId::UNIVERSAL);
 
     let mut lanes_seen = std::collections::BTreeSet::new();
     for idx in 0..512 {

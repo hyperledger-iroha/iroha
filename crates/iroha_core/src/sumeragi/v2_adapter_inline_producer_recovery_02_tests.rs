@@ -2627,6 +2627,10 @@ fn recovered_timeout_signature_preview_is_exact_and_drop_inert() {
         preview.shape(),
         RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast
     );
+    assert_eq!(
+        preview.settlement_family(),
+        Some(RecoveredLifecycleSignAdapterSettlementFamilyV1::Broadcast)
+    );
     assert!(matches!(
         preview.broadcast_effect(),
         AdapterEffect::Broadcast(wire::ConsensusMessageV2 {

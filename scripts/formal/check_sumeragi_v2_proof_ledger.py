@@ -60825,20 +60825,20 @@ fn validate_shared_ownership_geometry(
         ),
     )
     ingress_head = _require_rust_item(
-        runner_path,
-        runner_source,
+        effects_path,
+        effects_source,
         "v2_ingress_head_can_drain",
         errors,
     )
     _require_rust_item_context(
-        runner_path,
+        effects_path,
         ingress_head,
         (),
-        "ingress-owned runner head preflight",
+        "ingress-owned effect-executor head preflight",
         errors,
     )
-    ingress_seam_items["runner::v2_ingress_head_can_drain"] = (
-        runner_path,
+    ingress_seam_items["effects::v2_ingress_head_can_drain"] = (
+        effects_path,
         ingress_head,
     )
     for qualified_name, expected_sha256 in (
@@ -61515,17 +61515,15 @@ if ingress_ownership.as_ref().is_some_and(|ownership| {
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        ingress_seam_items["runner::v2_ingress_head_can_drain"][1],
+        effects_path,
+        ingress_seam_items["effects::v2_ingress_head_can_drain"][1],
         """
 let Some(ingress_ownership) = inbound.ingress_ownership() else {
     return true;
 };
-if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership) {
-    return false;
-}
+executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
 """,
-        "runner preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
+        "effect-executor preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
         errors,
     )
 

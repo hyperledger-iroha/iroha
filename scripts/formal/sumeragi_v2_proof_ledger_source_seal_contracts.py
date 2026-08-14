@@ -2003,13 +2003,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 854
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 855
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "e331947691b76e5b15ca2b34ba31ce3803ea91a80147844612fb554d5cdf8403"
+    "fa97c6705e7673a883e86b76a1fe5b38aabaa3e4aa5aa110f250265ee84dbbad"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "83b41f8c3e9c93b24557455ae5a81971195af09e543375088482cd89c10a5350"
+    "de7b0988003e39b5ec4e4558eeb57f8c8e996911a559d3bd723eddf6d0229f60"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2125,7 +2125,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 46),
+    ("production-v2-adapter", "sumeragi::v2::tests", 47),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
@@ -4276,8 +4276,8 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
     "lane::accept_lane_message_owned": (
         "4c3b13ab1d0821d97604c8f9119ecc27d1c5be5c2a635b228027d35ed3adf96c"
     ),
-    "runner::v2_ingress_head_can_drain": (
-        "d4e61362952b96d782ee41e1c6081a76132086b8e82cf430f8c0003deb8dbe70"
+    "effects::v2_ingress_head_can_drain": (
+        "482af132caf85c043275bb805966af7e5e8fae3553843b574bb07563b49a5de7"
     ),
 }
 

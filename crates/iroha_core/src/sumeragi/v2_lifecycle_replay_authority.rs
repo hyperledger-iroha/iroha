@@ -1855,6 +1855,32 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
             && recovered_next_wal_vote_candidate_shape_is_exact(&self.candidate, context)
     }
 
+    /// Admit this still-opaque projection into a focused scheduler fixture.
+    ///
+    /// The helper returns only the allocated owner coordinates; the candidate,
+    /// effect, pending binding, WAL identity, and body receipt remain sealed.
+    #[cfg(test)]
+    pub(super) fn admit_into_scheduler_fixture(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &mut super::LifecycleCoordinator,
+    ) -> Option<(OwnerId, u128)> {
+        if !self.is_exact(verified)
+            || coordinator.active_context
+                != super::projection::lifecycle_context(verified.context())
+        {
+            return None;
+        }
+        match coordinator.admit(super::AdmissionRequest::Candidate(self.candidate.clone())) {
+            super::AdmissionDecision::Admitted {
+                owner,
+                ordinal,
+                producer_turn_ordinal: None,
+            } => Some((owner, ordinal)),
+            _ => None,
+        }
+    }
+
     /// Clone the exact next Sign only for the WAL module's cold-adapter seal.
     ///
     /// The move-only WAL permit prevents this comparison projection from

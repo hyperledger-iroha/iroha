@@ -539,6 +539,12 @@ fn armed_recovered_proposal_output_reservation_fails_stop_on_drop() {
     let identity = V2BodyStore::open(directory.path(), service.context.clone())
         .expect("open armed Proposal output store")
         .instance_identity();
+    let wal_append = RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+        dispatch_key,
+        body_store_identity: identity.clone(),
+        output_guard: Arc::clone(&service.output_guard),
+        attempted: false,
+    };
     let authority =
         super::super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::for_test(
             &service.context,
@@ -562,6 +568,7 @@ fn armed_recovered_proposal_output_reservation_fails_stop_on_drop() {
         pending: Some(pending),
         batch: None,
         authority: Some(authority),
+        wal_append,
     });
     assert!(
         service.output_guard.restart_required(),

@@ -488,6 +488,25 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         )
     };
     let unlocked = directive(None, None);
+    let recovered =
+        super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(tag, round, subject);
+    assert!(recovered.exactly_matches_directive(unlocked));
+    assert_eq!(
+        LocalProposalState::from_recovered_lifecycle_attempt(true, unlocked).attempted,
+        Some(LocalProposalOwner::from(unlocked))
+    );
+    assert!(
+        LocalProposalState::from_recovered_lifecycle_attempt(false, unlocked)
+            .attempted
+            .is_none()
+    );
+    let mut setup = ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+    assert!(setup.bind_recovered_local_proposal(unlocked));
+    assert!(
+        !setup.bind_recovered_local_proposal(unlocked),
+        "a second bind must reject the already-owned runner state"
+    );
+    assert!(setup.already_attempted(unlocked));
     assert_eq!(
         LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,
         Some(LocalProposalOwner::from(unlocked))
@@ -501,6 +520,7 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
     );
 
     let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
+    assert!(!recovered.exactly_matches_directive(foreign_lock));
     assert!(
         LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
             .attempted
@@ -520,6 +540,7 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
     );
 
     let decided = directive(Some(subject), Some(subject));
+    assert!(!recovered.exactly_matches_directive(decided));
     assert!(
         LocalProposalState::from_replayed_proposal(Some(replayed), decided)
             .attempted
@@ -663,6 +684,61 @@ fn finalized_rollover_closes_ingress_before_successor_replay() {
         ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
         Err(FairV2IngressPushError::Closed(_))
     ));
+}
+
+#[test]
+fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
+    let _status_guard = super::super::status::rbc_status_test_guard();
+    super::super::status::clear_v2_status();
+    let configured_ingress = || {
+        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure preactivation recovery ingress");
+        ingress
+    };
+
+    let ready = Arc::new(AtomicBool::new(false));
+    let ingress = configured_ingress();
+    let mut activation = ProductionLifecycleRunnerActivationV1::current_height_for_test(
+        Arc::clone(&ready),
+        Arc::clone(&ingress),
+    );
+    let aperture = activation
+        .open_canonical_recovery_ingress(&ingress)
+        .expect("borrow exact ordinary activation ingress");
+    assert!(ready.load(Ordering::Acquire));
+    assert!(ingress.state.lock().open);
+    assert!(std::ptr::eq(aperture.ingress(), ingress.as_ref()));
+    assert!(aperture.close_and_verify());
+    assert!(!ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+    assert!(super::super::status::v2_status().is_none());
+
+    let complete_tip_ready = Arc::new(AtomicBool::new(false));
+    let complete_tip_ingress = configured_ingress();
+    let mut complete_tip = ProductionLifecycleCompleteTipRunnerActivationV1::for_test(
+        Arc::clone(&complete_tip_ready),
+        Arc::clone(&complete_tip_ingress),
+    );
+    {
+        let aperture = complete_tip
+            .open_canonical_recovery_ingress(&complete_tip_ingress)
+            .expect("borrow exact CompleteTip activation ingress");
+        assert!(complete_tip_ready.load(Ordering::Acquire));
+        assert!(aperture.ingress().state.lock().open);
+    }
+    assert!(!complete_tip_ready.load(Ordering::Acquire));
+    assert!(!complete_tip_ingress.state.lock().open);
+    assert!(super::super::status::v2_status().is_none());
+
+    let foreign = configured_ingress();
+    assert!(matches!(
+        activation.open_canonical_recovery_ingress(&foreign),
+        Err(V2RunnerError::LifecycleActivationIngressMismatch)
+    ));
+    assert!(!ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
 }
 
 #[test]
@@ -959,6 +1035,55 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert_eq!(published.last_committed_height + 1, published.height);
         close_ingress_for_rollover(&exact_ready, &exact_ingress);
         super::super::status::clear_v2_status();
+
+        let (_kura, _predecessor_root, typed_context, retirement) =
+            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+        let typed_ready = Arc::new(AtomicBool::new(false));
+        let typed_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+        typed_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure typed CompleteTip activation ingress");
+        let typed_activation = ProductionLifecycleCompleteTipRunnerActivationV1::for_test(
+            Arc::clone(&typed_ready),
+            Arc::clone(&typed_ingress),
+        );
+        let activated = typed_activation
+            .open_and_publish(&typed_ingress, retirement, successor_status(&typed_context))
+            .expect("typed CompleteTip activation retains retirement through publication");
+        assert!(typed_ready.load(Ordering::Acquire));
+        assert_eq!(
+            super::super::status::v2_status()
+                .expect("typed CompleteTip activation publishes H+1")
+                .height_context_id,
+            typed_context.id()
+        );
+        drop(activated);
+        assert!(!typed_ready.load(Ordering::Acquire));
+        assert!(!typed_ingress.state.lock().open);
+        super::super::status::clear_v2_status();
+
+        let (_kura, _predecessor_root, invalid_context, retirement) =
+            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+        let invalid_ready = Arc::new(AtomicBool::new(true));
+        let invalid_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+        invalid_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure invalid CompleteTip activation ingress");
+        invalid_ingress
+            .open()
+            .expect("open stale CompleteTip activation ingress");
+        let invalid_activation = ProductionLifecycleCompleteTipRunnerActivationV1::for_test(
+            Arc::clone(&invalid_ready),
+            Arc::clone(&invalid_ingress),
+        );
+        let mut invalid_status = successor_status(&invalid_context);
+        invalid_status.last_committed_height = invalid_status.height;
+        assert!(matches!(
+            invalid_activation.open_and_publish(&invalid_ingress, retirement, invalid_status),
+            Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid { .. })
+        ));
+        assert!(!invalid_ready.load(Ordering::Acquire));
+        assert!(!invalid_ingress.state.lock().open);
 
         let (drift_kura, _predecessor_root, drift_context, retirement) =
             super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();

@@ -7,7 +7,6 @@ sha256_file() {
     'from pathlib import Path; import hashlib, sys; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
     "$1"
 }
-
 canonical_executable() {
   local executable
   executable="$(command -v "$1")" || return 1
@@ -474,4 +473,3 @@ require_g_unit_log_results() {
     fi
   done
 }
-

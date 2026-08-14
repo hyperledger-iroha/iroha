@@ -4474,6 +4474,33 @@ enum FairV2IngressQueueGateVerdict {
     Dependency,
 }
 
+fn select_fair_v2_ingress_candidate<T>(
+    candidates: &[Vec<T>],
+    projection: impl Fn(&T) -> (u64, FairV2IngressQueueGateVerdict, bool),
+    mut predicate: impl FnMut(&T) -> bool,
+) -> Option<(usize, u64, FairV2IngressDequeueDisposition)> {
+    for dependency_pass in [false, true] {
+        for (source_index, source_candidates) in candidates.iter().enumerate() {
+            for candidate in source_candidates {
+                let (ordinal, gate, obsolete) = projection(candidate);
+                let dependency = gate == FairV2IngressQueueGateVerdict::Dependency;
+                if gate == FairV2IngressQueueGateVerdict::Blocked || dependency != dependency_pass {
+                    continue;
+                }
+                if obsolete || predicate(candidate) {
+                    let disposition = if obsolete {
+                        FairV2IngressDequeueDisposition::RetireObsolete
+                    } else {
+                        FairV2IngressDequeueDisposition::Admit
+                    };
+                    return Some((source_index, ordinal, disposition));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn fair_v2_ingress_queue_gate_verdict(
     source: &FairV2IngressSource,
     lane: &FairV2IngressLane,
@@ -7173,29 +7200,24 @@ impl FairV2Ingress {
                         .get(source)
                         .into_iter()
                         .flat_map(|lane| {
-                            lane.entries
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(index, entry)| {
-                                    let verdict = fair_v2_ingress_queue_gate_verdict(
-                                        source,
-                                        lane,
-                                        index,
-                                        &serve_projection,
-                                        &leader_wire_projection,
-                                        barrier_bypass,
-                                    );
-                                    (verdict != FairV2IngressQueueGateVerdict::Blocked).then(|| {
-                                        (
-                                            entry.admission_ordinal,
-                                            Arc::clone(&entry.inbound),
-                                            verdict == FairV2IngressQueueGateVerdict::Dependency,
-                                            entry.leader_wire_token.as_ref().is_some_and(|token| {
-                                                obsolete_leader_wire_tokens.contains(token)
-                                            }),
-                                        )
-                                    })
-                                })
+                            lane.entries.iter().enumerate().map(|(index, entry)| {
+                                let verdict = fair_v2_ingress_queue_gate_verdict(
+                                    source,
+                                    lane,
+                                    index,
+                                    &serve_projection,
+                                    &leader_wire_projection,
+                                    barrier_bypass,
+                                );
+                                (
+                                    entry.admission_ordinal,
+                                    Arc::clone(&entry.inbound),
+                                    verdict,
+                                    entry.leader_wire_token.as_ref().is_some_and(|token| {
+                                        obsolete_leader_wire_tokens.contains(token)
+                                    }),
+                                )
+                            })
                         })
                         .collect::<Vec<_>>()
                 })
@@ -7203,43 +7225,14 @@ impl FairV2Ingress {
             (ready_sources, candidates)
         };
 
-        let mut selected = None;
         // Preserve the durable physical prefix whenever its selected owner is
         // currently admissible. Only after downstream admission rejects that
         // entire strict set may a dependency cross the control barrier.
-        'sources: for (source_index, source_candidates) in candidates.iter().enumerate() {
-            for (admission_ordinal, inbound, dependency_bypass, obsolete) in source_candidates {
-                if !dependency_bypass && (*obsolete || predicate(inbound.as_ref())) {
-                    let disposition = if *obsolete {
-                        FairV2IngressDequeueDisposition::RetireObsolete
-                    } else {
-                        FairV2IngressDequeueDisposition::Admit
-                    };
-                    selected = Some((source_index, *admission_ordinal, disposition));
-                    break 'sources;
-                }
-            }
-        }
-        if selected.is_none() {
-            // Retained body-dependent control can depend on a matching
-            // Proposal or the exact selected Serve request which produces its
-            // missing body, and reducer control can depend on bounded body
-            // completion. No dependency replaces the durable owner; it only
-            // makes that owner admissible on a later turn.
-            'bypass: for (source_index, source_candidates) in candidates.iter().enumerate() {
-                for (admission_ordinal, inbound, dependency_bypass, obsolete) in source_candidates {
-                    if *dependency_bypass && (*obsolete || predicate(inbound.as_ref())) {
-                        let disposition = if *obsolete {
-                            FairV2IngressDequeueDisposition::RetireObsolete
-                        } else {
-                            FairV2IngressDequeueDisposition::Admit
-                        };
-                        selected = Some((source_index, *admission_ordinal, disposition));
-                        break 'bypass;
-                    }
-                }
-            }
-        }
+        let selected = select_fair_v2_ingress_candidate(
+            &candidates,
+            |(admission_ordinal, _, gate, obsolete)| (*admission_ordinal, *gate, *obsolete),
+            |(_, inbound, _, _)| predicate(inbound.as_ref()),
+        );
         let Some((selected_source_index, admission_ordinal, disposition)) = selected else {
             return Ok(None);
         };

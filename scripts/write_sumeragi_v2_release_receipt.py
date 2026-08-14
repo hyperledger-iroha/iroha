@@ -68,7 +68,7 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "f75a5f2df901408d028605ab11b09f01a77853ecd27deb10a6cdfbd08dda5bed"
+        "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
     ),
 }
 
@@ -194,7 +194,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "34588c61f99e0818bf55a5c1ffe5f8355b56ec88d3dd6b596e986743ba0e675a"
+    "4b0f75ff5a6c7ecead59482a1394f5bab5d43d8964719d165411c0781a4b7c32"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -248,7 +248,7 @@ _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
         "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "f75a5f2df901408d028605ab11b09f01a77853ecd27deb10a6cdfbd08dda5bed"
+        "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
@@ -503,7 +503,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 854
+_PRODUCTION_TEST_COUNT = 855
 _G_UNIT_TEST_COUNT = 525
 _G_UNIT_GROUPS = (
     (
@@ -611,7 +611,7 @@ _PRODUCTION_MODULES = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 46),
+    ("production-v2-adapter", "sumeragi::v2::tests", 47),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),

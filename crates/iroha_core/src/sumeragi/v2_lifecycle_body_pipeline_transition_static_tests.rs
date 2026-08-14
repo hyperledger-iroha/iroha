@@ -4,7 +4,6 @@ fn digest_from_hash(hash: &iroha_crypto::Hash) -> super::LifecycleDigest {
     bytes.copy_from_slice(hash.as_ref());
     super::LifecycleDigest::new(bytes)
 }
-
 #[cfg(test)]
 mod static_tests {
     use super::super::{LifecycleDigest, LifecycleKey, LifecycleRound, LifecycleStage};

@@ -23,6 +23,19 @@ to an opened Kura root, which remains a runner-cutover obligation. Non-Unix
 basic WAL I/O keeps its legacy path implementation, while adjacent-store
 authority minting fails closed until a handle-relative implementation exists.
 
+The same production source guard seals the pre-cutover lifecycle activation
+type state. It requires one fail-stop interval to order live clocks, status
+projection, completion-observer installation, exact ingress opening, typed
+status publication, and readiness release. The CompleteTip branch consumes its
+retained retired-predecessor authority at that boundary, while the generic
+activated owner remains accessible only through a private runner borrow key.
+The guarded source mapping now also covers the consuming finalization chain:
+joint ingress retirement, exact executor/Kura finality, adapter-WAL retirement,
+the existing durable output handoff, refreshed live Serve census, opaque
+all-row LedgerV1 publication, coordinator/registry consumption, and the sole
+cleanup-ready shutdown permit. This is a source-refinement contract;
+`run_inner` has not switched to the new owner or minted these type states.
+
 Revision 4 deterministically rotates a height-seeded roster permutation. Set A
 contains the first `q` members, with the leader first and proxy tail last; Set B
 contains the remaining `f`. The leader sends the proposal manifest
@@ -1359,7 +1372,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 854 named tests
+Before network startup, the executable wrapper inventories 855 named tests
 across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1479,7 +1492,7 @@ across 41 modules. The production-adapter activation guard and two deferred-
 canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
 brings the current
-inventory to 854 tests across 40 modules.
+inventory to 855 tests across 40 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 88 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1554,7 +1567,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`e331947691b76e5b15ca2b34ba31ce3803ea91a80147844612fb554d5cdf8403`.
+`fa97c6705e7673a883e86b76a1fe5b38aabaa3e4aa5aa110f250265ee84dbbad`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1679,13 +1692,19 @@ this ordering and its mutation regressions. For the already-WAL-ahead recovered
 Proposal shape, that reservation now spans the exact two-child LedgerV1 fsync;
 the post-fsync tail installs Broadcast plus the independent next Sign, parks
 only Broadcast process-locally, acknowledges the worker, and commits the batch.
-The source guard also binds a frame-exact Proposal-to-Prepare or
-Prepare-to-Commit classifier and an affine cold reducer replay which must
-reproduce both children. Source machinery for the complete two-carrier census
-splice and Proposal chunk reconstruction exists, but production runner
-settlement and refanout do not yet invoke it, so the cold Proposal path remains
-unreachable. The deductive model is unchanged; this source-fidelity boundary
-promotes no theorem, proof-ledger row, or evidence gate.
+The initial `ProposalPrepareWal` path now acquires that reservation first,
+preflights and fsyncs the exact PrepareIntent, authenticates its resulting
+Prepare Sign against the retained body, and then enters the same two-child
+Ledger publication. The source guard also binds a frame-exact
+Proposal-to-Prepare or Prepare-to-Commit classifier and an affine cold reducer
+replay which must reproduce both children. Both cold branches splice the exact
+pair into the complete census; Proposal recovery reconstructs its chunks from
+the same body-store owner. The unified lifecycle Completion-turn driver
+classifies both recovered Proposal settlement shapes, but the live production
+runner does not yet invoke that driver, so the cold Proposal path remains
+unreachable from the production loop. The deductive model is unchanged; this
+source-fidelity boundary promotes no theorem, proof-ledger row, or evidence
+gate.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence
@@ -1746,7 +1765,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
-854-test inventory, the pinned harness lock and resolved toolchain, the formal
+855-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber

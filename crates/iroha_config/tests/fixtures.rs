@@ -709,17 +709,27 @@ fn nexus_profile_template_enables_multilane_defaults() {
     assert_eq!(config.nexus.lane_catalog.lane_count().get(), 3);
     assert_eq!(
         config.nexus.dataspace_catalog.entries().len(),
-        3,
-        "profile should ship dataspace catalog entries for each lane"
+        1,
+        "logical lanes sharing one validator topology must not become dataspaces"
     );
-    let lane_aliases: Vec<_> = config
+    let lane_bindings: Vec<_> = config
         .nexus
         .lane_catalog
         .lanes()
         .iter()
-        .map(|lane| lane.alias.as_str())
+        .map(|lane| (lane.alias.as_str(), lane.dataspace_id))
         .collect();
-    assert_eq!(lane_aliases, ["core", "governance", "zk"]);
+    assert_eq!(
+        lane_bindings,
+        [
+            ("core", iroha_data_model::nexus::DataSpaceId::UNIVERSAL,),
+            (
+                "governance",
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            ),
+            ("zk", iroha_data_model::nexus::DataSpaceId::UNIVERSAL),
+        ]
+    );
     let dataspace_aliases: Vec<_> = config
         .nexus
         .dataspace_catalog
@@ -727,8 +737,13 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .iter()
         .map(|entry| entry.alias.as_str())
         .collect();
-    assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
+    assert_eq!(dataspace_aliases, ["universal"]);
     assert_eq!(config.nexus.routing_policy.rules.len(), 2);
+    assert!(
+        config.nexus.routing_policy.rules.iter().all(|rule| {
+            rule.dataspace == Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
+        })
+    );
     assert!(
         !config.nexus.lane_relay_emergency.enabled,
         "Nexus profile must leave lane relay emergency overrides disabled by default"
@@ -738,6 +753,90 @@ fn nexus_profile_template_enables_multilane_defaults() {
         3
     );
     assert_eq!(config.nexus.lane_relay_emergency.multisig_members.get(), 5);
+}
+
+#[test]
+fn minamoto_mainnet_profile_keeps_logical_lanes_in_universal() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .join("configs/soranexus/nexus/config.toml");
+
+    let raw = fs::read_to_string(&config_path).expect("Minamoto mainnet config should exist");
+    let doc: TomlValue = toml::from_str(&raw).expect("Minamoto config should be valid TOML");
+    let nexus = doc
+        .get("nexus")
+        .and_then(TomlValue::as_table)
+        .expect("Minamoto nexus topology should be configured");
+
+    assert_eq!(
+        nexus.get("lane_count").and_then(TomlValue::as_integer),
+        Some(3)
+    );
+    let lane_bindings: Vec<_> = nexus
+        .get("lane_catalog")
+        .and_then(TomlValue::as_array)
+        .expect("Minamoto lane catalog should be configured")
+        .iter()
+        .map(|lane| {
+            (
+                lane.get("alias")
+                    .and_then(TomlValue::as_str)
+                    .expect("every Minamoto lane should have an alias"),
+                lane.get("dataspace")
+                    .and_then(TomlValue::as_str)
+                    .expect("every Minamoto lane should bind to a dataspace"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        lane_bindings,
+        [
+            ("core", "universal"),
+            ("governance", "universal"),
+            ("zk", "universal"),
+        ],
+        "logical governance and zk lanes must share the mainnet server topology"
+    );
+
+    let dataspace_aliases: Vec<_> = nexus
+        .get("dataspace_catalog")
+        .and_then(TomlValue::as_array)
+        .expect("Minamoto dataspace catalog should be configured")
+        .iter()
+        .map(|entry| {
+            entry
+                .get("alias")
+                .and_then(TomlValue::as_str)
+                .expect("every Minamoto dataspace should have an alias")
+        })
+        .collect();
+    assert_eq!(
+        dataspace_aliases,
+        ["universal"],
+        "governance and zk are lane names, not physical dataspaces"
+    );
+
+    let route_bindings: Vec<_> = nexus
+        .get("routing_policy")
+        .and_then(TomlValue::as_table)
+        .and_then(|policy| policy.get("rules"))
+        .and_then(TomlValue::as_array)
+        .expect("Minamoto routing rules should be configured")
+        .iter()
+        .map(|rule| {
+            (
+                rule.get("lane")
+                    .and_then(TomlValue::as_integer)
+                    .expect("every Minamoto route should select a lane"),
+                rule.get("dataspace")
+                    .and_then(TomlValue::as_str)
+                    .expect("every Minamoto route should select a dataspace"),
+            )
+        })
+        .collect();
+    assert_eq!(route_bindings, [(1, "universal"), (2, "universal")]);
 }
 
 #[test]
@@ -1629,6 +1728,20 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(|nexus| nexus.get("dataspace_catalog"))
         .and_then(TomlValue::as_array)
         .expect("nexus.dataspace_catalog should be configured");
+    let dataspace_aliases: Vec<_> = dataspaces
+        .iter()
+        .map(|entry| {
+            entry
+                .get("alias")
+                .and_then(TomlValue::as_str)
+                .expect("every Taira dataspace should have an alias")
+        })
+        .collect();
+    assert_eq!(
+        dataspace_aliases,
+        ["universal", "dpn", "is", "is2", "cbsi"],
+        "only physically distinct validator/storage topologies belong in the dataspace catalog"
+    );
     let external_dataspace = dataspaces
         .iter()
         .find(|entry| {
@@ -1664,36 +1777,38 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .expect("nexus should be configured");
     assert_eq!(
         nexus.get("lane_count").and_then(TomlValue::as_integer),
-        Some(5),
-        "Taira profile should reserve routes for both BOI dataspaces"
+        Some(7),
+        "Taira profile should reserve one logical lane for every configured workload"
     );
     let lanes = nexus
         .get("lane_catalog")
         .and_then(TomlValue::as_array)
         .expect("nexus.lane_catalog should be configured");
-    assert!(
-        lanes.iter().any(|lane| {
-            lane.get("alias")
-                .and_then(TomlValue::as_str)
-                .is_some_and(|alias| alias == "external-poc")
-                && lane
-                    .get("dataspace")
+    let lane_bindings: Vec<_> = lanes
+        .iter()
+        .map(|lane| {
+            (
+                lane.get("alias")
                     .and_then(TomlValue::as_str)
-                    .is_some_and(|dataspace| dataspace == "is")
-        }),
-        "Taira profile should bind the external `is` dataspace to its routing container"
-    );
-    assert!(
-        lanes.iter().any(|lane| {
-            lane.get("alias")
-                .and_then(TomlValue::as_str)
-                .is_some_and(|alias| alias == "boi-mobile")
-                && lane
-                    .get("dataspace")
+                    .expect("every Taira lane should have an alias"),
+                lane.get("dataspace")
                     .and_then(TomlValue::as_str)
-                    .is_some_and(|dataspace| dataspace == "is2")
-        }),
-        "Taira profile should bind the mobile dataspace to its dedicated route"
+                    .expect("every Taira lane should bind to a dataspace"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        lane_bindings,
+        [
+            ("core", "universal"),
+            ("governance", "universal"),
+            ("zk", "universal"),
+            ("dpn", "dpn"),
+            ("external-poc", "is"),
+            ("boi-mobile", "is2"),
+            ("cbsi", "cbsi"),
+        ],
+        "logical lanes must bind to physical dataspaces without conflating the two catalogs"
     );
     let routing_rules = nexus
         .get("routing_policy")
@@ -1701,10 +1816,10 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(|policy| policy.get("rules"))
         .and_then(TomlValue::as_array)
         .expect("nexus.routing_policy.rules should be configured");
-    let has_is_instruction_route = |instruction: &str| {
+    let has_instruction_route = |instruction: &str, lane: i64, dataspace: &str| {
         routing_rules.iter().any(|rule| {
-            rule.get("lane").and_then(TomlValue::as_integer) == Some(3)
-                && rule.get("dataspace").and_then(TomlValue::as_str) == Some("is")
+            rule.get("lane").and_then(TomlValue::as_integer) == Some(lane)
+                && rule.get("dataspace").and_then(TomlValue::as_str) == Some(dataspace)
                 && rule
                     .get("matcher")
                     .and_then(TomlValue::as_table)
@@ -1714,12 +1829,22 @@ fn taira_config_enables_untrusted_cid_hosting() {
         })
     };
     assert!(
-        has_is_instruction_route("smartcontract::deploy"),
-        "Taira profile should route smartcontract::deploy to the external `is` dataspace routing container"
+        has_instruction_route("governance", 1, "universal"),
+        "Taira should route governance instructions to its lane within universal"
+    );
+    assert!(
+        has_instruction_route("smartcontract::deploy", 2, "universal"),
+        "Taira should route smart-contract deployments to its zk lane within universal"
     );
     for retired in ["shield", "zk::zk_transfer", "unshield"] {
         assert!(
-            !has_is_instruction_route(retired),
+            !routing_rules.iter().any(|rule| {
+                rule.get("matcher")
+                    .and_then(TomlValue::as_table)
+                    .and_then(|matcher| matcher.get("instruction"))
+                    .and_then(TomlValue::as_str)
+                    == Some(retired)
+            }),
             "Taira profile must not retain retired generic confidential route {retired}"
         );
     }

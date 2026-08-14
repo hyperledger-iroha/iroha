@@ -121,7 +121,7 @@ _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
         "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "f75a5f2df901408d028605ab11b09f01a77853ecd27deb10a6cdfbd08dda5bed"
+        "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {

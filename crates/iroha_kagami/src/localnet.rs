@@ -1761,33 +1761,17 @@ fn localnet_dataspace_catalog(
     use toml::{Table, Value};
 
     let fault_tolerance = i64::from(fault_tolerance);
-    let governance_description = if matches!(
-        sora_profile,
-        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
-    ) {
-        "Governance proposals and manifests"
-    } else {
-        "Governance proposals & manifests"
-    };
-    let mut catalog = Vec::new();
-    for (alias, id, description) in [
-        ("universal", 0_i64, "Single-lane data space"),
-        ("governance", 1_i64, governance_description),
-        ("zk", 2_i64, "Zero-knowledge proofs and attachments"),
-    ] {
-        let mut entry = Table::new();
-        entry.insert("alias".into(), Value::String(alias.to_owned()));
-        entry.insert("id".into(), Value::Integer(id));
-        if alias != "universal" {
-            entry.insert(
-                "manifest_hash".into(),
-                Value::String(localnet_dataspace_manifest_hash(id)),
-            );
-        }
-        entry.insert("description".into(), Value::String(description.to_owned()));
-        entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
-        catalog.push(Value::Table(entry));
-    }
+    let mut universal = Table::new();
+    universal.insert("alias".into(), Value::String("universal".to_owned()));
+    universal.insert("id".into(), Value::Integer(0));
+    universal.insert(
+        "description".into(),
+        Value::String(
+            "Shared public data space for core, governance, and zero-knowledge lanes".to_owned(),
+        ),
+    );
+    universal.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
+    let mut catalog = vec![Value::Table(universal)];
 
     let mut extra_dataspaces = match sora_profile {
         Some(SoraProfile::Nexus) => vec![
@@ -1951,11 +1935,18 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
                 1_i64,
                 "governance",
                 "Governance lane",
-                "governance",
+                "universal",
                 "public",
                 None,
             ),
-            (2_i64, "zk", "Zero-knowledge lane", "zk", "public", None),
+            (
+                2_i64,
+                "zk",
+                "Zero-knowledge lane",
+                "universal",
+                "public",
+                None,
+            ),
         ]
     } else {
         vec![
@@ -1971,7 +1962,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
                 1_i64,
                 "governance",
                 "Governance & parliament traffic",
-                "governance",
+                "universal",
                 "restricted",
                 None,
             ),
@@ -1979,7 +1970,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
                 2_i64,
                 "zk",
                 "Zero-knowledge attachments",
-                "zk",
+                "universal",
                 "restricted",
                 None,
             ),
@@ -2092,8 +2083,8 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
 
     let rules = match sora_profile {
         Some(SoraProfile::Nexus) => vec![
-            rule(1, "governance", "instruction", "governance", None),
-            rule(2, "zk", "instruction", "smartcontract::deploy", None),
+            rule(1, "universal", "instruction", "governance", None),
+            rule(2, "universal", "instruction", "smartcontract::deploy", None),
             rule(
                 LOCALNET_PAYNET_ALIAS_LANE_INDEX,
                 "paynet",
@@ -2113,8 +2104,8 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
             let spec = private_dataspace_spec(sora_profile)
                 .expect("dataspace profile must have a typed specification");
             let mut rules = vec![
-                rule(1, "governance", "instruction", "governance", None),
-                rule(2, "zk", "instruction", "smartcontract::deploy", None),
+                rule(1, "universal", "instruction", "governance", None),
+                rule(2, "universal", "instruction", "smartcontract::deploy", None),
             ];
             rules.extend(spec.account_routes.iter().map(|route| {
                 rule(
@@ -2146,7 +2137,7 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
             rules.extend([
                 rule(
                     1,
-                    "governance",
+                    "universal",
                     "instruction",
                     "governance",
                     Some(
@@ -2155,7 +2146,7 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
                 ),
                 rule(
                     2,
-                    "zk",
+                    "universal",
                     "instruction",
                     "smartcontract::deploy",
                     Some(
@@ -7813,6 +7804,14 @@ mod tests {
             lanes_by_alias.get("nexus"),
             Some(&("nexus".to_owned(), "public".to_owned()))
         );
+        assert_eq!(
+            lanes_by_alias.get("governance"),
+            Some(&("universal".to_owned(), "restricted".to_owned()))
+        );
+        assert_eq!(
+            lanes_by_alias.get("zk"),
+            Some(&("universal".to_owned(), "restricted".to_owned()))
+        );
 
         let dataspace_catalog = nexus
             .get("dataspace_catalog")
@@ -7834,6 +7833,14 @@ mod tests {
                 (alias, id)
             })
             .collect();
+        assert_eq!(
+            dataspaces_by_alias
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["nexus", "paynet", "universal"]),
+            "logical governance and zk lanes must not create localnet dataspaces"
+        );
         assert_eq!(
             dataspaces_by_alias.get("paynet"),
             Some(
@@ -8030,16 +8037,16 @@ mod tests {
             ("account", "*@sbp", 3, "sbp"),
             ("account", "*@hbl.sbp", 3, "sbp"),
             ("account", "*@ubl.sbp", 3, "sbp"),
-            ("instruction", "governance", 1, "governance"),
-            ("instruction", "smartcontract::deploy", 2, "zk"),
+            ("instruction", "governance", 1, "universal"),
+            ("instruction", "smartcontract::deploy", 2, "universal"),
             ("instruction", "transfer::asset@sbp", 3, "sbp"),
             ("instruction", "transfer::asset@hbl.sbp", 3, "sbp"),
             ("instruction", "transfer::asset@ubl.sbp", 3, "sbp"),
         ];
         const CBUAE_ROUTES: &[(&str, &str, i64, &str)] = &[
             ("account", "*@cbuae", 4, "cbuae"),
-            ("instruction", "governance", 1, "governance"),
-            ("instruction", "smartcontract::deploy", 2, "zk"),
+            ("instruction", "governance", 1, "universal"),
+            ("instruction", "smartcontract::deploy", 2, "universal"),
             ("instruction", "transfer::asset@cbuae", 4, "cbuae"),
         ];
         let cases = [
@@ -8071,9 +8078,12 @@ mod tests {
             assert_eq!(
                 dataspace_catalog,
                 vec![
-                    expected_dataspace("universal", 0, "Single-lane data space", 1),
-                    expected_dataspace("governance", 1, "Governance proposals and manifests", 1,),
-                    expected_dataspace("zk", 2, "Zero-knowledge proofs and attachments", 1,),
+                    expected_dataspace(
+                        "universal",
+                        0,
+                        "Shared public data space for core, governance, and zero-knowledge lanes",
+                        1,
+                    ),
                     expected_dataspace(case.alias, case.id, case.dataspace_description, 1,),
                 ],
                 "private dataspace catalog must exactly match the canonical PK catalog"
@@ -8097,11 +8107,11 @@ mod tests {
                         1,
                         "governance",
                         "Governance lane",
-                        "governance",
+                        "universal",
                         "public",
                         None,
                     ),
-                    expected_lane(2, "zk", "Zero-knowledge lane", "zk", "public", None,),
+                    expected_lane(2, "zk", "Zero-knowledge lane", "universal", "public", None,),
                     expected_lane(
                         case.lane,
                         case.alias,

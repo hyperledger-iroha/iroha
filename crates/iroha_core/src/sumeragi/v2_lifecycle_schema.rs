@@ -1683,6 +1683,7 @@ pub(crate) struct SchedulerReadyInputs {
     key: LifecycleKey,
     validate_attestation: Option<AttestedReadyValidateDemand>,
     output_capacity_class: Option<CapacityClass>,
+    physical_capacity_available: bool,
     mode: u64,
     capacity: u64,
     selector: u64,
@@ -1728,6 +1729,7 @@ impl SchedulerReadyInputs {
             key: record.key,
             validate_attestation,
             output_capacity_class,
+            physical_capacity_available: true,
             mode,
             capacity,
             selector,
@@ -1777,6 +1779,41 @@ impl SchedulerReadyInputs {
         (carrier_matches && row.identity_matches(record.ordinal, record)).then_some(row)
     }
 
+    /// Join the same authenticated row to one service-frozen physical corridor result.
+    ///
+    /// The sealed factory is the only production mint. A physically unavailable
+    /// row remains part of the exact Ready census but cannot be selected during
+    /// this planning episode.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_authenticated_with_physical_capacity(
+        factory: &AuthenticatedSchedulerInputsFactory,
+        record: &LifecycleRecord,
+        validate_attestation: Option<AttestedReadyValidateDemand>,
+        recovered_apply_attestation: Option<
+            super::work_registry::ReadyRecoveredDecisionApplyAttestation,
+        >,
+        recovered_sign_attestation: Option<
+            super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        >,
+        recovered_fetch_attestation: Option<
+            super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
+        >,
+        physical_capacity_available: bool,
+        live_debts: [u64; 6],
+    ) -> Option<Self> {
+        let mut row = Self::from_authenticated(
+            factory,
+            record,
+            validate_attestation,
+            recovered_apply_attestation,
+            recovered_sign_attestation,
+            recovered_fetch_attestation,
+            live_debts,
+        )?;
+        row.physical_capacity_available = physical_capacity_available;
+        Some(row)
+    }
+
     /// Construct one test row without exposing a production rank mint.
     #[cfg(test)]
     pub(super) fn new(
@@ -1793,6 +1830,7 @@ impl SchedulerReadyInputs {
             output_capacity_class: rejected_validate
                 .filter(|rejected| *rejected)
                 .map(|_| CapacityClass::Consensus),
+            physical_capacity_available: true,
             mode,
             capacity,
             selector,
@@ -1836,6 +1874,18 @@ impl SchedulerReadyInputs {
     /// Return the sealed extra capacity class needed before this row is claimed.
     pub(super) const fn output_capacity_class(&self) -> Option<CapacityClass> {
         self.output_capacity_class
+    }
+
+    /// Return whether the service retained this row's exact physical corridor.
+    pub(super) const fn physical_capacity_available(&self) -> bool {
+        self.physical_capacity_available
+    }
+
+    /// Override physical availability only for focused planner tests.
+    #[cfg(test)]
+    pub(super) const fn with_physical_capacity_for_test(mut self, available: bool) -> Self {
+        self.physical_capacity_available = available;
+        self
     }
 
     /// Return the six live debts in their mandated rank order.

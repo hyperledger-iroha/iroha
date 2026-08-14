@@ -296,11 +296,50 @@ It exposes neither the adapter nor the replay-effect vector.
 The current runner still constructs its independent service path and has not
 consumed this launched stack, so runner cutover remains intentionally unwired
 instead of creating a dual live owner. Completion-observer and status
-publication are not constructor side effects: the launched stack retains a
-move-only observer permit for the later one-shot transition that also arms
-clocks and opens authenticated ingress. The ingress planner rejects unless the
-running owner and service retain matching store and output-guard seals; a
-cursor snapshot alone cannot authorize production planning.
+publication are not constructor side effects. A verified live successor retains
+the State-owned Kura identity used during construction and can consume itself
+into its exact context, activation, and one rotating-policy lifecycle-storage
+authority. Foreign Kura projection fails closed, and the runner does not consume
+this authority before the atomic switch. Before activation, a private
+move-only runner key permits one bounded callback over only the launched
+executor and services. An armed non-permit fail-stop scope spans exact pre/post
+checks that the two still share one output guard, the joint ingress remains
+closed, the observer permit remains present, and live clocks remain unarmed.
+The scope witnesses open output on both sides but releases its admission permit
+before invoking nested executor/service code, so synchronous fail-stop cannot
+self-deadlock. Callback failure therefore cannot return a retryable partially
+configured stack. The production key mint remains unwired. Interrupted-tip
+`PendingKuraApply` now crosses an opaque Decision-Fetch/WAL/runtime replay
+join: the authenticated wrapper admits only the exact same-block Decision
+Fetch, removes ordinary Fetch authority, and verifies the retained runtime
+sidecar before local dispatch. Ordinary activation rejects both the
+uninstalled replay seal and installed pending evidence. A dedicated no-clock
+lane-recovery/finalization state and its runner branch remain required. A
+consuming activation type
+state spans one fail-stop operation across live-clock arming, status projection,
+the retained one-shot observer, exact joint-ingress opening, and
+runner-authorized status publication. CompleteTip activation additionally
+consumes the still-joined retired-H authority; ordinary/current/snapshot status
+uses a distinct runner-owned seal. The resulting owner exposes only a
+borrow-bound callback gated by a private runner key, never owner, executor, or
+service parts. The ingress planner rejects unless the running owner and service
+retain matching store and output-guard seals; a cursor snapshot alone cannot
+authorize production planning. The activated owner now enters one consuming
+finalization chain. It proves executor and recovered-work quiescence before
+clearing readiness, closing the exact ingress, and jointly detaching the
+Certified-Serve and leader-wire gates. It then consumes the executor's Kura
+receipt/artifact and retires the serialized adapter WAL under fail-stop
+ownership. The resulting type state keeps services, lifecycle stores, and
+finality evidence joined while the existing lane/service rollover seals the
+durable exact-output handoff. Only after that handoff may it authenticate the
+recovered registry, rescan and revalidate the live Certified-Serve directory
+against ledger-owned rows plus capacity-fenced admission waits, retire
+payloads, and publish one all-row terminal LedgerV1 successor. The staged
+successor and published receipt are opaque; publication consumes the exact
+coordinator instance, and its final token consumes the concrete registry
+before a cleanup-ready state can permit normal worker shutdown. The atomic
+runner cutover must now mint and drive these landed states instead of retaining
+parallel owners.
 
 `ProductionV2Services::capture_lifecycle_capacity_rank` consumes the complete
 selector. Under one locked transaction it either retains the physical I/O FIFO
@@ -393,10 +432,71 @@ pre-cut row rather than checking only the selected target. Releasing the queue
 guard and executor borrow makes this a preparation rather than live authority:
 it may be stale immediately after return and exposes no general clone,
 constructor, mutation, claim, reservation, or dequeue API. The only
-crate-visible mint takes the ingress queue and target physical ordinal together;
-raw cut rows and candidates remain sealed. There is no optional selector, zero
-placeholder, caller-supplied row, or runtime lifecycle/scheduler ordinal in this
-tranche, and the result still cannot mint `SchedulerInputs`.
+general-purpose crate-visible mint takes the ingress queue and target physical
+ordinal together; raw cut rows and candidates remain sealed. The recovered
+Decision-Fetch prerequisite adds a narrower queue-owned mint with no ordinal
+input. Ordinary checked dequeue and that mint call one shared candidate
+selector over the same ready-source rotation and per-source lane order, scanning
+every `Strict` candidate before any `Dependency` and selecting obsolete
+carriers independently of the downstream predicate. Queue state is released
+before that predicate runs while dequeue service remains exclusive. The
+executor supplies the same pure retained-debt/terminal predicate used by the
+ordinary runner, authenticates the complete cut, and returns an opaque selector
+only when the exact fair winner is the recovered response-family owner. An
+ordinary, obsolete, foreign-context, or non-winning retransmission is a
+non-mutating pass-through; it cannot cause discovery to skip to a later
+recovered ordinal. The result still cannot mint `SchedulerInputs`.
+
+The launched lifecycle now owns a unified one-turn driver prerequisite around
+the real borrow-bound Completion and Ingress cursor. Completion first services
+its retained Apply-deferred, guarded Sign, and guarded Decision-Fetch owners,
+then takes at most one physical worker head, and only then classifies the
+complete Ready census. A selected Apply, Sign, Fetch, or full-census Broadcast
+transaction consumes the turn. Unsupported or ordinary work returns the exact
+unchanged cursor. The Sign preview structurally selects exactly one of
+Broadcast, ProposalPrepareWal, VoteBroadcastAndSign, or
+ProposalBroadcastAndSign before the driver calls one consuming settler. A mixed
+Apply/Sign/Fetch Ready census now freezes the worker FIFO and exact-output
+corridor together. Every attested row enters the same scheduler snapshot with
+its physical availability and predecessor debt, and only the ranked row
+receives a typed worker or output/executor reservation. An unavailable row
+remains in the exact Ready census without a sequential class-specific probe.
+
+The closed-ingress preactivation key also owns the future modular runner's
+opaque local-Proposal scheduler state. A WAL-authenticated recovered
+ProposalIntent remains move-only through cold adapter advancement; its sole
+initializer compares the exact reducer directive and mutates that same runner
+state inside the armed setup transaction before privately minting a
+context/directive-bound prepared owner. Ordinary and CompleteTip activation
+consume and retain that owner, so returning or discarding the directive cannot
+acknowledge recovery without suppressing the duplicate local attempt. The
+production runner mint/scheduler replacement remains part of the atomic
+cutover; the current live loop still owns its legacy `LocalProposalState`.
+
+Ingress first consumes and retries any retained recovered capacity wait, then
+freezes exactly one winner with the same queue-owned strict-before-dependency
+selector and pure drain predicate used by ordinary dequeue. The cut retains the
+service episode. Obsolete, context-free, foreign-context, and ordinary winners
+are physically removed by the queue's existing accounting/rotation tail and
+become one opaque move-only handoff; no free-standing ordinal or second
+selection crosses the boundary. A non-response head never enters response
+census. A selected response authenticates only its own signed-request family,
+so an unrelated later malformed family cannot poison the exact ordinary head;
+an exact recovered family winner alone retains its queue witness and enters
+Decision-Fetch Phase A without dequeue.
+
+For a selected current-height Certified-Serve request, the driver arms output
+fail-stop before authentication, durable negative staging, or service
+preparation. Accepted, rejected, and service outcomes move beside the exact
+dequeued carrier into the opaque handoff. Capacity backpressure completes the
+local fail-stop scope but retains both the physical cut and the already
+installed off-queue debt, so the Serve barrier cannot be leapfrogged. Every
+post-preparation error closes output while the service guard is still held, and
+dropping an unconsumed handoff closes output before its admission or carrier is
+released. The activated lifecycle owner and the legacy loop now consume that
+handoff through one production runner tail. The remaining cutover is to mint
+the active runner permit and switch selection to the lifecycle driver atomically
+inside `run_inner`; no second post-dequeue implementation remains.
 
 The queue-only final CAS now exists behind that sealed boundary, but it is not
 exposed from `PreparedLifecycleIngressSelector` and has no production caller.
@@ -1256,9 +1356,11 @@ canonical V1 replay evidence, and one-shot pending/candidate mint authority.
 The runner-owned body store first crosses a move-only fresh-quarantine cut that
 rejects any marker already promoted, rejected, or retired; that cut and the
 adapter-bound execution/storage seal are the sole production factory inputs.
-Queue/archive/event ownership and the local signer additionally require a
-private runner-minted permit; its production mint remains unwired until the
-atomic runner cutover. The signer public key stays comparison-only in the owner,
+Queue/archive/event ownership, the local signer, and the cadence authenticated
+by signed-genesis or snapshot recovery additionally require a private
+runner-minted permit; its production mint remains unwired until the atomic
+runner cutover. The factory never substitutes fresh height one's uncommitted
+State placeholder cadence. The signer public key stays comparison-only in the owner,
 and launch checks the peer key plus any claimed roster position before gate or
 runtime construction.
 After residual-effect, startup-instance, State/Kura/network, root, policy, and
@@ -1313,11 +1415,15 @@ preflight charges frozen capacity once, plans both FIFO owners without mutation,
 and either commits both or returns the recovered move-only authority unchanged;
 ordinary live Proposal broadcast uses the same all-or-nothing planner before
 publishing its first-send marker. Recovered reservations additionally bind the
-exact body-store instance and output guard, and the recovered authority is
-available only for the already-WAL-ahead `BroadcastAndSign` shape. The initial
-`ProposalPrepareWal` shape remains inside the future WAL transaction. Restart
-retransmission targets the full remote voter set without mutating live fast-path
-state. Cold recovery now has a frame-bound classifier for exactly the
+exact body-store instance and output guard. For the initial
+`ProposalPrepareWal` shape, the same reservation is acquired before any WAL
+I/O; the transaction preflights the sole `PrepareIntent -> Sign(Prepare)`
+continuation, fsyncs the encoded intent, reauthenticates that follow-on Sign
+against the exact frame and validated body, then fsyncs the adjacent Broadcast
+and Sign rows. Capacity failure before the append is mutation-free; every
+post-WAL failure is restart-only. Restart retransmission targets the full remote
+voter set without mutating live fast-path state. Cold recovery now has a
+frame-bound classifier for exactly the
 Proposal-to-Prepare and Prepare-to-Commit two-child shapes, independent of
 unrelated later high-water, plus an affine WAL authority which replays the lost
 historical signature only when the reducer reproduces both durable children.
@@ -1329,8 +1435,9 @@ the linked Broadcast/Commit-Sign pair, and advances the adapter to the exact
 Commit-signature fence. Refanout authenticates the full Ready census and
 recognizes either pair only through the Broadcast carrier's retained next
 address and digest; unrelated Ready work and an unrelated adjacent Sign stay
-independent. The initial Prepare-intent WAL crash cut remains a separate
-prerequisite.
+independent. The initial Prepare-intent WAL transaction feeds those same cold
+cuts: a crash after WAL fsync but before LedgerV1 reopens the WAL-ahead pair,
+while a crash after LedgerV1 reopens the exact linked two-child census.
 
 The phase-vote path carries the exact LedgerV1 store/frame through repair fsync
 and Sign installation. The control and Decision-Fetch paths each project one
@@ -1730,11 +1837,16 @@ authenticated cut, adapter startup,
 coordinator projection, and complete concrete registry; it exposes none of
 those parts. Cut validation rescans the bounded canonical directory before the
 join, so a later valid payload written by another store owner is rejected even
-when the original in-memory index is unchanged. This bound owner is not yet status-publication authority: both
-ingress preflight and publication reject the unbound token until runner wiring
-threads the opaque join through lifecycle launch and the final one-shot
-activation. The runner performs this rejection before any legacy
-H+1 adapter, worker, clock, or output constructor. A restart after either fsync
-repeats the transaction as an exact stutter without opening ingress. Uninterrupted live-owner rollover
-remains a separate future transaction because it must additionally drain the
-in-memory registry, lease, waits, and capacity owners.
+when the original in-memory index is unchanged. The sealed launch also joins
+its leader-wire and service-owned Certified-Serve gates under one
+closed-ingress RAII owner, so teardown cannot detach either durable carrier
+family independently. This bound owner is not itself status-publication
+authority. Its consuming launch retains retired H beside launched H+1, and the
+dedicated activation consumes both only while the runner-owned permit opens the
+exact ingress and publishes through the CompleteTip bridge. No production
+runner call site mints that permit yet. The runner therefore remains on the
+legacy path before any H+1 adapter, worker, clock, or output constructor. A
+restart after either fsync repeats the transaction as an exact stutter without
+opening ingress. Uninterrupted live-owner rollover now uses the consuming
+activated-height finalization chain described above; only its runner call site
+remains unwired.

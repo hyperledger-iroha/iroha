@@ -5,6 +5,27 @@ Last updated: 2026-08-13
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Nexus topology model closure
+
+- Move physical validator/server membership, replication, privacy, DA, and
+  governance ownership into a dataspace-level manifest. The current V1 runtime
+  still projects several of these fields through lane configuration and lane
+  manifests; until that migration lands, enforce that every lane in one
+  dataspace has an identical projection of its owning dataspace's roster and
+  security policy.
+- Replace overloaded account-route strings with typed namespace and dataspace
+  match fields. Preserve `MusubiNamespaceBindingV1` as an explicit
+  namespace-to-home-dataspace binding and stop inferring either identity from a
+  shared textual suffix.
+- Before a Taira release claims `dpn`, `is`, `is2`, or `cbsi` as a live physical
+  dataspace, archive deployment evidence for its distinct validator/server
+  cohort, storage boundary, and dataspace manifest. A catalog entry or repeated
+  lane-manifest roster is insufficient evidence.
+- Expose each dataspace manifest's canonical validator-to-`PeerId`/Torii
+  bindings in operator status so rollout validation can prove disjoint machine
+  cohorts directly. The V1 gate can compare manifest validator-account rosters
+  and quorum projections, but account identities alone are not host evidence.
+
 ## Build-efficiency closeout
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline and the
@@ -116,20 +137,57 @@ to:
   exact-output corridor now preflights and
   commits Proposal control plus chunks as one batch for both ordinary live
   output and recovered restart output; the latter remains bound to the exact
-  body-store and output-guard owner, is restricted to the WAL-ahead
-  `BroadcastAndSign` shape, and returns its opaque authority on capacity/abort.
-  This cold Proposal payload/chunk/two-carrier machinery is not yet reachable
-  from production runner settlement or refanout. Wire the initial
-  `ProposalPrepareWal` publication before wiring recovered Sign into the runner;
+  body-store and output-guard owner and returns its opaque authority on
+  capacity/abort. The initial `ProposalPrepareWal` transaction now holds that
+  reservation across exact PrepareIntent WAL fsync and the adjacent
+  Broadcast/Prepare-Sign LedgerV1 fsync; post-WAL failures are restart-only.
+  Wire the unified lifecycle Completion-turn driver, including both recovered
+  Proposal shapes, into the production runner activation transaction;
   do not route either shape through the bounded single-Broadcast cut. The
-  runner's freshly opened body store must first enter a
+  recovered Decision-Fetch ingress prerequisite now removes caller-selected
+  physical ordinals: ordinary dequeue and lifecycle discovery share the same
+  ready-source/lane, strict-before-dependency selector, and the lifecycle path
+  returns a recovered selector only when that exact fair winner owns the
+  authenticated response family. A lifecycle-owned unified Completion/Ingress
+  turn driver prerequisite is now landed around the real borrow-bound runner
+  cursor, but the production runner loop deliberately does not call it yet.
+  It retains Apply deferral, guarded Sign/Fetch completions, and recovered
+  ingress capacity waits internally; takes at most one physical Completion
+  head; classifies the complete Ready census; and returns the unchanged cursor
+  only when no fair ingress winner exists. Its queue-owned ordinary ingress
+  prerequisite now freezes that exact fair winner, prepares current-height
+  Certified-Serve state under the legacy lock/transaction discipline, and
+  physically removes the same occurrence into an opaque fail-stop token.
+  Backpressure retains the carrier plus off-queue debt, while recovered
+  Decision-Fetch retains its queue witness through Phase A. Mixed
+  Apply/Sign/Fetch Ready rows now freeze one composite worker/output-capacity
+  census and transfer only the ranked row's typed reservation. A sealed
+  preactivation runner key now permits one callback over only the launched
+  executor and services while exact
+  output ownership, closed ingress, the retained observer, and unarmed clocks
+  hold before and after the callback. Recovered ProposalIntent ownership is
+  retained through cold adapter advancement and can clear its activation
+  blocker only by binding the matching reducer directive into a move-only
+  prepared runner state which ordinary and CompleteTip activation retain. The
+  production runner still needs to mint/use that state in place of its legacy
+  local-Proposal scheduler at the atomic cutover. An
+  armed non-permit fail-stop scope closes output on error or unwind without
+  retaining a read permit across nested service fail-stop code.
+  The ordinary token now enters the same private runner-owned post-dequeue
+  consumer used by the legacy loop, and the opaque `PendingKuraApply`
+  Decision-Fetch/WAL/runtime replay join is sealed through preactivation.
+  Before cutover, wire the preactivation key mint, add PendingKura's dedicated
+  no-clock lane-recovery/finalization state, and atomically replace the legacy
+  loop owner. The runner's
+  freshly opened body store must first enter a
   move-only quarantine that rejects any already promoted, rejected, or retired
   marker, then enter the sole production factory with an adapter-bound
   execution/storage seal. The quarantine's only consuming transition fixes
   finality filtering, WAL-authority filtering, semantic marker replay, and
   sealing with the same `V2ApplyService` the owner retains for launch. It has
   no root-reopen or raw validation-callback alternative. A private runner-only
-  permit now seals the prerequisite dependency/local-signer handoff, but its
+  permit now seals the prerequisite dependency/local-signer/authenticated-cadence handoff,
+  avoiding the uncommitted State placeholder at fresh height one, but its
   production mint remains intentionally unwired until the atomic runner
   cutover; launch will reject a different peer key or incorrect claimed
   validator position before gate/runtime creation. Authenticated height recovery now
@@ -139,11 +197,16 @@ to:
   retains the universal genesis account derived from its authenticated genesis
   key; the factory moves that account into its single replay/live service only
   after exact State/Kura Arc, network, storage, and startup-instance checks.
+  Verified live successors now retain that State-owned Kura identity and can
+  consume themselves into context, activation, and a rotating-policy lifecycle
+  storage authority; the runner remains intentionally unwired from this new
+  projection until the atomic owner switch.
   The same seal now retains the Kura-derived safety-WAL and
   chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
   internally restores one ordinal source, folds producer and leader-wire
-  high-watermarks, opens the gate from the owner-held body store, binds it to
-  the still-closed ingress, and retains RAII unbinding ownership. Raw paths,
+  high-watermarks, opens the gate from the owner-held body store, then joins it
+  with the exact service-owned Certified-Serve gate on the same still-closed
+  ingress. One RAII owner retires both gates atomically. Raw paths,
   ordinals, receipts, Queue/archives/cadence/events, and genesis authority are
   no longer launch inputs. Launch consumes the retained Apply service through
   a parent-sealed move-only worker permit. The authenticated adapter
@@ -259,10 +322,21 @@ to:
   precedes every legacy H+1 adapter/worker/output constructor. Its bound launch
   now consumes the generic owner-to-I/O transaction without exposing either
   half, retaining the launched stack and retired-H authority in one typed
-  activation prerequisite. Next, consume that wrapper from the runner,
-  reconcile the retained H+1 ledger, add the dedicated typed publisher, and
-  remove the independent startup path; then add the separate uninterrupted
-  live-owner rollover transaction.
+  activation prerequisite. That wrapper now has a consuming CompleteTip-only
+  activation which keeps retirement sealed through clocks, observer install,
+  exact ingress open, and H+1 status publication. The parallel ordinary
+  activation returns an opaque owner borrowable only through a private runner
+  key. The consuming finalization chain is now present: readiness and exact
+  ingress close first, both gates retire jointly, executor/Kura finality and
+  adapter WAL retirement complete under fail-stop ownership, and the existing
+  lane/service output transaction seals its durable handoff while services and
+  the lifecycle owner remain joined. A fresh post-handoff Certified-Serve
+  census then rejoins ledger rows plus capacity waits, payload retirement
+  precedes one opaque all-row LedgerV1 publication, and its coordinator-owning
+  publication token consumes the concrete registry. Only the cleanup-ready
+  state permits normal worker shutdown. Next, mint and consume the landed
+  activation/finalization states in the runner and remove its independent
+  startup path.
 - Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
   and lifecycle-retention release gate from one final source seal. Run the
   focused Kura and Sumeragi regressions, build the optimized `irohad` and
@@ -909,7 +983,7 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 88-leg release inventory contract is
-sealed at 854 production tests across 40 modules, 525 G-UNIT rows, and four
+sealed at 855 production tests across 40 modules, 525 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -962,12 +1036,12 @@ tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
-The static release inventory now matches `854/854` production tests across 40
+The static release inventory now matches `855/855` production tests across 40
 modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
 SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The separate canonical production module/test TSV has SHA-256
-`e331947691b76e5b15ca2b34ba31ce3803ea91a80147844612fb554d5cdf8403`;
+`fa97c6705e7673a883e86b76a1fe5b38aabaa3e4aa5aa110f250265ee84dbbad`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
@@ -1013,7 +1087,7 @@ source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required legacy-version-before-signing regression preserves the exact
-854-production-test and 525-G-UNIT-test counts. Rust's separated client test
+855-production-test and 525-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -1030,7 +1104,7 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checks,
-exact 854-test production inventory, 525-test G-UNIT source inventory, 12
+exact 855-test production inventory, 525-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
 contract controls require a fresh source-bound rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
@@ -1077,7 +1151,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 854-test,
+  mutations before promotion, then finish the remaining 855-test,
   40-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -27035,7 +27109,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and their exact
-854-test inventory plus the separate exact 525-test G-UNIT inventory, the
+855-test inventory plus the separate exact 525-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

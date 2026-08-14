@@ -2575,6 +2575,127 @@ pub(super) fn authenticate_complete_tip_serve_census(
     Ok(retained)
 }
 
+/// Authenticate the exact live Serve census before ordinary height retirement.
+///
+/// The durable ledger owns admitted Serve rows, while capacity-fenced Serve
+/// requests remain solely in the coordinator's bounded admission-wait map.
+/// Their payload frames are nevertheless durable and must be present as exact
+/// Pending entries in the freshly authenticated cut. No other payload orphan
+/// is accepted. This read-only join runs only after ingress closure and the
+/// exact-output handoff; the consuming retirement subsequently prunes those
+/// wait-owned Pending frames and reconciles the retained ledger-owned rows.
+pub(super) fn authenticate_live_finalization_serve_census(
+    verified: &VerifiedHeightContext,
+    ledger: &LifecycleLedgerV1,
+    coordinator: &LifecycleCoordinator,
+    recovered: &AuthenticatedCertifiedServePayloadRecoveryCut,
+) -> Result<BTreeSet<CertifiedServePayloadId>, LifecycleOpenError> {
+    let context = coordinator.active_context;
+    if coordinator.fault.is_some()
+        || coordinator.active_lease.is_some()
+        || context != super::projection::lifecycle_context(verified.context())
+        || ledger.context() != context
+        || LifecycleLedgerV1::from_coordinator(coordinator)
+            .ok()
+            .as_ref()
+            != Some(ledger)
+        || coordinator.admission_waits.len() > super::MAX_PENDING_ADMISSION_WAITS
+    {
+        return Err(LifecycleOpenErrorKind::InvalidRecovery(
+            "live finalization coordinator is not an exact quiescent ledger owner",
+        )
+        .into());
+    }
+
+    let retained = authenticate_complete_tip_serve_census(ledger, recovered)?;
+    let mut owned = retained.clone();
+    for (key, waiting) in &coordinator.admission_waits {
+        let super::WaitSource::Capacity(class) = waiting.wait_token.source() else {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "live finalization admission wait lost its capacity fence",
+            )
+            .into());
+        };
+        let mut canonical = waiting.candidate.clone();
+        if *key != waiting.candidate.key
+            || coordinator.key_index.contains_key(key)
+            || class != waiting.candidate.work_class.capacity_class()
+            || waiting.wait_token.observed_generation() > coordinator.capacity_generation[&class]
+            || canonical.canonicalize_geometry().is_err()
+            || canonical != waiting.candidate
+            || !waiting.candidate.replay_authority_is_exact(context)
+            || !waiting
+                .candidate
+                .work_class
+                .accepts_stage(waiting.candidate.key.phase(), waiting.candidate.stage)
+            || coordinator
+                .episode_authority
+                .universe_for(waiting.candidate.key)
+                .is_none()
+        {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "live finalization admission wait changed its sealed candidate",
+            )
+            .into());
+        }
+
+        match (waiting.candidate.work_class, waiting.serve_payload_receipt) {
+            (LifecycleWorkClass::CertifiedServe, Some(receipt)) => {
+                let Some(payload) = recovered.get(receipt.id()) else {
+                    return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                        "live finalization lost a wait-owned Serve payload",
+                    )
+                    .into());
+                };
+                if !matches!(
+                    payload.state(),
+                    AuthenticatedRecoveredCertifiedServePayloadState::Pending
+                ) || !receipt.exactly_matches_pending(payload.request())
+                {
+                    return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                        "live finalization wait-owned Serve payload changed",
+                    )
+                    .into());
+                }
+                let prepared = super::projection::prepare_certified_serve_admission(
+                    context,
+                    verified,
+                    payload.request(),
+                    receipt,
+                )
+                .map_err(|_| {
+                    LifecycleOpenError::from(LifecycleOpenErrorKind::InvalidRecovery(
+                        "live finalization Serve wait no longer projects exactly",
+                    ))
+                })?;
+                let (candidate, _replay) = prepared.into_candidate_and_replay();
+                if candidate != waiting.candidate || !owned.insert(receipt.id()) {
+                    return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                        "live finalization has duplicate or drifted Serve wait ownership",
+                    )
+                    .into());
+                }
+            }
+            (LifecycleWorkClass::CertifiedServe, None) | (_, Some(_)) => {
+                return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                    "live finalization admission wait lost typed Serve ownership",
+                )
+                .into());
+            }
+            (_, None) => {}
+        }
+    }
+
+    let recovered_ids = recovered.iter().map(|payload| payload.id()).collect();
+    if owned != recovered_ids {
+        return Err(LifecycleOpenErrorKind::InvalidRecovery(
+            "live finalization payload cut contains an unexplained orphan",
+        )
+        .into());
+    }
+    Ok(retained)
+}
+
 /// Seal the final post-mutation Serve cut for CompleteTip ledger retirement.
 ///
 /// Unlike the pre-mutation census, this boundary permits no Pending orphan:

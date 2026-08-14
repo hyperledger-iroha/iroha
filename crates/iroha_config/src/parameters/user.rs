@@ -9606,7 +9606,10 @@ pub struct Nexus {
     /// Optional explicit lane catalog entries.
     #[config(default)]
     pub lane_catalog: Vec<LaneDescriptor>,
-    /// Optional data-space catalog entries.
+    /// Optional physical data-space catalog entries.
+    ///
+    /// Lanes and namespaces reference these entries but never create them
+    /// implicitly.
     #[config(default)]
     pub dataspace_catalog: Vec<DataSpaceDescriptor>,
     /// Public-lane staking guardrails.
@@ -9853,7 +9856,7 @@ pub struct LaneDescriptor {
     pub alias: Option<String>,
     /// Optional description for documentation and dashboards.
     pub description: Option<String>,
-    /// Dataspace alias this lane belongs to.
+    /// Physical dataspace alias this logical lane belongs to.
     pub dataspace: Option<String>,
     /// Storage profile identifier (`full_replica`, `commitment_only`, `split_replica`).
     pub storage: Option<String>,
@@ -9876,10 +9879,10 @@ pub struct LaneDescriptor {
     pub metadata: BTreeMap<String, String>,
 }
 
-/// User-level configuration container for `DataSpaceDescriptor`.
+/// User-level configuration for one physical execution, storage, and validator boundary.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct DataSpaceDescriptor {
-    /// Human-readable alias.
+    /// Human-readable dataspace alias, independent of lane and namespace aliases.
     pub alias: Option<String>,
     /// Explicit numerical identifier override.
     pub id: Option<u64>,

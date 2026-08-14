@@ -93,6 +93,10 @@ use super::{
         BodyStoreCompletion, BodyValidationCompletion, V2BodyRetirementJob, V2BodyStore,
         V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
     },
+    v2_certified_serve_payload_store::{
+        AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadStoreInstanceIdentity,
+        CertifiedServePayloadStoreV1, CertifiedServeRetirementAuthenticationErrorV1,
+    },
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
@@ -111,8 +115,10 @@ use super::{
         CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
         LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal,
         PreparedLifecycleIngressSelector, PreparedRecoveredDecisionApplyDispatch,
-        PreparedRecoveredLifecycleSignDispatch, ProductionV2CompletionObserverActivationPermitV1,
-        RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchBodyPersistenceCompletionV1,
+        PreparedRecoveredLifecycleSignDispatch,
+        ProductionLifecycleServeRetirementAuthenticationPermitV1,
+        ProductionV2CompletionObserverActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
+        RecoveredDecisionFetchBodyPersistenceCompletionV1,
         RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchDispatchKeyV1,
         RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
     },
@@ -1926,6 +1932,11 @@ impl V2IoAdmission {
         self.queued.load(AtomicOrdering::Acquire) < self.limit(class)
     }
 
+    /// Return the exact physical admission count while the queue state is locked.
+    fn queued(&self) -> usize {
+        self.queued.load(AtomicOrdering::Acquire)
+    }
+
     fn try_reserve(&self, class: V2IoAdmissionClass) -> bool {
         let limit = self.limit(class);
         self.queued
@@ -2740,6 +2751,12 @@ impl RecoveredDecisionApplyCapacityReservationV1<'_> {
             .state
             .take()
             .expect("committed recovered Apply reservation retains its queue cut");
+        // Take this after the queue guard so unwinding activates restart before
+        // another producer can acquire the released FIFO mutex.
+        let operation = self
+            .operation
+            .take()
+            .expect("committed recovered Apply retains its fail-stop operation");
         let replaced = state.recovered_decision_applies.insert(
             self.key,
             V2IoTrackedRecoveredDecisionApplyV1 {
@@ -2755,10 +2772,7 @@ impl RecoveredDecisionApplyCapacityReservationV1<'_> {
             .push_back(V2IoCommand::RecoveredDecisionApply(task));
         drop(state);
         self.queue.ready.notify_all();
-        self.operation
-            .take()
-            .expect("committed recovered Apply retains its fail-stop operation")
-            .complete();
+        operation.complete();
     }
 }
 
@@ -2880,6 +2894,11 @@ impl RecoveredLifecycleSignCapacityReservationV1<'_> {
             .state
             .take()
             .expect("committed recovered Sign reservation retains its queue cut");
+        // Take this after the queue guard so unwind ordering remains fail-stop.
+        let operation = self
+            .operation
+            .take()
+            .expect("committed recovered Sign retains its fail-stop operation");
         let replaced = state.recovered_lifecycle_signs.insert(
             self.key,
             V2IoTrackedRecoveredLifecycleSignV1 {
@@ -2895,10 +2914,7 @@ impl RecoveredLifecycleSignCapacityReservationV1<'_> {
             .push_back(V2IoCommand::RecoveredLifecycleSign(task));
         drop(state);
         self.queue.ready.notify_all();
-        self.operation
-            .take()
-            .expect("committed recovered Sign retains its fail-stop operation")
-            .complete();
+        operation.complete();
     }
 }
 
@@ -2951,6 +2967,291 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureErrorV1 {
     PositionOverflow,
     /// The same carrier already owns queued, active, or pending work.
     AlreadyDispatched,
+}
+
+/// One registry-authenticated recovered Completion row whose physical corridor
+/// must participate in the same scheduler snapshot as every peer row.
+#[must_use = "every recovered Completion probe must enter one composite census"]
+pub(in crate::sumeragi) enum RecoveredCompletionCapacityProbeV1 {
+    /// One recovered Decision Apply bound to its dedicated worker key.
+    Apply {
+        /// Exact logical Ready ordinal.
+        ordinal: u128,
+        /// Closed worker dispatch key retained by the registry attestation.
+        key: RecoveredDecisionApplyDispatchKeyV1,
+    },
+    /// One recovered lifecycle Sign bound to its dedicated worker key.
+    Sign {
+        /// Exact logical Ready ordinal.
+        ordinal: u128,
+        /// Closed worker dispatch key retained by the registry attestation.
+        key: RecoveredLifecycleSignDispatchKeyV1,
+    },
+    /// One recovered Decision Fetch bound to its signed request owner.
+    Fetch {
+        /// Exact logical Ready ordinal.
+        ordinal: u128,
+        /// Service-authenticated request owner retained until one row is selected.
+        owner: RecoveredDecisionFetchRequestOwnerV1,
+        /// Exact executor-catalog capacity observed before the service locks.
+        executor_available: bool,
+    },
+}
+
+enum RecoveredCompletionPreparedCapacityV1 {
+    Apply {
+        key: RecoveredDecisionApplyDispatchKeyV1,
+        available: bool,
+        predecessor_ordinal: Option<u128>,
+    },
+    Sign {
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        available: bool,
+        predecessor_ordinal: Option<u128>,
+    },
+    Fetch {
+        owner: RecoveredDecisionFetchRequestOwnerV1,
+        fanout: Option<PendingExactFanout>,
+        available: bool,
+    },
+}
+
+impl RecoveredCompletionPreparedCapacityV1 {
+    const fn available(&self) -> bool {
+        match self {
+            Self::Apply { available, .. }
+            | Self::Sign { available, .. }
+            | Self::Fetch { available, .. } => *available,
+        }
+    }
+
+    const fn predecessor_debt(&self, worker_debt: u64, output_debt: u64) -> u64 {
+        match self {
+            Self::Apply { .. } | Self::Sign { .. } => worker_debt,
+            Self::Fetch { .. } => output_debt,
+        }
+    }
+}
+
+/// One fail-stop snapshot of both physical corridors used by recovered
+/// Completion work.
+///
+/// The output mutex and worker queue remain frozen through the single logical
+/// plan. An unselected row owns no physical mutation. Dropping this value while
+/// armed closes output before either mutex is released.
+#[must_use = "the recovered Completion census must select one row or complete unchanged"]
+pub(in crate::sumeragi) struct RecoveredCompletionCapacityCensusV1<'service> {
+    operation: Option<ConsensusFailStopOperation<'service>>,
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
+    queue: &'service V2IoCommandQueue,
+    state: Option<std::sync::MutexGuard<'service, V2IoCommandQueueState>>,
+    worker_predecessor_debt: u64,
+    output_predecessor_debt: u64,
+    candidates: BTreeMap<u128, RecoveredCompletionPreparedCapacityV1>,
+}
+
+impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
+    /// Return one row's frozen physical availability and predecessor debt.
+    pub(in crate::sumeragi) fn authenticated_capacity(
+        &self,
+        ordinal: u128,
+        _factory: &AuthenticatedSchedulerInputsFactory,
+    ) -> Option<(bool, u64)> {
+        self.candidates.get(&ordinal).map(|candidate| {
+            (
+                candidate.available(),
+                candidate
+                    .predecessor_debt(self.worker_predecessor_debt, self.output_predecessor_debt),
+            )
+        })
+    }
+
+    /// Inspect one frozen row without minting a production scheduler factory.
+    #[cfg(test)]
+    fn capacity_for_test(&self, ordinal: u128) -> Option<(bool, u64)> {
+        self.candidates.get(&ordinal).map(|candidate| {
+            (
+                candidate.available(),
+                candidate
+                    .predecessor_debt(self.worker_predecessor_debt, self.output_predecessor_debt),
+            )
+        })
+    }
+
+    /// Release an unchanged composite snapshot when no physical row is selectable.
+    pub(in crate::sumeragi) fn complete_without_selection(mut self) {
+        drop(self.state.take());
+        drop(self.pending.take());
+        self.operation
+            .take()
+            .expect("recovered Completion census retains its fail-stop operation")
+            .complete();
+    }
+
+    /// Transfer the selected Apply row into its existing typed worker reservation.
+    pub(in crate::sumeragi) fn select_apply(
+        mut self,
+        ordinal: u128,
+    ) -> Result<RecoveredDecisionApplyCapacityReservationV1<'service>, Self> {
+        let Some(RecoveredCompletionPreparedCapacityV1::Apply {
+            key,
+            available: true,
+            predecessor_ordinal,
+        }) = self.candidates.remove(&ordinal)
+        else {
+            return Err(self);
+        };
+        let mut state = self
+            .state
+            .take()
+            .expect("selected recovered Apply retains the worker queue cut");
+        let operation = self
+            .operation
+            .take()
+            .expect("selected recovered Apply retains the fail-stop operation");
+        if predecessor_ordinal.is_some() {
+            let _ = self
+                .queue
+                .suspend_materialized_serve_barrier_for_runtime_predecessor(&mut state);
+        }
+        assert!(
+            state.commands.len() < self.queue.capacity
+                && self
+                    .queue
+                    .admission
+                    .try_reserve(V2IoAdmissionClass::Consensus),
+            "frozen recovered Apply capacity changed before selection"
+        );
+        if let Some(predecessor_ordinal) = predecessor_ordinal {
+            Self::claim_serve_predecessor(&mut state, predecessor_ordinal);
+        }
+        drop(self.pending.take());
+        Ok(RecoveredDecisionApplyCapacityReservationV1 {
+            queue: self.queue,
+            state: Some(state),
+            operation: Some(operation),
+            key,
+            predecessor_debt: self.worker_predecessor_debt,
+            predecessor_ordinal,
+        })
+    }
+
+    /// Transfer the selected Sign row into its existing typed worker reservation.
+    pub(in crate::sumeragi) fn select_sign(
+        mut self,
+        ordinal: u128,
+    ) -> Result<RecoveredLifecycleSignCapacityReservationV1<'service>, Self> {
+        let Some(RecoveredCompletionPreparedCapacityV1::Sign {
+            key,
+            available: true,
+            predecessor_ordinal,
+        }) = self.candidates.remove(&ordinal)
+        else {
+            return Err(self);
+        };
+        let mut state = self
+            .state
+            .take()
+            .expect("selected recovered Sign retains the worker queue cut");
+        let operation = self
+            .operation
+            .take()
+            .expect("selected recovered Sign retains the fail-stop operation");
+        if predecessor_ordinal.is_some() {
+            let _ = self
+                .queue
+                .suspend_materialized_serve_barrier_for_runtime_predecessor(&mut state);
+        }
+        assert!(
+            state.commands.len() < self.queue.capacity
+                && self
+                    .queue
+                    .admission
+                    .try_reserve(V2IoAdmissionClass::Consensus),
+            "frozen recovered Sign capacity changed before selection"
+        );
+        if let Some(predecessor_ordinal) = predecessor_ordinal {
+            Self::claim_serve_predecessor(&mut state, predecessor_ordinal);
+        }
+        drop(self.pending.take());
+        Ok(RecoveredLifecycleSignCapacityReservationV1 {
+            queue: self.queue,
+            state: Some(state),
+            operation: Some(operation),
+            key,
+            predecessor_debt: self.worker_predecessor_debt,
+            predecessor_ordinal,
+        })
+    }
+
+    /// Transfer the selected Fetch row into its request owner and output reservation.
+    pub(in crate::sumeragi) fn select_fetch(
+        mut self,
+        ordinal: u128,
+    ) -> Result<
+        (
+            RecoveredDecisionFetchRequestOwnerV1,
+            RecoveredDecisionFetchExactOutputReservationV1<'service>,
+        ),
+        Self,
+    > {
+        let Some(RecoveredCompletionPreparedCapacityV1::Fetch {
+            owner,
+            fanout,
+            available: true,
+        }) = self.candidates.remove(&ordinal)
+        else {
+            return Err(self);
+        };
+        drop(self.state.take());
+        let pending = self
+            .pending
+            .take()
+            .expect("selected recovered Fetch retains the exact-output cut");
+        let operation = self
+            .operation
+            .take()
+            .expect("selected recovered Fetch retains the fail-stop operation");
+        Ok((
+            owner,
+            RecoveredDecisionFetchExactOutputReservationV1 {
+                operation: Some(operation),
+                pending: Some(pending),
+                fanout,
+                predecessor_debt: self.output_predecessor_debt,
+            },
+        ))
+    }
+
+    fn claim_serve_predecessor(state: &mut V2IoCommandQueueState, predecessor_ordinal: u128) {
+        let reservation = state
+            .serve_ingress_reservation
+            .as_mut()
+            .expect("selected recovered predecessor retains its exact Serve ticket");
+        match &mut reservation.runtime_episode {
+            CertifiedServeRuntimeEpisodeState::Claimed {
+                predecessor_ordinal: selected,
+            } => match selected {
+                Some(existing) => assert_eq!(
+                    *existing, predecessor_ordinal,
+                    "one Serve turn cannot admit two causal lifecycle owners"
+                ),
+                None => *selected = Some(predecessor_ordinal),
+            },
+            CertifiedServeRuntimeEpisodeState::Ready
+            | CertifiedServeRuntimeEpisodeState::Complete => {
+                unreachable!("recovered predecessor escaped its claimed Serve turn")
+            }
+        }
+    }
+}
+
+impl Drop for RecoveredCompletionCapacityCensusV1<'_> {
+    fn drop(&mut self) {
+        // Activate restart while both corridors are still frozen. The locks
+        // are released only after this custom Drop returns.
+        drop(self.operation.take());
+    }
 }
 
 impl Drop for LifecycleIoCapacityReservation<'_> {
@@ -4525,6 +4826,67 @@ impl V2IoCommandQueue {
                 predecessor_ordinal: exact_predecessor_ordinal,
             },
         ))
+    }
+
+    /// Project one recovered worker candidate without changing the queue cut.
+    ///
+    /// The returned availability accounts for transferring a materialized
+    /// Serve placeholder to an older exact lifecycle predecessor. Both the
+    /// command count and its admission unit are projected together.
+    fn recovered_completion_worker_capacity(
+        &self,
+        state: &V2IoCommandQueueState,
+        command_ordinal: u128,
+    ) -> (bool, Option<u128>) {
+        let exact_predecessor_ordinal =
+            state
+                .serve_ingress_reservation
+                .as_ref()
+                .and_then(|reservation| {
+                    if command_ordinal >= reservation.id.0 {
+                        return None;
+                    }
+                    match reservation.runtime_episode {
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: None,
+                        } => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: Some(existing),
+                        } if existing == command_ordinal => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Ready
+                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
+                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                    }
+                });
+        let exact_target_active = state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some();
+        if exact_target_active && exact_predecessor_ordinal.is_none() {
+            return (false, None);
+        }
+        let transfers_materialized_serve = exact_predecessor_ordinal.is_some()
+            && state.serve_barrier.is_some_and(|lifecycle_id| {
+                state
+                    .serves
+                    .get(&lifecycle_id)
+                    .is_some_and(|tracked| tracked.state == V2IoServeState::Reserved)
+            });
+        let transferred_units = if transfers_materialized_serve { 1 } else { 0 };
+        let projected_commands = state
+            .commands
+            .len()
+            .checked_sub(transferred_units)
+            .expect("materialized Serve transfer retains its queue placeholder");
+        let projected_admission = self
+            .admission
+            .queued()
+            .checked_sub(transferred_units)
+            .expect("materialized Serve transfer retains its admission unit");
+        (
+            projected_commands < self.capacity
+                && projected_admission < self.admission.limit(V2IoAdmissionClass::Consensus),
+            exact_predecessor_ordinal,
+        )
     }
 
     fn begin_decision_serve_reconciliation(&self) -> Result<(), String> {
@@ -9479,6 +9841,27 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignCompletionDrainV1 {
 #[must_use = "a recovered Fetch completion must remain parked under its lifecycle owner"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyCompletionDrainV1 {
     completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,
+}
+
+/// Opaque result of taking the physical completion head exactly once.
+///
+/// Ordinary I/O and local reconstruction work is never exposed. An ordinary
+/// I/O head is restored into the service's sole held slot before
+/// `PassThrough` returns, so the ordinary drain observes the same FIFO item.
+/// Recovered variants transfer only their guarded, class-specific owner.
+#[allow(variant_size_differences)]
+#[must_use = "a selected recovered completion must remain lifecycle-owned"]
+pub(in crate::sumeragi) enum RecoveredLifecycleCompletionTakeV1 {
+    /// No physical I/O completion is currently available.
+    None,
+    /// The ordinary completion owner must service the current turn.
+    PassThrough,
+    /// The exact recovered Decision Apply completion left the FIFO owner.
+    Apply(PreparedRecoveredDecisionApplyCompletionV1),
+    /// The exact recovered Sign completion left the FIFO owner.
+    Sign(PreparedRecoveredLifecycleSignCompletionV1),
+    /// The exact persisted recovered Decision Fetch body left the FIFO owner.
+    DecisionFetch(PreparedRecoveredDecisionFetchBodyCompletionV1),
 }
 
 impl RecoveredDecisionFetchBodyCompletionDrainV1 {
@@ -16851,6 +17234,23 @@ pub(in crate::sumeragi) enum ExactOutputTestAdmission {
     Retired,
 }
 
+/// Test-only RAII hold for one auxiliary physical I/O admission unit.
+///
+/// The hold changes only the shared admission counter. Dropping it releases
+/// the exact unit and advances the ordinary lifecycle capacity generation.
+#[cfg(test)]
+#[must_use = "the auxiliary I/O admission hold must remain live for the intended test cut"]
+pub(in crate::sumeragi) struct ProductionAuxiliaryIoAdmissionHoldV1 {
+    admission: Arc<V2IoAdmission>,
+}
+
+#[cfg(test)]
+impl Drop for ProductionAuxiliaryIoAdmissionHoldV1 {
+    fn drop(&mut self) {
+        self.admission.release();
+    }
+}
+
 #[cfg(test)]
 type ExactOutputAdmissionHook = Box<
     dyn FnMut(
@@ -16876,6 +17276,7 @@ pub(crate) struct ProductionV2Services {
     chunk_root: PathBuf,
     io: Option<V2IoHandle>,
     lifecycle_body_store_identity: Option<V2BodyStoreInstanceIdentity>,
+    lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
     fetches: BTreeMap<EffectWorkId, FetchSession>,
     fetch_by_manifest: BTreeMap<HashOf<wire::PayloadManifest>, EffectWorkId>,
     orphan_chunks: BTreeMap<HashOf<wire::PayloadManifest>, VecDeque<BufferedPayloadChunk>>,
@@ -17091,14 +17492,74 @@ pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputReservationV
     pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     batch: Option<PendingExactOutputBatchPlan>,
     authority: Option<super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1>,
+    wal_append: RecoveredLifecycleProposalPrepareWalAppendSealV1,
+}
+
+/// Reservation-owned identity seal for the initial Proposal WAL append.
+///
+/// It is constructed only after the exact control/chunk batch owns aggregate
+/// corridor capacity. The public borrow wrapper below prevents the WAL append
+/// from outliving or bypassing that armed reservation.
+struct RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+    dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+    output_guard: Arc<ConsensusOutputGuard>,
+    attempted: bool,
+}
+
+/// Borrow-bound proof that one exact Proposal batch remains reserved.
+#[must_use = "the Proposal WAL append permit must remain tied to its output reservation"]
+pub(in crate::sumeragi) struct RecoveredLifecycleProposalPrepareWalAppendPermitV1<'reservation> {
+    seal: &'reservation mut RecoveredLifecycleProposalPrepareWalAppendSealV1,
+}
+
+impl RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_> {
+    /// Compare the preview owner without exposing any reservation constituent.
+    pub(in crate::sumeragi) fn authorizes(
+        &self,
+        dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+        body_store_identity: &V2BodyStoreInstanceIdentity,
+        output_guard: &Arc<ConsensusOutputGuard>,
+    ) -> bool {
+        !self.seal.attempted
+            && self.seal.dispatch_key == dispatch_key
+            && self
+                .seal
+                .body_store_identity
+                .same_instance(body_store_identity)
+            && Arc::ptr_eq(&self.seal.output_guard, output_guard)
+    }
+
+    /// Irreversibly cross the retry boundary before attempting the WAL append.
+    pub(in crate::sumeragi) fn cross_wal_attempt_boundary(self) {
+        self.seal.attempted = true;
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
+    /// Borrow the sole initial-Proposal WAL permit while this batch is armed.
+    pub(in crate::sumeragi) fn prepare_wal_append_permit(
+        &mut self,
+    ) -> Option<RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_>> {
+        (self.operation.is_some()
+            && self.pending.is_some()
+            && self.batch.is_some()
+            && self.authority.is_some()
+            && !self.wal_append.attempted)
+            .then_some(RecoveredLifecycleProposalPrepareWalAppendPermitV1 {
+                seal: &mut self.wal_append,
+            })
+    }
+
     /// Release an unchanged aggregate reservation before durable publication.
     pub(in crate::sumeragi) fn abort_before_publication(
         mut self,
     ) -> super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1 {
+        assert!(
+            !self.wal_append.attempted,
+            "an attempted Proposal WAL cut cannot return to the prepublication retry boundary"
+        );
         drop(self.pending.take());
         drop(self.batch.take());
         self.operation
@@ -17152,8 +17613,8 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchExactOutputCaptureV1<'service
 /// recoverable pre-claim failures must consume [`Self::abort_before_claim`].
 #[must_use = "exact recovered Fetch output must commit or use its typed pre-claim abort"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'service> {
-    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     operation: Option<ConsensusFailStopOperation<'service>>,
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     fanout: Option<PendingExactFanout>,
     predecessor_debt: u64,
 }
@@ -17179,6 +17640,12 @@ impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
             .pending
             .take()
             .expect("recovered Fetch output reservation retains its corridor mutex");
+        // Take this after the mutex guard so unwinding closes output before
+        // releasing the exact-output corridor.
+        let operation = self
+            .operation
+            .take()
+            .expect("recovered Fetch output commit retains its fail-stop operation");
         if let Some(fanout) = self.fanout.take() {
             assert_eq!(
                 pending.enqueue(fanout),
@@ -17187,10 +17654,7 @@ impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
             );
         }
         drop(pending);
-        self.operation
-            .take()
-            .expect("recovered Fetch output commit retains its fail-stop operation")
-            .complete();
+        operation.complete();
     }
 }
 
@@ -17441,6 +17905,12 @@ impl ProductionV2Services {
         proposal
             .validate(&self.context)
             .map_err(|error| error.to_string())?;
+        let wal_append = RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+            dispatch_key,
+            body_store_identity: body_store_identity.clone(),
+            output_guard: Arc::clone(&authority_output_guard),
+            attempted: false,
+        };
         let retry_authority =
             super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(
                 RecoveredLifecycleProposalExactOutputPermitV1::new(),
@@ -17531,6 +18001,7 @@ impl ProductionV2Services {
                 pending: Some(pending),
                 batch: Some(batch),
                 authority: Some(retry_authority),
+                wal_append,
             },
         ))
     }
@@ -17613,22 +18084,7 @@ impl ProductionV2Services {
                 "recovered Decision Fetch output belongs to another service cut".to_owned(),
             );
         }
-        let message =
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyRequest(
-                owner.authenticated.request().clone(),
-            ));
-        let encoded = Self::preencode_v2_network_message(message)?;
-        let peers = owner
-            .sources
-            .iter()
-            .filter(|peer| *peer != &self.local_peer)
-            .cloned()
-            .collect::<Vec<_>>();
-        let fanout = PendingExactFanout::claimed(
-            vec![encoded],
-            peers,
-            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
-        )?;
+        let fanout = self.recovered_decision_fetch_fanout(owner)?;
         let operation = self
             .output_guard
             .begin_fail_stop_operation()
@@ -17648,12 +18104,208 @@ impl ProductionV2Services {
         }
         Ok(RecoveredDecisionFetchExactOutputCaptureV1::Reserved(
             RecoveredDecisionFetchExactOutputReservationV1 {
-                pending: Some(pending),
                 operation: Some(operation),
+                pending: Some(pending),
                 fanout,
                 predecessor_debt,
             },
         ))
+    }
+
+    fn recovered_decision_fetch_fanout(
+        &self,
+        owner: &RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<Option<PendingExactFanout>, String> {
+        if !owner.validates_exact_executor_context(&self.context, &self.local_peer)
+            || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(
+                "recovered Decision Fetch output belongs to another service cut".to_owned(),
+            );
+        }
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyRequest(
+                owner.authenticated.request().clone(),
+            ));
+        let encoded = Self::preencode_v2_network_message(message)?;
+        let peers = owner
+            .sources
+            .iter()
+            .filter(|peer| *peer != &self.local_peer)
+            .cloned()
+            .collect::<Vec<_>>();
+        PendingExactFanout::claimed(
+            vec![encoded],
+            peers,
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )
+    }
+
+    /// Freeze every recovered Completion physical corridor for one logical plan.
+    ///
+    /// Fanouts are fully encoded before either mutex is acquired. Once armed,
+    /// the exact-output and worker queue cuts remain locked until the caller
+    /// selects one typed reservation or explicitly completes without selection.
+    pub(in crate::sumeragi) fn capture_recovered_completion_capacity_census(
+        &self,
+        probes: Vec<RecoveredCompletionCapacityProbeV1>,
+    ) -> Result<RecoveredCompletionCapacityCensusV1<'_>, String> {
+        let io = self
+            .io
+            .as_ref()
+            .ok_or_else(|| "recovered Completion census requires the launched worker".to_owned())?;
+        if probes.is_empty() || self.exact_output_handoff_owner.is_sealed() {
+            return Err("recovered Completion census has no live service cut".to_owned());
+        }
+        let mut candidates = BTreeMap::new();
+        let mut apply_keys = BTreeSet::new();
+        let mut sign_keys = BTreeSet::new();
+        let mut fetch_keys = BTreeSet::new();
+        for probe in probes {
+            let (ordinal, candidate) = match probe {
+                RecoveredCompletionCapacityProbeV1::Apply { ordinal, key } => {
+                    if !key.matches_height_context(&self.context) || !apply_keys.insert(key) {
+                        return Err(
+                            "recovered Completion census changed an Apply dispatch key".to_owned()
+                        );
+                    }
+                    (
+                        ordinal,
+                        RecoveredCompletionPreparedCapacityV1::Apply {
+                            key,
+                            available: false,
+                            predecessor_ordinal: None,
+                        },
+                    )
+                }
+                RecoveredCompletionCapacityProbeV1::Sign { ordinal, key } => {
+                    if !key.matches_height_context(&self.context) || !sign_keys.insert(key) {
+                        return Err(
+                            "recovered Completion census changed a Sign dispatch key".to_owned()
+                        );
+                    }
+                    (
+                        ordinal,
+                        RecoveredCompletionPreparedCapacityV1::Sign {
+                            key,
+                            available: false,
+                            predecessor_ordinal: None,
+                        },
+                    )
+                }
+                RecoveredCompletionCapacityProbeV1::Fetch {
+                    ordinal,
+                    owner,
+                    executor_available,
+                } => {
+                    if !fetch_keys.insert(owner.dispatch_key()) {
+                        return Err(
+                            "recovered Completion census repeated a Fetch dispatch key".to_owned()
+                        );
+                    }
+                    let fanout = self.recovered_decision_fetch_fanout(&owner)?;
+                    (
+                        ordinal,
+                        RecoveredCompletionPreparedCapacityV1::Fetch {
+                            owner,
+                            fanout,
+                            available: executor_available,
+                        },
+                    )
+                }
+            };
+            if candidates.insert(ordinal, candidate).is_some() {
+                return Err("recovered Completion census repeated one Ready ordinal".to_owned());
+            }
+        }
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "recovered Completion census requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        let state = io.command_tx.queue.lock();
+        let mut census = RecoveredCompletionCapacityCensusV1 {
+            operation: Some(operation),
+            pending: Some(pending),
+            queue: io.command_tx.queue.as_ref(),
+            state: Some(state),
+            worker_predecessor_debt: 0,
+            output_predecessor_debt: 0,
+            candidates,
+        };
+        if self.exact_output_handoff_owner.is_sealed()
+            || census
+                .state
+                .as_ref()
+                .is_none_or(|state| !state.sender_open || !state.receiver_open)
+        {
+            return Err("recovered Completion service cut closed during capture".to_owned());
+        }
+        census.worker_predecessor_debt = u64::try_from(
+            census
+                .state
+                .as_ref()
+                .expect("armed census retains its worker cut")
+                .commands
+                .len(),
+        )
+        .map_err(|_| "recovered Completion worker debt overflowed".to_owned())?;
+        census.output_predecessor_debt = u64::try_from(
+            census
+                .pending
+                .as_ref()
+                .expect("armed census retains its output cut")
+                .fanouts
+                .len(),
+        )
+        .map_err(|_| "recovered Completion output debt overflowed".to_owned())?;
+        let state = census
+            .state
+            .as_ref()
+            .expect("armed census retains its worker cut");
+        let pending = census
+            .pending
+            .as_ref()
+            .expect("armed census retains its output cut");
+        for candidate in census.candidates.values_mut() {
+            match candidate {
+                RecoveredCompletionPreparedCapacityV1::Apply {
+                    key,
+                    available,
+                    predecessor_ordinal,
+                } => {
+                    if state.recovered_decision_applies.contains_key(key) {
+                        return Err("recovered Completion Apply is already worker-owned".to_owned());
+                    }
+                    (*available, *predecessor_ordinal) = io
+                        .command_tx
+                        .queue
+                        .recovered_completion_worker_capacity(state, key.lifecycle_ordinal());
+                }
+                RecoveredCompletionPreparedCapacityV1::Sign {
+                    key,
+                    available,
+                    predecessor_ordinal,
+                } => {
+                    if state.recovered_lifecycle_signs.contains_key(key) {
+                        return Err("recovered Completion Sign is already worker-owned".to_owned());
+                    }
+                    (*available, *predecessor_ordinal) = io
+                        .command_tx
+                        .queue
+                        .recovered_completion_worker_capacity(state, key.lifecycle_ordinal());
+                }
+                RecoveredCompletionPreparedCapacityV1::Fetch {
+                    fanout, available, ..
+                } => {
+                    *available = *available
+                        && fanout
+                            .as_ref()
+                            .map_or(Ok(true), |fanout| pending.can_enqueue(fanout))?;
+                }
+            }
+        }
+        Ok(census)
     }
 
     /// Return whether this service and executor share one canonical output gate.
@@ -17696,6 +18348,78 @@ impl ProductionV2Services {
                 .lifecycle_body_store_identity
                 .as_ref()
                 .is_some_and(|worker_identity| worker_identity.same_instance(owner_identity))
+    }
+
+    /// Return whether the service was launched beside this exact Serve store.
+    pub(in crate::sumeragi) fn matches_lifecycle_payload_store(
+        &self,
+        owner_identity: &CertifiedServePayloadStoreInstanceIdentity,
+    ) -> bool {
+        self.io.is_some()
+            && self
+                .lifecycle_payload_store_identity
+                .as_ref()
+                .is_some_and(|service_identity| service_identity.same_instance(owner_identity))
+    }
+
+    /// Refresh the exact live Certified-Serve cut for all-row retirement.
+    ///
+    /// The output-handoff seal is the irreversible prerequisite: before it is
+    /// present a live output or ingress transaction could still race this
+    /// census. The launch-private permit and both retained store identities
+    /// prevent a sibling service, signer, or reopened directory owner from
+    /// authenticating the cut.
+    pub(in crate::sumeragi) fn authenticate_current_lifecycle_serve_retirement(
+        &self,
+        permit: ProductionLifecycleServeRetirementAuthenticationPermitV1,
+        verified: &super::v2::VerifiedHeightContext,
+        payload_store: &CertifiedServePayloadStoreV1,
+        owner_body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> Result<
+        AuthenticatedCertifiedServePayloadRecoveryCut,
+        CertifiedServeRetirementAuthenticationErrorV1,
+    > {
+        let payload_store_identity = payload_store.instance_identity();
+        let roster_position = self
+            .context
+            .roster
+            .iter()
+            .position(|entry| entry.validator == self.local_peer)
+            .and_then(|position| wire::ValidatorIndex::try_from(position).ok());
+        if self.context != *verified.context()
+            || self.validator_set_pops != verified.proofs_of_possession()
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || self
+                .local_validator
+                .is_some_and(|validator| roster_position != Some(validator))
+            || !self.matches_lifecycle_body_store(owner_body_store_identity)
+            || !self.matches_lifecycle_payload_store(&payload_store_identity)
+            || !self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(CertifiedServeRetirementAuthenticationErrorV1::ForeignServiceOwner);
+        }
+        payload_store.authenticate_current_for_lifecycle_retirement(
+            permit,
+            verified,
+            &self.key_pair,
+        )
+    }
+
+    /// Seal an empty fixture corridor before exercising retirement census joins.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn seal_empty_exact_output_for_lifecycle_retirement_test(
+        &self,
+    ) -> Result<(), String> {
+        let pending = self
+            .pending_exact_output
+            .lock()
+            .map_err(|_| "fixture exact-output corridor lock was poisoned".to_owned())?;
+        if pending.is_pending() {
+            return Err("fixture exact-output corridor still owns output".to_owned());
+        }
+        self.exact_output_handoff_owner
+            .seal()
+            .map_err(|error| error.to_string())
     }
 
     fn recovered_lifecycle_next_vote_body_executor_permit<R: EffectRuntime>(
@@ -17755,7 +18479,6 @@ impl ProductionV2Services {
     /// launch stack. No constructor, drain, or ordinary status update can
     /// register this observer. The runner cut will consume this method only as
     /// part of its final all-or-restart activation transaction.
-    // TODO: Consume this seam in the one-shot runner activation transaction.
     #[allow(dead_code)]
     pub(in crate::sumeragi) fn activate_effect_completion_observer(
         &self,
@@ -18005,6 +18728,7 @@ impl ProductionV2Services {
             network,
             chunk_root,
             body_store,
+            None,
             state,
             kura,
             apply_service,
@@ -18039,6 +18763,7 @@ impl ProductionV2Services {
         network: IrohaNetwork,
         chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
+        payload_store_identity: CertifiedServePayloadStoreInstanceIdentity,
         state: Arc<crate::state::State>,
         kura: Arc<crate::kura::Kura>,
         apply_service: V2ApplyService,
@@ -18071,6 +18796,7 @@ impl ProductionV2Services {
             network,
             chunk_root,
             body_store,
+            Some(payload_store_identity),
             state,
             kura,
             apply_service,
@@ -18098,6 +18824,7 @@ impl ProductionV2Services {
         network: IrohaNetwork,
         chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
+        lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
         state: Arc<crate::state::State>,
         kura: Arc<crate::kura::Kura>,
         apply_service: V2ApplyService,
@@ -18201,6 +18928,7 @@ impl ProductionV2Services {
             chunk_root: context_chunk_root,
             io: Some(io),
             lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
+            lifecycle_payload_store_identity,
             fetches: BTreeMap::new(),
             fetch_by_manifest: BTreeMap::new(),
             orphan_chunks: BTreeMap::new(),
@@ -20033,6 +20761,105 @@ impl ProductionV2Services {
         })
     }
 
+    /// Take and classify the oldest Completion-lane owner in one operation.
+    ///
+    /// This is the lifecycle driver's sole physical-head classifier. It does
+    /// not probe three mutually exclusive drains. A pending local completion,
+    /// or an ordinary I/O head, returns `PassThrough` without acknowledgement
+    /// or ownership-position removal. A recovered result transfers exactly its
+    /// dedicated guarded token and advances completion-source rotation once.
+    pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(
+        &mut self,
+    ) -> Result<RecoveredLifecycleCompletionTakeV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        if self.held_io_completion.is_none()
+            && self.next_completion_source == CompletionSource::Local
+            && !self.local_completions.is_empty()
+        {
+            return Ok(RecoveredLifecycleCompletionTakeV1::PassThrough);
+        }
+
+        let completion = if let Some(completion) = self.held_io_completion.take() {
+            completion
+        } else {
+            let Some(io) = self.io.as_ref() else {
+                return Ok(RecoveredLifecycleCompletionTakeV1::None);
+            };
+            let Ok(completion) = io.try_recv_completion_unacknowledged() else {
+                return if self.local_completions.is_empty() {
+                    Ok(RecoveredLifecycleCompletionTakeV1::None)
+                } else {
+                    Ok(RecoveredLifecycleCompletionTakeV1::PassThrough)
+                };
+            };
+            completion
+        };
+
+        match completion {
+            V2IoCompletion::RecoveredDecisionApply(guarded) => {
+                let key = guarded.result().dispatch_key();
+                let work_ack = match self.io.as_ref().ok_or_else(|| {
+                    "recovered Decision Apply completion lost its I/O service owner".to_owned()
+                }) {
+                    Ok(io) => match io
+                        .prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))
+                    {
+                        Ok(work_ack) => work_ack,
+                        Err(error) => {
+                            self.held_io_completion =
+                                Some(V2IoCompletion::RecoveredDecisionApply(guarded));
+                            return Err(error);
+                        }
+                    },
+                    Err(error) => {
+                        self.held_io_completion =
+                            Some(V2IoCompletion::RecoveredDecisionApply(guarded));
+                        return Err(error);
+                    }
+                };
+                self.next_completion_source = CompletionSource::Local;
+                Ok(RecoveredLifecycleCompletionTakeV1::Apply(
+                    PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack },
+                ))
+            }
+            V2IoCompletion::RecoveredLifecycleSign(guarded) => {
+                let completion = self
+                    .io
+                    .as_ref()
+                    .and_then(|io| io.prepare_recovered_lifecycle_sign_completion(guarded, 0))
+                    .ok_or_else(|| {
+                        "recovered Sign completion lost its exact dedicated owner".to_owned()
+                    })?;
+                self.next_completion_source = CompletionSource::Local;
+                Ok(RecoveredLifecycleCompletionTakeV1::Sign(completion))
+            }
+            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded) => {
+                let completion = self
+                    .io
+                    .as_ref()
+                    .and_then(|io| io.prepare_recovered_decision_fetch_body_completion(guarded, 0))
+                    .ok_or_else(|| {
+                        "recovered Decision Fetch body completion lost its exact dedicated owner"
+                            .to_owned()
+                    })?;
+                self.next_completion_source = CompletionSource::Local;
+                Ok(RecoveredLifecycleCompletionTakeV1::DecisionFetch(
+                    completion,
+                ))
+            }
+            ordinary => {
+                assert!(
+                    self.held_io_completion.is_none(),
+                    "ordinary pass-through must restore the sole held completion slot"
+                );
+                self.held_io_completion = Some(ordinary);
+                Ok(RecoveredLifecycleCompletionTakeV1::PassThrough)
+            }
+        }
+    }
+
     /// Drain only the oldest lifecycle-owned recovered Sign completion.
     ///
     /// The returned token remains opaque and guarded. A different FIFO head is
@@ -20907,6 +21734,35 @@ impl ProductionV2Services {
     /// Return whether fail-stop output handling requires a process restart.
     pub(in crate::sumeragi) fn exact_output_restart_required_for_test(&self) -> bool {
         self.output_guard.restart_required()
+    }
+
+    /// Hold one auxiliary I/O unit without fabricating a queue command.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn hold_auxiliary_io_admission_for_test(
+        &self,
+    ) -> Result<ProductionAuxiliaryIoAdmissionHoldV1, String> {
+        let io = self
+            .io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?;
+        if !io.admission.try_reserve(V2IoAdmissionClass::Auxiliary) {
+            return Err("Sumeragi v2 auxiliary I/O admission is full".to_owned());
+        }
+        Ok(ProductionAuxiliaryIoAdmissionHoldV1 {
+            admission: Arc::clone(&io.admission),
+        })
+    }
+
+    /// Abort one physically drained prepared Serve handoff in tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn abort_certified_serve_for_test(
+        &self,
+        admission: CertifiedServeAdmission,
+    ) -> Result<(), String> {
+        self.io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
+            .abort_serve(admission)
     }
 
     fn admit_network_exact_output(
@@ -23342,6 +24198,155 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop() {
+        let (mut service, keys) = fixture();
+        let context = service.context.clone();
+        let output_guard = Arc::clone(&service.output_guard);
+        let body_root = TempDir::new().expect("mixed Completion body root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open mixed body store");
+        let identity = body_store.instance_identity();
+        let planner = install_lifecycle_planner_io_for_test(
+            &mut service,
+            context.clone(),
+            Arc::clone(&output_guard),
+            body_store,
+            identity,
+            2,
+        );
+        let apply =
+            RecoveredDecisionApplyDispatchKeyV1::for_height_context_test(&context, 10, 0x41);
+        let sign = RecoveredLifecycleSignDispatchKeyV1::for_height_context_test(
+            &context,
+            11,
+            0x42,
+            super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1::PhaseVote,
+        );
+        let census = service
+            .capture_recovered_completion_capacity_census(vec![
+                RecoveredCompletionCapacityProbeV1::Apply {
+                    ordinal: 10,
+                    key: apply,
+                },
+                RecoveredCompletionCapacityProbeV1::Sign {
+                    ordinal: 11,
+                    key: sign,
+                },
+            ])
+            .expect("freeze one mixed worker/output census");
+        assert_eq!(census.capacity_for_test(10), Some((true, 0)));
+        assert_eq!(census.capacity_for_test(11), Some((true, 0)));
+        let reservation = match census.select_sign(11) {
+            Ok(reservation) => reservation,
+            Err(_) => panic!("the frozen Sign row must transfer its exact reservation"),
+        };
+        reservation.cancel_uncommitted();
+        assert!(!output_guard.restart_required());
+        assert!(planner.command_rx.queue.lock().commands.is_empty());
+
+        let fetch_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let fetch_subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"mixed Completion Fetch block")),
+            payload_hash: Hash::new(b"mixed Completion Fetch payload"),
+        };
+        let (authenticated, _) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[0],
+            fetch_round,
+            fetch_subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let fetch_key =
+            RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(&context, 13, 0x44);
+        let fetch_owner = RecoveredDecisionFetchRequestOwnerV1::for_test(
+            fetch_key,
+            service.active_tag,
+            context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            authenticated,
+        );
+        let fetch_census = service
+            .capture_recovered_completion_capacity_census(vec![
+                RecoveredCompletionCapacityProbeV1::Fetch {
+                    ordinal: 13,
+                    owner: fetch_owner,
+                    executor_available: true,
+                },
+            ])
+            .expect("freeze one exact recovered Fetch capacity owner");
+        assert_eq!(fetch_census.capacity_for_test(13), Some((true, 0)));
+        let (returned_owner, output) = match fetch_census.select_fetch(13) {
+            Ok(selected) => selected,
+            Err(_) => panic!("the exact Fetch row must transfer request and output ownership"),
+        };
+        assert_eq!(returned_owner.dispatch_key(), fetch_key);
+        output.abort_before_claim();
+        assert!(!output_guard.restart_required());
+
+        planner.saturate_consensus_prefix(&service);
+        let saturated = service
+            .capture_recovered_completion_capacity_census(vec![
+                RecoveredCompletionCapacityProbeV1::Apply {
+                    ordinal: 10,
+                    key: apply,
+                },
+                RecoveredCompletionCapacityProbeV1::Sign {
+                    ordinal: 11,
+                    key: sign,
+                },
+            ])
+            .expect("a saturated cut remains an authenticated census");
+        assert_eq!(saturated.capacity_for_test(10), Some((false, 4)));
+        assert_eq!(saturated.capacity_for_test(11), Some((false, 4)));
+        saturated.complete_without_selection();
+        assert!(!output_guard.restart_required());
+        planner.detach(&mut service);
+
+        let (mut dropped_service, _keys) = fixture();
+        let dropped_context = dropped_service.context.clone();
+        let dropped_guard = Arc::clone(&dropped_service.output_guard);
+        let dropped_root = TempDir::new().expect("dropped mixed Completion body root");
+        let dropped_store = V2BodyStore::open(dropped_root.path(), dropped_context.clone())
+            .expect("open dropped mixed body store");
+        let dropped_identity = dropped_store.instance_identity();
+        let dropped_planner = install_lifecycle_planner_io_for_test(
+            &mut dropped_service,
+            dropped_context.clone(),
+            Arc::clone(&dropped_guard),
+            dropped_store,
+            dropped_identity,
+            1,
+        );
+        let dropped_key = RecoveredDecisionApplyDispatchKeyV1::for_height_context_test(
+            &dropped_context,
+            12,
+            0x43,
+        );
+        drop(
+            dropped_service
+                .capture_recovered_completion_capacity_census(vec![
+                    RecoveredCompletionCapacityProbeV1::Apply {
+                        ordinal: 12,
+                        key: dropped_key,
+                    },
+                ])
+                .expect("arm one census before abandoning it"),
+        );
+        assert!(dropped_guard.restart_required());
+        dropped_planner.detach(&mut dropped_service);
+    }
+
+    #[test]
     fn recovered_decision_apply_source_stays_outside_generic_effect_ownership() {
         let apply_source = include_str!("v2_apply.rs");
         let task_source = apply_source
@@ -23841,6 +24846,20 @@ pub(super) mod tests {
             ));
         }
 
+        /// Release every synthetic control predecessor queued by saturation.
+        pub(in crate::sumeragi) fn release_all_predecessors(&self) {
+            loop {
+                match self.command_rx.try_recv() {
+                    Ok(V2IoCommand::Shutdown) => {}
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Ok(_) => panic!("unexpected non-control saturated predecessor"),
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        panic!("saturated predecessor queue disconnected")
+                    }
+                }
+            }
+        }
+
         /// Replace only the manual service's output guard for identity tests.
         pub(in crate::sumeragi) fn install_output_guard_for_test(
             &self,
@@ -23876,9 +24895,11 @@ pub(super) mod tests {
         identity: V2BodyStoreInstanceIdentity,
         class_capacity: usize,
     ) -> LifecyclePlannerIoFixture {
+        let active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
         install_lifecycle_planner_io_for_validator_for_test(
             services,
             context,
+            active_tag,
             0,
             output_guard,
             body_store,
@@ -23887,10 +24908,11 @@ pub(super) mod tests {
         )
     }
 
-    /// Install a moved exact store for a chosen local-validator service fixture.
+    /// Install a moved exact store and reducer tag for a chosen local-validator fixture.
     pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         services: &mut ProductionV2Services,
         context: wire::HeightContext,
+        active_tag: EventTag,
         local_validator: wire::ValidatorIndex,
         output_guard: Arc<ConsensusOutputGuard>,
         body_store: V2BodyStore,
@@ -23901,6 +24923,11 @@ pub(super) mod tests {
         assert!(
             body_store.instance_identity().same_instance(&identity),
             "the worker identity must come from the moved exact store"
+        );
+        assert_eq!(
+            active_tag.height(),
+            context.height,
+            "the test service tag must belong to its installed height context"
         );
         let local_index =
             usize::try_from(local_validator).expect("test validator index fits usize");
@@ -23925,7 +24952,7 @@ pub(super) mod tests {
         services.context = context.clone();
         services.local_peer = local_peer;
         services.local_validator = Some(local_validator);
-        services.active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
+        services.active_tag = active_tag;
         services.output_guard = output_guard;
         services.lifecycle_body_store_identity = Some(identity);
         services.io = Some(V2IoHandle {
@@ -24492,7 +25519,7 @@ pub(super) mod tests {
         .expect("authenticate certified Serve fixture")
     }
 
-    fn production_authenticated_serve_request(
+    pub(in crate::sumeragi) fn production_authenticated_serve_request(
         context: &wire::HeightContext,
         keys: &[KeyPair],
         requester_key: &KeyPair,
@@ -24717,7 +25744,7 @@ pub(super) mod tests {
         (ingress, gate)
     }
 
-    fn certified_serve_inbound(
+    pub(in crate::sumeragi) fn certified_serve_inbound(
         request: &wire::CertifiedBodyRequest,
         authenticated_via: PeerId,
     ) -> InboundBlockMessage {
@@ -25378,6 +26405,7 @@ pub(super) mod tests {
             chunk_root: PathBuf::new(),
             io: None,
             lifecycle_body_store_identity: None,
+            lifecycle_payload_store_identity: None,
             fetches: BTreeMap::new(),
             fetch_by_manifest: BTreeMap::new(),
             orphan_chunks: BTreeMap::new(),

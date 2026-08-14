@@ -235,6 +235,30 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
         &self.candidate
     }
 
+    /// Rejoin one signed Vote to its opaque WAL parent for scheduler tests.
+    ///
+    /// This keeps the effect and pending binding inside the ordinary closed
+    /// Broadcast projection; callers receive no constituent or signing permit.
+    #[cfg(test)]
+    pub(super) fn from_next_wal_vote_for_scheduler_fixture(
+        parent: &super::replay_authority::RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+        verified: &VerifiedHeightContext,
+        broadcast: AdapterEffect,
+    ) -> Option<Self> {
+        let closed = parent.project_authenticated_signed_broadcast(verified, broadcast)?;
+        let (effect, pending, candidate) = closed
+            .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+        let projection = Self {
+            effect,
+            pending,
+            candidate,
+            cold_proposal_output: None,
+        };
+        projection
+            .validates_from_next_wal_vote(verified, parent)
+            .then_some(projection)
+    }
+
     /// Project one fixed refanout authority from the still-live durable child.
     pub(super) fn project_output_authority(
         &self,
@@ -331,6 +355,63 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
             && coordinator.ready_index.contains(&address.ordinal)
+    }
+
+    /// Compare the exact live Broadcast state accepted at height finalization.
+    ///
+    /// Ordinary and cold-start scheduling remain Ready-only. The sole extra
+    /// state admitted here is the volatile wait installed after an exact
+    /// durable-Broadcast refanout: it must name this carrier's digest through
+    /// `Recovery`, retain the coordinator's exact observed generation, and be
+    /// absent from the Ready index. A crash discards that wait and reconstructs
+    /// the durable Ledger row as Ready, so this oracle must never be reused by
+    /// startup recovery.
+    pub(super) fn matches_current_finalization_record(
+        &self,
+        context: super::LifecycleContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: super::LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+    ) -> bool {
+        if self.matches_current_ready_record(context, address, digest, coordinator) {
+            return true;
+        }
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let (Some(record), Some(metadata)) = (
+            coordinator.records.get(&address.ordinal),
+            coordinator.durable_records.get(&address.ordinal),
+        ) else {
+            return false;
+        };
+        let super::LifecycleState::Waiting(wait) = record.state else {
+            return false;
+        };
+        let expected_source = super::WaitSource::Recovery(digest);
+        self.validates_at_raw_context(context, address, digest)
+            && coordinator.fault.is_none()
+            && coordinator.active_lease.is_none()
+            && coordinator.active_context == context
+            && coordinator.high_water >= address.ordinal
+            && record.key == self.candidate.key
+            && record.owner == address.owner
+            && record.ordinal == address.ordinal
+            && record.work_class == LifecycleWorkClass::Broadcast
+            && record.stage == self.candidate.stage
+            && wait.source() == expected_source
+            && wait.observed_generation() != u64::MAX
+            && coordinator.observed_generation.get(&expected_source)
+                == Some(&wait.observed_generation())
+            && record.physical_slots == physical
+            && record.episode.slot_universe == universe
+            && record.episode.consumed_slots == consumed
+            && physical.get(&address.slot) == Some(&digest)
+            && metadata.matches_admission(&self.candidate)
+            && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
+            && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
+            && !coordinator.ready_index.contains(&address.ordinal)
     }
 
     /// Compare the exact claimed Broadcast row and its sole active lease.

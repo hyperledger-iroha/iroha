@@ -8,7 +8,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, StateTransaction},
+    state::{State, StateTransaction, WorldReadOnly},
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{

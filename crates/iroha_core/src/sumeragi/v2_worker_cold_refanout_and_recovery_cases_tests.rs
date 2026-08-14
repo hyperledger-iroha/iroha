@@ -15,9 +15,11 @@ fn cold_durable_proposal_refanout_atomically_owns_control_and_chunks() {
             .to_vec();
     set_local_validator(&mut service, &keys, proposal.proposer);
     let service_context = service.context.clone();
+    let active_tag = service.active_tag;
     let _service_io = install_lifecycle_planner_io_for_validator_for_test(
         &mut service,
         service_context.clone(),
+        active_tag,
         proposal.proposer,
         Arc::clone(&output_guard),
         body_store,
@@ -114,6 +116,7 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
     let service_io = install_lifecycle_planner_io_for_validator_for_test(
         &mut service,
         service_context.clone(),
+        tag,
         proposal.proposer,
         Arc::clone(&output_guard),
         body_store,

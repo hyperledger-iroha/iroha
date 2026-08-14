@@ -162,7 +162,7 @@ export GIT_CONFIG_VALUE_1=false
 readonly release_runner_support_components=(
   scripts/run_sumeragi_v2_release_gates_support.sh
 )
-readonly release_runner_support_sha256="04e0a5a9286502595dbad64ae27d2c79d2e7e694b45f6de895fe182868dd590a"
+readonly release_runner_support_sha256="1c112ff344866044a830811900e77a8f0efc30f0b6b4a688997f2eb07959563d"
 if ((${#release_runner_support_components[@]} != 1)); then
   echo "release runner support manifest is invalid" >&2
   exit 1
@@ -2133,6 +2133,7 @@ required_production_liveness_tests=(
   sumeragi::v2::tests::authentication_rejects_valid_commitment_conflicts_without_mutating_adapter
   sumeragi::v2::tests::deferred_adapter_activation_marker_survives_a_no_progress_publication
   sumeragi::v2::tests::deferred_adapter_replay_with_startup_effects_publishes_no_status
+  sumeragi::v2::tests::production_recovered_proposal_sign_joins_exact_next_vote_body_store
   sumeragi::v2::tests::persistence_macro_step_budgets_have_exact_four_effect_maximum
   sumeragi::v2::tests::drive_effects_rejects_oversized_non_persisting_batch
   sumeragi::v2::tests::drive_effects_rejects_record_specific_overbudget_before_wal_append
@@ -2707,7 +2708,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=854
+readonly expected_production_liveness_test_count=855
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2798,7 +2799,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 854-test liveness inventory above. The later
+# not belong to the canonical 855-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
