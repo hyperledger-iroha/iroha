@@ -247,12 +247,22 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v4";
+/// Exact schema identifier for a tracked-lock-bound artifact manifest.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V5: &str =
+    "kagemusha.offline.recursive_spend.artifact_manifest.v5";
 /// Exact schema of the independently pinned reviewed clean source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1: &str = "iroha.reviewed-source-closure.v1";
+/// Exact schema of a reviewed clean source closure whose root `Cargo.lock` is tracked.
+pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V2: &str =
+    "iroha.reviewed-source-closure.tracked-lock.v2";
 /// Maximum untracked regular-file entries in a first-release source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 0;
+/// Maximum untracked regular-file entries in a tracked-lock source closure.
+pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V2: usize = 0;
 /// Maximum ignored root `Cargo.lock` bytes admitted by the reviewed closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1: u64 = 16 * 1024 * 1024;
+/// Maximum tracked root `Cargo.lock` bytes admitted by the reviewed closure.
+pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V2: u64 = 16 * 1024 * 1024;
 /// Degree-parameterized Pasta-cycle backend selected only by ABI 21 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4: &str =
     "halo2/ipa-pasta-cycle-compact-v5";
@@ -304,6 +314,8 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5: usize = 138;
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4: u16 = 5;
 /// Version of the degree-parameterized recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4: u16 = 4;
+/// Version of the tracked-lock-bound recursive-spend artifact manifest.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V5: u16 = 5;
 /// Version carried by every ABI-21 chain-facing request and artifact binding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4: u16 = 4;
 /// Schema identifier for the immutable pre-evidence ABI-21 candidate record.
@@ -311,6 +323,11 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.candidate.v4";
 /// Version of the immutable pre-evidence ABI-21 candidate record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4: u16 = 4;
+/// Schema identifier for an immutable tracked-lock-bound candidate record.
+pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V5: &str =
+    "kagemusha.offline.recursive_spend.candidate.v5";
+/// Version of the immutable tracked-lock-bound candidate record.
+pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V5: u16 = 5;
 /// Schema identifier for the canonical actual-recursion qualification receipt.
 pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.qualification_receipt.v4";
@@ -1702,6 +1719,84 @@ mod model {
         )]
         pub combined_source_fingerprint_sha256: [u8; 32],
     }
+    /// Exact descriptor of the signed root `Cargo.lock` tracked by a V2 source closure.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaReviewedTrackedCargoLockV2 {
+        /// Fixed signed-tree path, exactly `Cargo.lock`.
+        pub path: String,
+        /// Canonical lowercase SHA-1 Git blob object id of the exact lock bytes.
+        pub git_blob_oid: String,
+        /// Exact signed-tree regular-file mode, `100644`.
+        pub git_mode: String,
+        /// SHA-256 of the exact tracked lock bytes.
+        #[cfg_attr(
+            feature = "json",
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
+        )]
+        pub sha256: [u8; 32],
+        /// Exact byte length of the tracked lock file.
+        pub size_bytes: u64,
+    }
+    /// Canonical reviewed clean source closure with an ordinary tracked root `Cargo.lock`.
+    ///
+    /// The signed Git tree contains `Cargo.lock` exactly once as an ordinary
+    /// regular-file leaf. The explicit descriptor is a redundant, portable
+    /// cross-check for the producer and authenticated source-seal boundary; it
+    /// never represents an ignored or external overlay.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaReviewedSourceClosureV2 {
+        /// Exact tracked-lock reviewed-source-closure schema.
+        pub schema: String,
+        /// Signed commit against which the necessarily empty tracked diff is defined.
+        pub base_commit: String,
+        /// Exact checked-out signed source commit; first release requires `base_commit`.
+        pub source_commit: String,
+        /// Exact Git tree object named by `source_commit`.
+        pub source_git_tree: String,
+        /// Derived dirty state; first release requires `false`.
+        pub source_repo_dirty: bool,
+        /// Producer full-tree SHA-256 of the exact signed tracked source tree.
+        #[cfg_attr(
+            feature = "json",
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
+        )]
+        pub source_tree_sha256: [u8; 32],
+        /// SHA-256 of the canonical full-index binary Git diff from `source_commit`.
+        #[cfg_attr(
+            feature = "json",
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
+        )]
+        pub tracked_binary_diff_sha256: [u8; 32],
+        /// Exact number of raw-byte-sorted untracked manifest entries; V2 requires zero.
+        pub untracked_file_count: u64,
+        /// Raw-byte-sorted path/mode/blob identities; V2 requires an empty vector.
+        pub untracked_path_mode_blob_oid_manifest:
+            Vec<KagemushaReviewedSourceClosureManifestEntryV1>,
+        /// SHA-256 of the necessarily empty untracked manifest bytes.
+        #[cfg_attr(
+            feature = "json",
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
+        )]
+        pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
+        /// Redundant exact descriptor of the ordinary signed `Cargo.lock` leaf.
+        pub tracked_cargo_lock: KagemushaReviewedTrackedCargoLockV2,
+        /// Domain-separated fingerprint of the clean diff, empty manifest, and lock descriptor.
+        #[cfg_attr(
+            feature = "json",
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
+        )]
+        pub combined_source_fingerprint_sha256: [u8; 32],
+    }
     /// Production release manifest for degree-parameterized paired Pasta proofs.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1788,6 +1883,98 @@ mod model {
         pub version: u16,
         /// Complete pre-evidence manifest with its three promotion digest slots zeroed.
         pub manifest: KagemushaRecursiveSpendArtifactManifestV4,
+    }
+    /// Tracked-lock-bound production release manifest for the unchanged ABI-22 proof profile.
+    ///
+    /// V5 changes release identity and source authentication only. The embedded
+    /// proof profiles and artifact payload formats remain the explicitly named
+    /// V4 cryptographic types until a separately versioned cryptographic change.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendArtifactManifestV5 {
+        /// Exact V5 manifest schema identifier.
+        pub schema: String,
+        /// Manifest layout version.
+        pub version: u16,
+        /// Required native bridge ABI; the cryptographic ABI remains 22.
+        pub bridge_abi_version: u32,
+        /// Exact paired-proof backend profile.
+        pub proof_backend: String,
+        /// Exact transcript profile.
+        pub transcript_profile: String,
+        /// Human-readable release generation.
+        pub generation: String,
+        /// Lowercase 40-hex signed source revision.
+        pub source_commit: String,
+        /// Lowercase 40-hex Git tree object named by `source_commit`.
+        pub source_git_tree: String,
+        /// SHA-256 of the exact signed tracked build source tree.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub source_tree_sha256: [u8; 32],
+        /// Whether the exact build tree differed from `source_commit`; V5 requires `false`.
+        pub source_repo_dirty: bool,
+        /// Complete independently pinned tracked-lock reviewed source closure.
+        pub reviewed_source_closure: KagemushaReviewedSourceClosureV2,
+        /// SHA-256 of the exact canonical V2 closure descriptor JSON bytes.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// SHA-256 of the separately retained canonical C-prime source-seal projection.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Exact network for which the release was built.
+        pub network_id: NetworkId,
+        /// Asset definition for which the release was built.
+        pub asset: AssetDefinitionId,
+        /// Authoritative fixed asset scale.
+        pub asset_scale: u32,
+        /// First block at which this release may issue notes.
+        pub activation_height: u64,
+        /// First block at which new issuance must stop.
+        pub withdrawal_height: u64,
+        /// Exact measured upper bound for one canonical proof-pair payload.
+        pub max_proof_bytes: u32,
+        /// Effective in-process physical-memory ceiling used for generation and publication.
+        pub generation_memory_limit_bytes: u64,
+        /// Exact mandatory in-process memory enforcement profile.
+        pub generation_memory_enforcement_profile: String,
+        /// SHA-256 of the canonical actual-recursion qualification receipt.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub qualification_receipt_sha256: [u8; 32],
+        /// Domain-separated identity of the immutable candidate and qualification receipt.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub qualified_candidate_sha256: [u8; 32],
+        /// Eq then Ep unchanged cryptographic proof profiles.
+        pub profiles: Vec<KagemushaPastaCycleProofProfileV4>,
+        /// Release-bound validator roster reference.
+        pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4,
+        /// Digest of signed physical-device benchmark evidence.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub benchmark_evidence_sha256: [u8; 32],
+        /// Digest of independent cryptographic review evidence.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub cryptographic_review_sha256: [u8; 32],
+        /// Digest of the V5 signed release attestation.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub release_attestation_sha256: [u8; 32],
+    }
+    /// Immutable V5 candidate captured before qualification and external evidence exist.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendCandidateV5 {
+        /// Exact candidate-record schema identifier.
+        pub schema: String,
+        /// Candidate-record layout version.
+        pub version: u16,
+        /// Complete pre-evidence V5 manifest with promotion digest slots zeroed.
+        pub manifest: KagemushaRecursiveSpendArtifactManifestV5,
     }
     /// Canonical proof-bearing receipt proving one exact candidate reached step two.
     ///
